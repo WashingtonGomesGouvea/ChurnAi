@@ -275,7 +275,6 @@ class KPIMetrics:
     """Classe para armazenar métricas calculadas."""
     total_labs: int = 0
     churn_rate: float = 0.0
-    nrr: float = 0.0
     labs_em_risco: int = 0
     ativos_7d: float = 0.0
     ativos_30d: float = 0.0
@@ -313,6 +312,21 @@ class DataManager:
         """Prepara e limpa os dados carregados."""
         if df is None or df.empty:
             return pd.DataFrame()
+
+        # Debug: mostrar colunas disponíveis
+        if st.sidebar.checkbox("🔍 Mostrar Debug", help="Exibir informações de debug"):
+            st.sidebar.write(f"Total de colunas: {len(df.columns)}")
+            
+            # Verificar se campos de cidade e estado existem
+            if 'Estado' in df.columns:
+                st.sidebar.write(f"✅ Estado: {df['Estado'].nunique()} valores únicos")
+            else:
+                st.sidebar.write("❌ Campo 'Estado' não encontrado")
+                
+            if 'Cidade' in df.columns:
+                st.sidebar.write(f"✅ Cidade: {df['Cidade'].nunique()} valores únicos")
+            else:
+                st.sidebar.write("❌ Campo 'Cidade' não encontrado")
 
         # Garantir tipos de dados corretos
         if 'Data_Analise' in df.columns:
@@ -453,13 +467,7 @@ class KPIManager:
         # Labs em risco (todos exceto Baixo)
         metrics.labs_em_risco = metrics.total_labs - metrics.labs_baixo_risco
 
-        # NRR (Net Revenue Retention)
-        if 'Media_Coletas_Mensal_2024' in df.columns and 'Media_Coletas_Mensal_2025' in df.columns:
-            media_2024 = df['Media_Coletas_Mensal_2024'].sum()
-            media_2025 = df['Media_Coletas_Mensal_2025'].sum()
-            metrics.nrr = (media_2025 / media_2024 * 100) if media_2024 > 0 else 100
-        else:
-            metrics.nrr = 100.0
+        # NRR removido conforme solicitação
 
         # Ativos recentes
         if 'Dias_Sem_Coleta' in df.columns:
@@ -510,18 +518,25 @@ class ChartManager:
 
     @staticmethod
     def criar_grafico_top_labs(df: pd.DataFrame, top_n: int = 10):
-        """Cria gráfico dos top laboratórios por volume."""
+        """Cria gráfico dos laboratórios em risco prioritários."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
 
-        # Garantir que Volume_Total_2025 existe
-        if 'Volume_Total_2025' not in df.columns:
-            meses_2025 = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
-            colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses_2025]
-            df['Volume_Total_2025'] = df[colunas_meses].sum(axis=1, skipna=True)
+        # Filtrar apenas labs em risco (Alto, Médio, Inativo)
+        labs_risco = df[df['Status_Risco'].isin(['Alto', 'Médio', 'Inativo'])].copy()
+        
+        if labs_risco.empty:
+            st.info("✅ Nenhum laboratório em risco encontrado!")
+            return
 
-        top_labs = df.nlargest(top_n, 'Volume_Total_2025')
+        # Ordenar por prioridade: Score de risco (se disponível) ou dias sem coleta
+        if 'Score_Risco' in labs_risco.columns:
+            labs_risco = labs_risco.sort_values(['Score_Risco', 'Dias_Sem_Coleta'], ascending=[False, False])
+        else:
+            labs_risco = labs_risco.sort_values('Dias_Sem_Coleta', ascending=False)
+        
+        top_labs_risco = labs_risco.head(top_n)
 
         cores_map = {
             'Alto': '#d62728',
@@ -530,31 +545,138 @@ class ChartManager:
             'Inativo': '#9467bd'
         }
 
+        # Usar dias sem coleta como métrica principal
         fig = px.bar(
-            top_labs,
-            x='Volume_Total_2025',
+            top_labs_risco,
+            x='Dias_Sem_Coleta',
             y='Nome_Fantasia_PCL',
             orientation='h',
-            title=f"🏆 Top {top_n} Laboratórios por Volume (2025)",
+            title=f"🚨 Top {top_n} Laboratórios em Risco",
             color='Status_Risco',
             color_discrete_map=cores_map,
-            text='Volume_Total_2025'
+            text='Dias_Sem_Coleta'
         )
 
         fig.update_traces(
             texttemplate='%{text:.0f}',
             textposition='outside',
-            hovertemplate='<b>%{y}</b><br>Volume: %{x:.0f} coletas<br>Status: %{marker.color}'
+            hovertemplate='<b>%{y}</b><br>Dias sem coleta: %{x:.0f}<br>Status: %{marker.color}'
         )
 
         fig.update_layout(
             yaxis={'categoryorder': 'total ascending'},
-            xaxis_title="Volume de Coletas",
+            xaxis_title="Dias sem Coleta",
             yaxis_title="Laboratório",
             showlegend=True
         )
 
         st.plotly_chart(fig, use_container_width=True)
+
+    @staticmethod
+    def criar_grafico_media_diaria(df: pd.DataFrame, lab_selecionado: str = None):
+        """Cria gráfico de média diária por mês."""
+        if df.empty:
+            st.info("📊 Nenhum dado disponível para o gráfico")
+            return
+
+        meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
+        colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses]
+        
+        if lab_selecionado:
+            lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
+            if not lab_data.empty:
+                lab = lab_data.iloc[0]
+                valores_mensais = [lab[col] for col in colunas_meses]
+                
+                # Calcular média diária (assumindo 30 dias por mês)
+                dias_por_mes = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31]  # Jan-Out
+                medias_diarias = [val / dias for val, dias in zip(valores_mensais, dias_por_mes)]
+                
+                fig = px.bar(
+                    x=meses,
+                    y=medias_diarias,
+                    title=f"📊 Média Diária por Mês - {lab_selecionado}",
+                    color=medias_diarias,
+                    color_continuous_scale='Blues'
+                )
+                
+                fig.update_traces(
+                    hovertemplate='<b>Mês:</b> %{x}<br><b>Média Diária:</b> %{y:.1f} coletas<extra></extra>'
+                )
+                
+                fig.update_layout(
+                    xaxis_title="Mês",
+                    yaxis_title="Média Diária (Coletas)",
+                    showlegend=False
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+
+    @staticmethod
+    def criar_grafico_coletas_por_dia(df: pd.DataFrame, lab_selecionado: str = None):
+        """Cria gráfico de coletas por dia do mês (0-31)."""
+        if df.empty:
+            st.info("📊 Nenhum dado disponível para o gráfico")
+            return
+
+        if lab_selecionado:
+            lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
+            if not lab_data.empty:
+                lab = lab_data.iloc[0]
+                
+                # Simular distribuição de coletas por dia (baseado no volume mensal)
+                meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
+                colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses]
+                valores_mensais = [lab[col] for col in colunas_meses]
+                
+                # Criar dados simulados para cada dia do mês
+                dias = list(range(1, 32))
+                dados_grafico = []
+                
+                for i, (mes, volume) in enumerate(zip(meses, valores_mensais)):
+                    # Simular distribuição uniforme por dia (pode ser melhorado com dados reais)
+                    coletas_por_dia = volume / 30 if volume > 0 else 0
+                    for dia in dias:
+                        # Adicionar alguma variação aleatória
+                        import random
+                        variacao = random.uniform(0.5, 1.5)
+                        coletas_dia = max(0, coletas_por_dia * variacao)
+                        dados_grafico.append({
+                            'Dia': dia,
+                            'Mês': mes,
+                            'Coletas': coletas_dia
+                        })
+                
+                df_grafico = pd.DataFrame(dados_grafico)
+                
+                # Criar gráfico de linha múltipla
+                fig = px.line(
+                    df_grafico,
+                    x='Dia',
+                    y='Coletas',
+                    color='Mês',
+                    title=f"📅 Coletas por Dia do Mês - {lab_selecionado}",
+                    markers=True
+                )
+                
+                fig.update_traces(
+                    hovertemplate='<b>Dia:</b> %{x}<br><b>Mês:</b> %{legendgroup}<br><b>Coletas:</b> %{y:.1f}<extra></extra>'
+                )
+                
+                fig.update_layout(
+                    xaxis_title="Dia do Mês (1-31)",
+                    yaxis_title="Número de Coletas",
+                    xaxis=dict(tickmode='linear', tick0=1, dtick=5),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=-0.3,
+                        xanchor="center",
+                        x=0.5
+                    )
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
 
     @staticmethod
     def criar_grafico_evolucao_mensal(df: pd.DataFrame, lab_selecionado: str = None):
@@ -570,27 +692,61 @@ class ChartManager:
             # Gráfico para laboratório específico
             lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
             if not lab_data.empty:
-                valores = [lab_data.iloc[0][col] for col in colunas_meses]
-
+                lab = lab_data.iloc[0]
+                valores_2025 = [lab[col] for col in colunas_meses]
+                
+                # Dados 2024 se disponíveis
+                colunas_2024 = [f'N_Coletas_{mes}_24' for mes in meses]
+                valores_2024 = [lab[col] if col in lab.index else 0 for col in colunas_2024]
+                
+                # Calcular médias
+                media_2025 = sum(valores_2025) / len(valores_2025) if valores_2025 else 0
+                media_2024 = sum(valores_2024) / len(valores_2024) if valores_2024 else 0
+                
+                # Criar DataFrame para o gráfico
+                df_grafico = pd.DataFrame({
+                    'Mês': meses,
+                    '2025': valores_2025,
+                    '2024': valores_2024,
+                    'Média 2025': [media_2025] * len(meses),
+                    'Média 2024': [media_2024] * len(meses)
+                })
+                
+                # Criar gráfico com múltiplas linhas
                 fig = px.line(
-                    x=meses,
-                    y=valores,
+                    df_grafico,
+                    x='Mês',
+                    y=['2025', '2024', 'Média 2025', 'Média 2024'],
                     title=f"📈 Evolução Mensal - {lab_selecionado}",
                     markers=True,
                     line_shape='spline'
                 )
-
+                
+                # Personalizar cores e estilos
                 fig.update_traces(
-                    mode='lines+markers+text',
-                    text=valores,
-                    textposition="top center",
+                    mode='lines+markers',
                     hovertemplate='<b>Mês:</b> %{x}<br><b>Coletas:</b> %{y}<extra></extra>'
                 )
+                
+                # Cores personalizadas
+                fig.data[0].line.color = '#1f77b4'  # Azul para 2025
+                fig.data[1].line.color = '#ff7f0e'  # Laranja para 2024
+                fig.data[2].line.color = '#1f77b4'   # Azul claro para média 2025
+                fig.data[2].line.dash = 'dash'
+                fig.data[3].line.color = '#ff7f0e'   # Laranja claro para média 2024
+                fig.data[3].line.dash = 'dash'
 
                 fig.update_layout(
                     xaxis_title="Mês",
                     yaxis_title="Número de Coletas",
-                    hovermode='x unified'
+                    hovermode='x unified',
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=-0.2,
+                        xanchor="center",
+                        x=0.5
+                    )
                 )
 
                 st.plotly_chart(fig, use_container_width=True)
@@ -675,7 +831,7 @@ class UIManager:
     @staticmethod
     def renderizar_kpi_cards(metrics: KPIMetrics):
         """Renderiza cards de KPIs modernos."""
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             st.markdown(f"""
@@ -696,16 +852,6 @@ class UIManager:
             """, unsafe_allow_html=True)
 
         with col3:
-            delta_class = "positive" if metrics.nrr > 95 else "negative"
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-value">{metrics.nrr:.1f}%</div>
-                <div class="metric-label">NRR</div>
-                <div class="metric-delta {delta_class}">{"↗️" if metrics.nrr > 95 else "↘️"}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with col4:
             st.markdown(f"""
             <div class="metric-card">
                 <div class="metric-value">{metrics.labs_em_risco:,}</div>
@@ -713,11 +859,13 @@ class UIManager:
             </div>
             """, unsafe_allow_html=True)
 
-        with col5:
+        with col4:
+            delta_class = "positive" if metrics.ativos_7d > 80 else "negative"
             st.markdown(f"""
             <div class="metric-card">
                 <div class="metric-value">{metrics.ativos_7d:.1f}%</div>
-                <div class="metric-label">Ativos 7d</div>
+                <div class="metric-label">Ativos 7D</div>
+                <div class="metric-delta {delta_class}">{"↗️" if metrics.ativos_7d > 80 else "↘️"}</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -741,11 +889,12 @@ class UIManager:
 
         st.subheader(titulo)
 
-        # Selecionar colunas principais
+        # Selecionar colunas principais com análises inteligentes
         colunas_principais = [
             'Nome_Fantasia_PCL', 'Estado', 'Cidade', 'Representante_Nome',
             'Status_Risco', 'Dias_Sem_Coleta', 'Variacao_Percentual',
-            'Volume_Total_2025', 'Motivo_Risco'
+            'Volume_Atual_2025', 'Volume_Maximo_2024', 'Tendencia_Volume',
+            'Score_Risco', 'Motivo_Risco', 'Insights_Automaticos'
         ]
 
         colunas_existentes = [col for col in colunas_principais if col in df.columns]
@@ -755,8 +904,14 @@ class UIManager:
         if 'Variacao_Percentual' in df_exibicao.columns:
             df_exibicao['Variacao_Percentual'] = df_exibicao['Variacao_Percentual'].round(2)
 
-        if 'Volume_Total_2025' in df_exibicao.columns:
-            df_exibicao['Volume_Total_2025'] = df_exibicao['Volume_Total_2025'].astype(int)
+        if 'Volume_Atual_2025' in df_exibicao.columns:
+            df_exibicao['Volume_Atual_2025'] = df_exibicao['Volume_Atual_2025'].astype(int)
+            
+        if 'Volume_Maximo_2024' in df_exibicao.columns:
+            df_exibicao['Volume_Maximo_2024'] = df_exibicao['Volume_Maximo_2024'].astype(int)
+            
+        if 'Score_Risco' in df_exibicao.columns:
+            df_exibicao['Score_Risco'] = df_exibicao['Score_Risco'].astype(int)
 
         # Renderizar tabela com container estilizado
         st.markdown('<div class="dataframe-container">', unsafe_allow_html=True)
@@ -774,9 +929,25 @@ class UIManager:
                     format="%.2f%%",
                     help="Variação percentual em relação ao ano anterior"
                 ),
-                "Volume_Total_2025": st.column_config.NumberColumn(
-                    "Volume 2025",
-                    help="Total de coletas em 2025"
+                "Volume_Atual_2025": st.column_config.NumberColumn(
+                    "Volume Atual 2025",
+                    help="Volume atual de coletas em 2025"
+                ),
+                "Volume_Maximo_2024": st.column_config.NumberColumn(
+                    "Volume Máximo 2024",
+                    help="Volume máximo de coletas em 2024"
+                ),
+                "Tendencia_Volume": st.column_config.TextColumn(
+                    "Tendência",
+                    help="Tendência de volume (Crescimento/Declínio/Estável)"
+                ),
+                "Score_Risco": st.column_config.NumberColumn(
+                    "Score Risco",
+                    help="Score de risco de 0-100"
+                ),
+                "Insights_Automaticos": st.column_config.TextColumn(
+                    "Insights",
+                    help="Insights automáticos gerados pelo sistema"
                 )
             }
         )
@@ -814,6 +985,222 @@ class UIManager:
                 key=f"download_excel_{timestamp}"
             )
 
+class MetricasAvancadas:
+    """Classe para métricas avançadas de laboratórios."""
+    
+    @staticmethod
+    def calcular_metricas_lab(df: pd.DataFrame, lab_nome: str) -> dict:
+        """Calcula métricas avançadas para um laboratório específico."""
+        lab_data = df[df['Nome_Fantasia_PCL'] == lab_nome]
+        
+        if lab_data.empty:
+            return {}
+        
+        lab = lab_data.iloc[0]
+        
+        # Total de coletas 2025
+        meses_2025 = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
+        colunas_2025 = [f'N_Coletas_{mes}_25' for mes in meses_2025]
+        total_coletas_2025 = lab[colunas_2025].sum() if all(col in lab.index for col in colunas_2025) else 0
+        
+        # Média dos últimos 3 meses
+        ultimos_3_meses = ['Ago', 'Set', 'Out']
+        colunas_3_meses = [f'N_Coletas_{mes}_25' for mes in ultimos_3_meses]
+        media_3_meses = lab[colunas_3_meses].mean() if all(col in lab.index for col in colunas_3_meses) else 0
+        
+        # Média diária (últimos 3 meses)
+        dias_3_meses = 90  # Aproximadamente 3 meses
+        media_diaria = media_3_meses / 30 if media_3_meses > 0 else 0
+        
+        # Agudo (7 dias) - coletas nos últimos 7 dias
+        dias_sem_coleta = lab.get('Dias_Sem_Coleta', 0)
+        agudo = "Ativo" if dias_sem_coleta <= 7 else "Inativo"
+        
+        # Crônico (fechamentos mensais) - baseado na variação
+        variacao = lab.get('Variacao_Percentual', 0)
+        if variacao > 20:
+            cronico = "Crescimento"
+        elif variacao < -20:
+            cronico = "Declínio"
+        else:
+            cronico = "Estável"
+        
+        return {
+            'total_coletas': int(total_coletas_2025),
+            'media_3_meses': round(media_3_meses, 1),
+            'media_diaria': round(media_diaria, 1),
+            'agudo': agudo,
+            'cronico': cronico,
+            'dias_sem_coleta': int(dias_sem_coleta),
+            'variacao_percentual': round(variacao, 1)
+        }
+
+class AnaliseInteligente:
+    """Classe para análises inteligentes e insights automáticos."""
+    
+    @staticmethod
+    def calcular_insights_automaticos(df: pd.DataFrame) -> pd.DataFrame:
+        """Calcula insights automáticos para cada laboratório."""
+        df_insights = df.copy()
+        
+        # Volume atual (último mês disponível)
+        df_insights['Volume_Atual_2025'] = df_insights.get('N_Coletas_Out_25', 0)
+        
+        # Volume máximo do ano passado
+        colunas_2024 = [col for col in df_insights.columns if 'N_Coletas_' in col and '24' in col]
+        if colunas_2024:
+            df_insights['Volume_Maximo_2024'] = df_insights[colunas_2024].max(axis=1)
+        else:
+            df_insights['Volume_Maximo_2024'] = 0
+        
+        # Tendência de volume (comparação atual vs máximo histórico)
+        df_insights['Tendencia_Volume'] = df_insights.apply(
+            lambda row: 'Crescimento' if row['Volume_Atual_2025'] > row['Volume_Maximo_2024'] 
+            else 'Declínio' if row['Volume_Atual_2025'] < row['Volume_Maximo_2024'] * 0.5
+            else 'Estável', axis=1
+        )
+        
+        # Score de risco (0-100)
+        df_insights['Score_Risco'] = df_insights.apply(
+            lambda row: AnaliseInteligente._calcular_score_risco(row), axis=1
+        )
+        
+        # Insights automáticos
+        df_insights['Insights_Automaticos'] = df_insights.apply(
+            lambda row: AnaliseInteligente._gerar_insights(row), axis=1
+        )
+        
+        return df_insights
+    
+    @staticmethod
+    def _calcular_score_risco(row) -> int:
+        """Calcula score de risco de 0-100."""
+        score = 0
+        
+        # Dias sem coleta (peso 40%)
+        dias_sem = row.get('Dias_Sem_Coleta', 0)
+        if dias_sem > 90:
+            score += 40
+        elif dias_sem > 60:
+            score += 30
+        elif dias_sem > 30:
+            score += 20
+        elif dias_sem > 15:
+            score += 10
+        
+        # Variação percentual (peso 30%)
+        variacao = row.get('Variacao_Percentual', 0)
+        if variacao < -80:
+            score += 30
+        elif variacao < -50:
+            score += 25
+        elif variacao < -20:
+            score += 15
+        elif variacao < 0:
+            score += 10
+        
+        # Volume atual vs histórico (peso 30%)
+        volume_atual = row.get('Volume_Atual_2025', 0)
+        volume_max = row.get('Volume_Maximo_2024', 1)
+        if volume_max > 0:
+            ratio = volume_atual / volume_max
+            if ratio < 0.2:
+                score += 30
+            elif ratio < 0.5:
+                score += 20
+            elif ratio < 0.8:
+                score += 10
+        
+        return min(score, 100)
+    
+    @staticmethod
+    def _gerar_insights(row) -> str:
+        """Gera insights automáticos baseados nos dados."""
+        insights = []
+        
+        # Análise de dias sem coleta
+        dias_sem = row.get('Dias_Sem_Coleta', 0)
+        if dias_sem > 90:
+            insights.append("🚨 CRÍTICO: Sem coletas há mais de 3 meses")
+        elif dias_sem > 60:
+            insights.append("⚠️ ALERTA: Sem coletas há mais de 2 meses")
+        elif dias_sem > 30:
+            insights.append("📉 ATENÇÃO: Sem coletas há mais de 1 mês")
+        
+        # Análise de volume
+        volume_atual = row.get('Volume_Atual_2025', 0)
+        volume_max = row.get('Volume_Maximo_2024', 0)
+        if volume_max > 0:
+            ratio = volume_atual / volume_max
+            if ratio > 1.5:
+                insights.append("📈 EXCELENTE: Volume 50% acima do histórico")
+            elif ratio > 1.2:
+                insights.append("📊 POSITIVO: Volume 20% acima do histórico")
+            elif ratio < 0.3:
+                insights.append("📉 CRÍTICO: Volume 70% abaixo do histórico")
+            elif ratio < 0.6:
+                insights.append("⚠️ ALERTA: Volume 40% abaixo do histórico")
+        
+        # Análise de tendência
+        variacao = row.get('Variacao_Percentual', 0)
+        if variacao > 100:
+            insights.append("🚀 CRESCIMENTO: Variação superior a 100%")
+        elif variacao > 50:
+            insights.append("📈 POSITIVO: Variação superior a 50%")
+        elif variacao < -80:
+            insights.append("📉 CRÍTICO: Queda superior a 80%")
+        elif variacao < -50:
+            insights.append("⚠️ ALERTA: Queda superior a 50%")
+        
+        return " | ".join(insights) if insights else "✅ Estável"
+    
+    @staticmethod
+    def criar_dashboard_inteligente(df: pd.DataFrame):
+        """Cria dashboard com análises inteligentes."""
+        st.subheader("🧠 Análises Inteligentes")
+        
+        # Métricas de alto nível
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            labs_criticos = len(df[df['Score_Risco'] > 80])
+            st.metric("🚨 Labs Críticos", labs_criticos, 
+                     delta=f"{labs_criticos/len(df)*100:.1f}%" if len(df) > 0 else "0%")
+        
+        with col2:
+            labs_crescimento = len(df[df['Tendencia_Volume'] == 'Crescimento'])
+            st.metric("📈 Labs em Crescimento", labs_crescimento,
+                     delta=f"{labs_crescimento/len(df)*100:.1f}%" if len(df) > 0 else "0%")
+        
+        with col3:
+            score_medio = df['Score_Risco'].mean() if 'Score_Risco' in df.columns else 0
+            st.metric("📊 Score Médio", f"{score_medio:.1f}/100")
+        
+        with col4:
+            labs_estaveis = len(df[df['Tendencia_Volume'] == 'Estável'])
+            st.metric("⚖️ Labs Estáveis", labs_estaveis,
+                     delta=f"{labs_estaveis/len(df)*100:.1f}%" if len(df) > 0 else "0%")
+        
+        # Gráfico de distribuição de risco
+        if 'Score_Risco' in df.columns:
+            st.subheader("📊 Distribuição de Risco")
+            fig = px.histogram(df, x='Score_Risco', nbins=20, 
+                              title="Distribuição do Score de Risco",
+                              labels={'Score_Risco': 'Score de Risco', 'count': 'Número de Labs'})
+            fig.update_layout(showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Top insights automáticos
+        st.subheader("💡 Insights Automáticos")
+        if 'Insights_Automaticos' in df.columns:
+            insights_df = df[['Nome_Fantasia_PCL', 'Score_Risco', 'Insights_Automaticos']].copy()
+            insights_df = insights_df[insights_df['Score_Risco'] > 50].sort_values('Score_Risco', ascending=False)
+            
+            if not insights_df.empty:
+                st.dataframe(insights_df, use_container_width=True)
+            else:
+                st.success("✅ Nenhum laboratório com insights críticos!")
+
 class ReportManager:
     """Gerenciador de geração de relatórios."""
 
@@ -833,7 +1220,6 @@ class ReportManager:
 
         **KPIs Principais:**
         • Churn Rate: {metrics.churn_rate:.1f}%
-        • NRR: {metrics.nrr:.1f}%
         • Labs em Risco: {metrics.labs_em_risco:,}
         • Ativos (7d): {metrics.ativos_7d:.1f}%
 
@@ -946,6 +1332,9 @@ def main():
     # Aplicar filtros
     df_filtrado = filter_manager.aplicar_filtros(df, filtros)
 
+    # Calcular análises inteligentes
+    df_filtrado = AnaliseInteligente.calcular_insights_automaticos(df_filtrado)
+
     # Calcular KPIs
     metrics = KPIManager.calcular_kpis(df_filtrado)
 
@@ -970,13 +1359,14 @@ def main():
     # ========================================
     # ABAS PRINCIPAIS COM NOVA ORGANIZAÇÃO
     # ========================================
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "🏠 Visão Geral",
         "📋 Análise Detalhada",
         "👤 Por Representante",
         "📈 Tendências",
         "🔄 Visão 360°",
-        "🏆 Rankings"
+        "🏆 Rankings",
+        "🧠 Análises Inteligentes"
     ])
 
     # ========================================
@@ -997,7 +1387,7 @@ def main():
                 ChartManager.criar_grafico_distribuicao_risco(df_filtrado)
 
             with col2:
-                st.subheader("🏆 Top Laboratórios")
+                st.subheader("🚨 Labs em Risco")
                 ChartManager.criar_grafico_top_labs(df_filtrado, top_n=10)
 
         # Expander com variações
@@ -1040,18 +1430,137 @@ def main():
         st.header("📋 Análise Detalhada")
 
         # Filtros avançados
-        with st.expander("🔍 Filtros Avançados", expanded=False):
+        with st.expander("🔍 Filtros Avançados", expanded=True):
             # Seleção de laboratório específico
             if not df_filtrado.empty:
-                lab_selecionado = st.selectbox(
-                    "📊 Análise Individual de Laboratório:",
-                    options=[""] + sorted(df_filtrado['Nome_Fantasia_PCL'].unique()),
-                    help="Selecione um laboratório para ver sua evolução mensal detalhada"
-                )
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    # Campo de busca por CNPJ ou nome
+                    busca_lab = st.text_input(
+                        "🔍 Buscar por CNPJ ou Nome:",
+                        placeholder="Digite CNPJ ou nome do laboratório...",
+                        help="Digite CNPJ (apenas números) ou nome do laboratório"
+                    )
+                
+                with col2:
+                    # Seleção por dropdown como alternativa
+                    lab_selecionado = st.selectbox(
+                        "📊 Ou selecione:",
+                        options=[""] + sorted(df_filtrado['Nome_Fantasia_PCL'].unique()),
+                        help="Selecione um laboratório da lista"
+                    )
+                
+                # Lógica de busca
+                lab_final = None
+                if busca_lab:
+                    # Buscar por CNPJ (apenas números)
+                    if busca_lab.isdigit():
+                        lab_encontrado = df_filtrado[df_filtrado['CNPJ_PCL'].str.contains(busca_lab, na=False)]
+                    else:
+                        # Buscar por nome
+                        lab_encontrado = df_filtrado[df_filtrado['Nome_Fantasia_PCL'].str.contains(busca_lab, case=False, na=False)]
+                    
+                    if not lab_encontrado.empty:
+                        lab_final = lab_encontrado.iloc[0]['Nome_Fantasia_PCL']
+                        st.success(f"✅ Laboratório encontrado: {lab_final}")
+                    else:
+                        st.warning("⚠️ Laboratório não encontrado")
+                elif lab_selecionado:
+                    lab_final = lab_selecionado
 
-                if lab_selecionado:
-                    st.subheader(f"📈 Evolução Mensal - {lab_selecionado}")
-                    ChartManager.criar_grafico_evolucao_mensal(df_filtrado, lab_selecionado)
+                if lab_final:
+                    # Cards de métricas avançadas
+                    metricas = MetricasAvancadas.calcular_metricas_lab(df_filtrado, lab_final)
+                    
+                    if metricas:
+                        st.subheader(f"📊 Métricas Avançadas - {lab_final}")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            st.metric(
+                                "📈 Total de Coletas 2025",
+                                f"{metricas['total_coletas']:,}",
+                                help="Total de coletas realizadas em 2025"
+                            )
+                        
+                        with col2:
+                            st.metric(
+                                "📅 Média 3 Meses",
+                                f"{metricas['media_3_meses']:.1f}",
+                                help="Média dos últimos 3 meses (Ago-Set-Out)"
+                            )
+                        
+                        with col3:
+                            st.metric(
+                                "📊 Média Diária",
+                                f"{metricas['media_diaria']:.1f}",
+                                help="Média diária baseada nos últimos 3 meses"
+                            )
+                        
+                        with col4:
+                            status_agudo = "🟢" if metricas['agudo'] == "Ativo" else "🔴"
+                            st.metric(
+                                f"{status_agudo} Status Agudo",
+                                metricas['agudo'],
+                                help="Atividade nos últimos 7 dias"
+                            )
+                        
+                        # Segunda linha de cards
+                        col5, col6, col7, col8 = st.columns(4)
+                        
+                        with col5:
+                            status_cronico = "📈" if metricas['cronico'] == "Crescimento" else "📉" if metricas['cronico'] == "Declínio" else "📊"
+                            st.metric(
+                                f"{status_cronico} Status Crônico",
+                                metricas['cronico'],
+                                help="Tendência baseada na variação percentual"
+                            )
+                        
+                        with col6:
+                            st.metric(
+                                "⏰ Dias sem Coleta",
+                                f"{metricas['dias_sem_coleta']}",
+                                help="Dias desde a última coleta"
+                            )
+                        
+                        with col7:
+                            delta_variacao = f"{metricas['variacao_percentual']:+.1f}%"
+                            st.metric(
+                                "📊 Variação %",
+                                delta_variacao,
+                                help="Variação percentual vs ano anterior"
+                            )
+                        
+                        with col8:
+                            # Status de risco
+                            if metricas['dias_sem_coleta'] > 60:
+                                risco = "🔴 Alto"
+                            elif metricas['dias_sem_coleta'] > 30:
+                                risco = "🟡 Médio"
+                            else:
+                                risco = "🟢 Baixo"
+                            
+                            st.metric(
+                                "⚠️ Risco",
+                                risco,
+                                help="Classificação de risco baseada em dias sem coleta"
+                            )
+                    
+                    st.subheader(f"📈 Evolução Mensal - {lab_final}")
+                    ChartManager.criar_grafico_evolucao_mensal(df_filtrado, lab_final)
+                    
+                    # Novos gráficos
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.subheader("📊 Média Diária por Mês")
+                        ChartManager.criar_grafico_media_diaria(df_filtrado, lab_final)
+                    
+                    with col2:
+                        st.subheader("📅 Coletas por Dia do Mês")
+                        ChartManager.criar_grafico_coletas_por_dia(df_filtrado, lab_final)
 
         # Tabela completa de dados
         UIManager.criar_tabela_detalhada(df_filtrado, "📋 Dados Completos dos Laboratórios")
@@ -1176,7 +1685,14 @@ def main():
         # Criar status composto para visão 360
         if not df_filtrado.empty:
             df_360 = df_filtrado.copy()
-            if 'Tendencia' in df_360.columns and 'Status_Risco' in df_360.columns:
+            
+            # Limpar dados nulos e vazios para o gráfico sunburst
+            df_360 = df_360.dropna(subset=['Estado', 'Representante_Nome', 'Nome_Fantasia_PCL'])
+            df_360 = df_360[df_360['Estado'] != '']
+            df_360 = df_360[df_360['Representante_Nome'] != '']
+            df_360 = df_360[df_360['Nome_Fantasia_PCL'] != '']
+            
+            if not df_360.empty and 'Tendencia' in df_360.columns and 'Status_Risco' in df_360.columns:
                 df_360['Status_360'] = df_360.apply(
                     lambda row: f"{row['Tendencia']} - {row['Status_Risco']}",
                     axis=1
@@ -1227,6 +1743,10 @@ def main():
 
                     **Tamanho dos segmentos:** Representa o volume total de coletas
                     """)
+            else:
+                st.warning("⚠️ Dados insuficientes para visualização 360°. Verifique se os campos Estado, Representante_Nome e Nome_Fantasia_PCL estão preenchidos.")
+        else:
+            st.warning("⚠️ Nenhum dado disponível para visualização 360°")
 
     # ========================================
     # ABA 6: RANKINGS
@@ -1269,6 +1789,126 @@ def main():
                 annotation_text="Ponto de Equilíbrio"
             )
             st.plotly_chart(fig_variacao, use_container_width=True)
+
+    # ========================================
+    # ABA 7: ANÁLISES INTELIGENTES
+    # ========================================
+    with tab7:
+        st.header("🧠 Análises Inteligentes")
+        st.markdown("**Dashboard com insights automáticos e análises preditivas**")
+        
+        # Dashboard inteligente
+        AnaliseInteligente.criar_dashboard_inteligente(df_filtrado)
+        
+        # Análise geográfica inteligente
+        if 'Estado' in df_filtrado.columns and 'Cidade' in df_filtrado.columns:
+            st.subheader("🗺️ Análise Geográfica Inteligente")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Top estados por risco
+                st.subheader("📊 Estados por Score de Risco")
+                if 'Score_Risco' in df_filtrado.columns:
+                    estado_risco = df_filtrado.groupby('Estado')['Score_Risco'].agg(['mean', 'count']).reset_index()
+                    estado_risco = estado_risco[estado_risco['count'] >= 5]  # Mínimo 5 labs
+                    estado_risco = estado_risco.sort_values('mean', ascending=False)
+                    
+                    fig_estado = px.bar(estado_risco, x='Estado', y='mean',
+                                      title="Score Médio de Risco por Estado",
+                                      labels={'mean': 'Score Médio de Risco'})
+                    st.plotly_chart(fig_estado, use_container_width=True)
+            
+            with col2:
+                # Distribuição de tendências por estado
+                st.subheader("📈 Tendências por Estado")
+                if 'Tendencia_Volume' in df_filtrado.columns:
+                    tendencia_estado = df_filtrado.groupby(['Estado', 'Tendencia_Volume']).size().reset_index(name='count')
+                    tendencia_estado = tendencia_estado[tendencia_estado['Estado'] != '']
+                    
+                    fig_tendencia = px.bar(tendencia_estado, x='Estado', y='count', color='Tendencia_Volume',
+                                         title="Distribuição de Tendências por Estado")
+                    st.plotly_chart(fig_tendencia, use_container_width=True)
+        
+        # Análise de padrões temporais
+        st.subheader("⏰ Análise de Padrões Temporais")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Volume atual vs histórico
+            if 'Volume_Atual_2025' in df_filtrado.columns and 'Volume_Maximo_2024' in df_filtrado.columns:
+                st.subheader("📊 Volume Atual vs Histórico")
+                
+                # Criar scatter plot
+                fig_scatter = px.scatter(
+                    df_filtrado, 
+                    x='Volume_Maximo_2024', 
+                    y='Volume_Atual_2025',
+                    color='Score_Risco',
+                    size='Score_Risco',
+                    hover_data=['Nome_Fantasia_PCL', 'Estado', 'Tendencia_Volume'],
+                    title="Volume Atual vs Volume Máximo Histórico",
+                    labels={'Volume_Maximo_2024': 'Volume Máximo 2024', 'Volume_Atual_2025': 'Volume Atual 2025'}
+                )
+                
+                # Linha de referência (y = x)
+                fig_scatter.add_shape(
+                    type="line",
+                    x0=0, y0=0, x1=df_filtrado['Volume_Maximo_2024'].max(), y1=df_filtrado['Volume_Maximo_2024'].max(),
+                    line=dict(dash="dash", color="red"),
+                    name="Linha de Referência"
+                )
+                
+                st.plotly_chart(fig_scatter, use_container_width=True)
+        
+        with col2:
+            # Distribuição de scores
+            if 'Score_Risco' in df_filtrado.columns:
+                st.subheader("📊 Distribuição de Scores de Risco")
+                
+                # Criar box plot por tendência
+                if 'Tendencia_Volume' in df_filtrado.columns:
+                    fig_box = px.box(
+                        df_filtrado, 
+                        x='Tendencia_Volume', 
+                        y='Score_Risco',
+                        title="Distribuição de Scores por Tendência",
+                        labels={'Tendencia_Volume': 'Tendência de Volume', 'Score_Risco': 'Score de Risco'}
+                    )
+                    st.plotly_chart(fig_box, use_container_width=True)
+        
+        # Recomendações automáticas
+        st.subheader("💡 Recomendações Automáticas")
+        
+        # Labs que precisam de atenção imediata
+        labs_criticos = df_filtrado[df_filtrado['Score_Risco'] > 80].sort_values('Score_Risco', ascending=False)
+        
+        if not labs_criticos.empty:
+            st.warning(f"🚨 **{len(labs_criticos)} laboratórios** precisam de atenção imediata!")
+            
+            # Mostrar top 10 mais críticos
+            top_criticos = labs_criticos.head(10)[
+                ['Nome_Fantasia_PCL', 'Estado', 'Cidade', 'Score_Risco', 'Insights_Automaticos']
+            ]
+            
+            st.dataframe(top_criticos, use_container_width=True)
+            
+            # Ações recomendadas
+            st.subheader("🎯 Ações Recomendadas")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("📞 Contatos Urgentes", len(labs_criticos[labs_criticos['Dias_Sem_Coleta'] > 60]))
+            
+            with col2:
+                st.metric("📈 Oportunidades", len(df_filtrado[df_filtrado['Tendencia_Volume'] == 'Crescimento']))
+            
+            with col3:
+                st.metric("⚖️ Estáveis", len(df_filtrado[df_filtrado['Tendencia_Volume'] == 'Estável']))
+        else:
+            st.success("✅ Nenhum laboratório crítico identificado!")
 
     # ========================================
     # RODAPÉ

@@ -416,8 +416,8 @@ def calcular_metricas_churn():
             'CNPJ_PCL': lab.get('cnpj', ''),
             'Razao_Social_PCL': lab.get('legalName', ''),
             'Nome_Fantasia_PCL': lab.get('fantasyName', ''),
-            'Estado': lab.get('address', {}).get('state', {}).get('code', '') if isinstance(lab.get('address'), dict) else '',
-            'Cidade': lab.get('address', {}).get('city', '') if isinstance(lab.get('address'), dict) else '',
+            'Estado': lab.get('address.state.code', ''),
+            'Cidade': lab.get('address.city', ''),
             'Representante_Nome': rep_data.get('name', ''),
             'Representante_ID': rep_id,
             

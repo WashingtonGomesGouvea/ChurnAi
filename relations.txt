@@ -1,0 +1,501 @@
+GUIA COMPLETO + DICIONÁRIO DE DADOS (TXT)
+Autor: Washington Gomes Gouvea
+Data: 2025-10-20
+Idioma: PT-BR (simples)
+
+OBJETIVO
+Explicar todas as entidades, campos e relações do meu fluxo de exame toxicológico (ex.: RENACH / primeira habilitação), conforme os exemplos reais que tenho. Serve como “fonte única” para qualquer IA/IDE compreender joins/lookups e consistência.
+
+ENTIDADES
+
+chainofcustodies — cadeia de custódia (amostra, doador, status analítico, logs).
+
+gatherings — ato da coleta/OS, amarra propósito, laboratório e pagamento.
+
+laboratories — laboratório operacional/contratual (licenças, endereço, responsáveis).
+
+representatives — representante comercial/empresa associada a laboratórios.
+
+payments — lançamento financeiro do exame/coleta.
+
+RELACIONAMENTOS (CHAVES E CARDINALIDADES)
+
+gatherings._chainOfCustody → chainofcustodies._id | 1:1 (coleta ↔ cadeia)
+
+gatherings._laboratory → laboratories._id | N:1 (muitas coletas → 1 lab)
+
+laboratories._representative → representatives._id | N:1 (muitos labs → 1 representante)
+
+gatherings._payment → payments._id | 1:1 (coleta ↔ pagamento)
+Obs.: pagamentos podem ter variações (rateio/ajustes), mas o esperado é 1:1.
+
+REGRAS ESSENCIAIS
+
+gatherings._laboratory aponta para laboratório active=true e approved=true.
+
+gatherings._chainOfCustody deve existir para iniciar análise.
+
+gatherings._payment deve existir antes do laudo (exceto courtesy=true/test=true).
+
+RENACH (analysisStatus.renachEnable) só quando análise/financeiro ok e purpose.type="cnh".
+
+Datas/timestamps em UTC; apresentar como America/Sao_Paulo.
+
+LOOKUPS / JOINS (REFERÊNCIA RÁPIDA)
+
+Mongo (conceito):
+gatherings → (lookup) chainofcustodies via _chainOfCustody
+gatherings → (lookup) laboratories via _laboratory
+laboratories → (lookup) representatives via _representative (opcional na exibição)
+gatherings → (lookup) payments via _payment
+
+SQL (após ETL): LEFT JOIN conforme chaves acima.
+
+────────────────────────────────────────────────────────────────────────────
+
+DICIONÁRIO DE DADOS — COMPLETO (por coleção)
+
+CHAINOFCUSTODIES
+
+_id.$oid (ObjectId): chave primária.
+
+sample.hairOrigin[] (array<string>): origens do pelo (ex.: "leg").
+
+sample.status (string): status logístico da amostra (ex.: "awaitingShipment").
+
+sample.code (string): código interno (ex.: "73598756").
+
+sample.type (string): tipo de amostra (ex.: "bodyHair").
+
+sample.color (string): cor do pelo (ex.: "brown").
+
+analysisStatus.recollection.status (bool): sinaliza necessidade de recoleta.
+
+analysisStatus.recollection.reasons[] (array<string>): motivos da recoleta.
+
+analysisStatus.screeningLot (string): lote da triagem (pode estar vazio).
+
+analysisStatus.releaseExam (bool): laudo liberado (true/false).
+
+analysisStatus.isRecollection (bool): se esta chain é de recoleta.
+
+analysisStatus.situation[] (array<object>): etapas do processo analítico.
+
+situation[i].status (string): estado (ex.: "wait").
+
+situation[i].analysisType (string): tipo (ex.: "screening").
+
+situation[i]._id.$oid (ObjectId): id interno da etapa.
+
+analysisStatus.renachEnable (bool): habilitado para envio RENACH.
+
+analysisStatus.confirmatories[] (array<object|string>): confirmatórios (vazio no exemplo).
+
+analysisStatus.renachGatheringIncludedAt.$date (date, ISO UTC): timestamp de inclusão RENACH.
+
+_analyzedDrugs[] (array): drogas analisadas (vazio no exemplo).
+
+_additionalWitnesses[] (array): testemunhas adicionais (vazio no exemplo).
+
+sendingToLims (bool): se está em envio para LIMS.
+
+dateTimeService.$date (date, ISO UTC): momento do atendimento/coleta.
+
+responsableProfessional.name (string): nome do responsável (ex.: "ABIMAEL NASCIMENTO GUIMARÃES ").
+
+donor.name (string)
+
+donor.socialName (string)
+
+donor.birthDate.$date (date, ISO UTC)
+
+donor.cpf (string)
+
+donor.consumeDrugs (bool)
+
+donor.gender (string, ex.: "m")
+
+donor.email (string)
+
+donor.telephone (string)
+
+donor.cnhExpiration.$date (date, ISO UTC)
+
+donor.address.location.type (string, ex.: "Point")
+
+donor.address.location.coordinates[] (array<number>): [lon, lat] ou vazio.
+
+donor.address._id.$oid (ObjectId)
+
+donor.address.postalCode (string)
+
+donor.address.address (string)
+
+donor.address.addressComplement (string)
+
+donor.address.number (string)
+
+donor.address.neighbourhood (string)
+
+donor.address.city (string)
+
+donor.address.state.code (string, ex.: "BA")
+
+donor.address.state.name (string, ex.: "Bahia")
+
+donor.mothersName (string)
+
+_witness.$oid (ObjectId): id de testemunha (coleção de usuários).
+
+_collector.$oid (ObjectId): id de coletor (coleção de usuários).
+
+logs[] (array): eventos/auditoria (vazio no exemplo).
+
+createdAt.$date (date, ISO UTC)
+
+updatedAt.$date (date, ISO UTC)
+
+__v (int): versão do documento.
+
+GATHERINGS
+
+_id (int): chave primária da coleta/OS (ex.: 4641074).
+
+test (bool): se é registro de teste.
+
+disabledInReport (bool): se fica oculto no relatório.
+
+courtesy (bool): cortesia (sem cobrança).
+
+active (bool): ativo.
+
+purpose.analisys50 (bool) [observação: grafia no exemplo é “analisys50”]
+
+purpose.sentReport (bool)
+
+purpose.onRenach (bool)
+
+purpose._id.$oid (ObjectId)
+
+purpose.type (string, ex.: "cnh")
+
+purpose.subType (string, ex.: "firstLicense")
+
+_laboratory.$oid (ObjectId): FK → laboratories._id
+
+_chainOfCustody.$oid (ObjectId): FK → chainofcustodies._id
+
+_payment.$oid (ObjectId): FK → payments._id
+
+createdAt.$date (date, ISO UTC)
+
+updatedAt.$date (date, ISO UTC)
+
+__v (int)
+
+LABORATORIES
+
+_id.$oid (ObjectId): chave primária.
+
+contact.email (string)
+
+contact.telephone (string)
+
+contact.website (string)
+
+licensed.clt (bool)
+
+licensed.cnh (bool)
+
+licensed.other (bool)
+
+licensed.online (bool)
+
+licensed.civilService (bool)
+
+licensed.cltCnh (bool)
+
+licensed.otherAnalysis50 (bool)
+
+licensed.civilServiceAnalysis50 (bool)
+
+businessHours.mon (string, ex.: "closed")
+
+businessHours.tue (string)
+
+businessHours.wed (string)
+
+businessHours.thu (string)
+
+businessHours.fri (string)
+
+businessHours.sat (string)
+
+businessHours.sun (string)
+
+businessHours.hol (string)
+
+businessHours._id.$oid (ObjectId)
+
+director._id.$oid (ObjectId)
+
+director.name (string)
+
+director.rg (string)
+
+director.cpf (string)
+
+director.email (string)
+
+director.telephone (string)
+
+manager._id.$oid (ObjectId)
+
+manager.name (string)
+
+manager.rg (string)
+
+manager.cpf (string)
+
+manager.telephone (string)
+
+manager.email (string)
+
+_representative.$oid (ObjectId): FK → representatives._id
+
+_billingDate.$oid (ObjectId)
+
+cnpj (string)
+
+stateRegistration (string)
+
+legalName (string)
+
+fantasyName (string)
+
+address.location.type (string, "Point")
+
+address.location.coordinates[] (array<number>): [lon, lat]
+
+address._id.$oid (ObjectId)
+
+address.postalCode (string)
+
+address.address (string)
+
+address.addressComplement (string)
+
+address.number (string)
+
+address.neighbourhood (string)
+
+address.city (string)
+
+address.state.code (string, ex.: "PE")
+
+address.state.name (string, ex.: "Pernambuco")
+
+address.ibgeCode (string)
+
+extraPermissions[] (array)
+
+password (string, hash)
+
+createdAt.$date (date, ISO UTC)
+
+updatedAt.$date (date, ISO UTC)
+
+__v (int)
+
+approved (bool)
+
+_roles[] (array<ObjectId>)
+
+active (bool)
+
+accessTokenExpiresAt.$date (date, ISO UTC)
+
+financialContact[] (array)
+
+gateway[] (array)
+
+onlineVoucher (bool)
+
+newRepayment (bool)
+
+allowedMethods.cash (bool)
+
+allowedMethods.credit (bool)
+
+allowedMethods.debit (bool)
+
+allowedMethods.billing (bool)
+
+allowedMethods.billing_company (bool)
+
+allowedMethods.billing_laboratory (bool)
+
+allowedMethods.bank_billet (bool)
+
+allowedMethods.eCredit (bool)
+
+allowedMethods._eCredit (bool)
+
+allowedMethods.pix (bool)
+
+cashReport (string, ex.: "weekly")
+
+lastCashReport (null|string|date)
+
+logistic.type (string, ex.: "fixed")
+
+logistic.days[] (array<string>, ex.: ["mon","tue","wed","thu","fri"])
+
+logistic.gatheringsCount (int)
+
+logistic.primary.$oid (ObjectId)
+
+logistic.openingHours (string, ex.: "8h-17h")
+
+benefit.type (string, ex.: "Courtesy")
+
+benefit.quantityBenefit (int)
+
+REPRESENTATIVES
+
+_id.$oid (ObjectId): chave primária.
+
+contact.telephone (string)
+
+contact.email (string)
+
+contact.website (string)
+
+type (string, ex.: "company")
+
+name (string, ex.: "EXT- LUCAS OLIVEIRA")
+
+legalName (string, ex.: "LUCAS OLIVEIRA ROSA")
+
+cnpj (string)
+
+stateRegistration (string)
+
+address.location.type (string, ex.: "Point")
+
+address.location.coordinates[] (array<number>): pode estar vazio
+
+address.state.code (string, ex.: "SP")
+
+address.state.name (string, ex.: "São Paulo")
+
+address.postalCode (string, ex.: "15.600-000")
+
+address.address (string)
+
+address.addressComplement (string)
+
+address.number (string)
+
+address.neighbourhood (string)
+
+address.city (string)
+
+address._id.$oid (ObjectId)
+
+password (string, hash)
+
+createdAt.$date (date, ISO UTC)
+
+updatedAt.$date (date, ISO UTC)
+
+__v (int)
+
+_roles[] (array<ObjectId>)
+
+accessTokenExpiresAt.$date (date, ISO UTC)
+
+role[] (array): lista de papéis (vazio no exemplo)
+
+PAYMENTS
+
+_id.$oid (ObjectId): chave primária.
+
+bankBillet.expired (bool): boleto expirado.
+
+invoiceTo (string, ex.: "donor"): quem recebe a fatura.
+
+isSestSenat (bool): flag específico (Sest/Senat).
+
+_newPayment.charges[] (array): estrutura de cobrança nova.
+
+value (number): valor total (ex.: 150).
+
+examValue (number): valor do exame (ex.: 60).
+
+gatheringValue (number): valor da coleta (ex.: 90).
+
+method (string, ex.: "cash"): método (pix, cash, credit, debit, billing, bank_billet, etc).
+
+_price.$oid (ObjectId): referência de tabela de preço.
+
+pix.id (string)
+
+_laboratory.$oid (ObjectId): laboratório financeiro dominante.
+
+status (string, ex.: "pre-verified")
+
+logs[] (array)
+
+_laboratories[] (array<ObjectId>): labs para rateio (opcional)
+
+createdAt.$date (date, ISO UTC)
+
+updatedAt.$date (date, ISO UTC)
+
+__v (int)
+
+integrationId (string, ex.: "02246078121_70077599_1760983433713")
+
+invoice (string, ex.: "68f6798ad797c8d7a1595b9f")
+
+────────────────────────────────────────────────────────────────────────────
+
+FLUXO DE VIDA (DETALHADO)
+
+Abertura da coleta: crio gatherings com purpose (ex.: {type:"cnh", subType:"firstLicense"}) e _laboratory.
+
+Coleta física: gero chainofcustodies (doador, amostra, dateTimeService, responsáveis). Preencho gatherings._chainOfCustody.
+
+Financeiro: crio payments (valores/método/status); ligo em gatherings._payment.
+
+Logística: evoluo sample.status (ex.: awaitingShipment → inTransit → received).
+
+Análise: avanço analysisStatus.situation[] (screening → confirmatories se houver), preencho screeningLot, confirmatories.
+
+RENACH e laudo: quando pronto, analysisStatus.releaseExam=true; analysisStatus.renachEnable=true + purpose.sentReport=true se aplicável.
+
+Recoleta: se analysisStatus.recollection.status=true, registrar motivo(s), não liberar laudo anterior, e reencaminhar etapas.
+
+VALIDAÇÃO/CONSISTÊNCIA
+
+Obrigatórios: _laboratory, _chainOfCustody (antes da análise), _payment (antes do laudo; exceto cortesia/teste).
+
+Laboratório: deve estar approved=true e active=true.
+
+Temporal: normalizar UTC → America/Sao_Paulo em dashboards/relatórios.
+
+PII: mascarar donor.cpf, donor.email, donor.telephone na camada de apresentação.
+
+Status derivado: calcular “fase_processo” combinando sample.status + topo de analysisStatus.situation[] + releaseExam.
+
+RESUMO FINAL (CHAVES PARA SABER DE COR)
+
+gatherings._chainOfCustody == chainofcustodies._id
+
+gatherings._laboratory == laboratories._id
+
+laboratories._representative == representatives._id
+
+gatherings._payment == payments._id
+

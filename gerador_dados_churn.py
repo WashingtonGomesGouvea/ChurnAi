@@ -318,6 +318,24 @@ def calcular_metricas_churn():
                 coletas_mes = len(gatherings_2025_lab[gatherings_2025_lab['createdAt'].dt.month == mes])
                 coletas_mensais_2025[mes_key] = coletas_mes
         
+        # Calcular coletas por mês 2024
+        coletas_mensais_2024 = {}
+        if not gatherings_2024_lab.empty:
+            # Criar cópia para evitar SettingWithCopyWarning
+            gatherings_2024_lab = gatherings_2024_lab.copy()
+            
+            # Converter createdAt para datetime com tratamento de erros
+            try:
+                gatherings_2024_lab['createdAt'] = pd.to_datetime(gatherings_2024_lab['createdAt'], errors='coerce')
+            except Exception as e:
+                logger.warning(f"Erro ao converter datas 2024: {e}")
+                gatherings_2024_lab['createdAt'] = pd.to_datetime(gatherings_2024_lab['createdAt'], format='mixed', errors='coerce')
+            
+            for mes in range(1, 13):  # Jan a Dez (ano completo)
+                mes_key = f'N_Coletas_{["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"][mes-1]}_24'
+                coletas_mes = len(gatherings_2024_lab[gatherings_2024_lab['createdAt'].dt.month == mes])
+                coletas_mensais_2024[mes_key] = coletas_mes
+        
         # Calcular maior mês histórico (2024)
         maior_mes_2024 = 0
         mes_historico = ""
@@ -426,6 +444,20 @@ def calcular_metricas_churn():
             'Mes_Historico': mes_historico,
             'Maior_N_Coletas_Mes_2024': maior_mes_2024,
             'Maior_N_Coletas_Mes_2025': maior_mes_2025,
+            
+            # Coletas mensais 2024
+            'N_Coletas_Jan_24': coletas_mensais_2024.get('N_Coletas_Jan_24', 0),
+            'N_Coletas_Fev_24': coletas_mensais_2024.get('N_Coletas_Fev_24', 0),
+            'N_Coletas_Mar_24': coletas_mensais_2024.get('N_Coletas_Mar_24', 0),
+            'N_Coletas_Abr_24': coletas_mensais_2024.get('N_Coletas_Abr_24', 0),
+            'N_Coletas_Mai_24': coletas_mensais_2024.get('N_Coletas_Mai_24', 0),
+            'N_Coletas_Jun_24': coletas_mensais_2024.get('N_Coletas_Jun_24', 0),
+            'N_Coletas_Jul_24': coletas_mensais_2024.get('N_Coletas_Jul_24', 0),
+            'N_Coletas_Ago_24': coletas_mensais_2024.get('N_Coletas_Ago_24', 0),
+            'N_Coletas_Set_24': coletas_mensais_2024.get('N_Coletas_Set_24', 0),
+            'N_Coletas_Out_24': coletas_mensais_2024.get('N_Coletas_Out_24', 0),
+            'N_Coletas_Nov_24': coletas_mensais_2024.get('N_Coletas_Nov_24', 0),
+            'N_Coletas_Dez_24': coletas_mensais_2024.get('N_Coletas_Dez_24', 0),
             
             # Coletas mensais 2025
             'N_Coletas_Jan_25': coletas_mensais_2025.get('N_Coletas_Jan_25', 0),

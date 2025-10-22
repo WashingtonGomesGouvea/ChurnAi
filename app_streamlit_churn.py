@@ -18,6 +18,7 @@ warnings.filterwarnings('ignore')
 # Importar configurações
 from config_churn import *
 
+
 # Configuração da página
 st.set_page_config(
     page_title="📊 Churn PCLs v2.0",
@@ -287,6 +288,14 @@ class DataManager:
     """Gerenciador de dados com cache inteligente."""
 
     @staticmethod
+    def normalizar_cnpj(cnpj: str) -> str:
+        """Remove formatação do CNPJ (pontos, traços, barras)"""
+        if pd.isna(cnpj) or cnpj == '':
+            return ''
+        # Remove tudo exceto dígitos
+        return ''.join(filter(str.isdigit, str(cnpj)))
+
+    @staticmethod
     @st.cache_data(ttl=CACHE_TTL)
     def carregar_dados_churn() -> Optional[pd.DataFrame]:
         """Carrega dados de análise de churn com cache inteligente."""
@@ -332,14 +341,129 @@ class DataManager:
         if 'Data_Analise' in df.columns:
             df['Data_Analise'] = pd.to_datetime(df['Data_Analise'], errors='coerce')
 
-        # Calcular volume total se não existir
-        meses_2025 = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
-        colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses_2025]
+        # Calcular volume total se não existir (até o mês atual)
+        try:
+            meses_2025_dyn = ChartManager._meses_ate_hoje(df, 2025)
+        except Exception:
+            meses_2025_dyn = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
+        colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses_2025_dyn]
 
         if 'Volume_Total_2025' not in df.columns:
-            df['Volume_Total_2025'] = df[colunas_meses].sum(axis=1, skipna=True)
+            df['Volume_Total_2025'] = df[colunas_meses].sum(axis=1, skipna=True) if colunas_meses else 0
+
+        # Adicionar coluna CNPJ normalizado para match com dados VIP
+        if 'CNPJ_PCL' in df.columns:
+            df['CNPJ_Normalizado'] = df['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
 
         return df
+
+    @staticmethod
+    @st.cache_data(ttl=VIP_CACHE_TTL)
+    def carregar_dados_vip_excel() -> Optional[pd.DataFrame]:
+        """Carrega dados VIP do Excel com cache."""
+        try:
+            # Tentar múltiplos caminhos possíveis
+            caminhos_possiveis = [
+                VIP_EXCEL_FILE,  # Diretório atual
+                os.path.join(os.path.dirname(OUTPUT_DIR), VIP_EXCEL_FILE),  # Pai do OUTPUT_DIR
+                os.path.join(OUTPUT_DIR, VIP_EXCEL_FILE)  # Dentro do OUTPUT_DIR
+            ]
+            
+            arquivo_excel = None
+            for caminho in caminhos_possiveis:
+                if os.path.exists(caminho):
+                    arquivo_excel = caminho
+                    break
+            
+            if arquivo_excel:
+                df_vip = pd.read_excel(arquivo_excel, engine='openpyxl')
+                # Normalizar CNPJ para match
+                df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
+                st.success(f"✅ Dados VIP carregados: {len(df_vip)} registros")
+                return df_vip
+            else:
+                st.warning(f"Arquivo VIP não encontrado em nenhum dos caminhos: {caminhos_possiveis}")
+                return None
+        except Exception as e:
+            st.warning(f"Erro ao carregar arquivo VIP: {e}")
+            return None
+
+class VIPManager:
+    """Gerenciador de dados VIP."""
+
+    @staticmethod
+    def buscar_info_vip(cnpj: str, df_vip: pd.DataFrame) -> Optional[dict]:
+        """Busca informações VIP para um CNPJ."""
+        if df_vip is None or df_vip.empty or not cnpj:
+            return None
+        
+        cnpj_normalizado = DataManager.normalizar_cnpj(cnpj)
+        if not cnpj_normalizado:
+            return None
+        
+        # Buscar match no DataFrame VIP
+        match = df_vip[df_vip['CNPJ_Normalizado'] == cnpj_normalizado]
+        if not match.empty:
+            row = match.iloc[0]
+            return {
+                'ranking': row.get('Ranking', ''),
+                'ranking_rede': row.get('Ranking Rede', ''),
+                'rede': row.get('Rede', ''),
+                'contato': row.get('Contato PCL', ''),
+                'telefone': row.get('Whatsapp/telefone', ''),
+                'email': row.get('Email', '')
+            }
+        return None
+
+    @staticmethod
+    def renderizar_card_vip(info_vip: dict, lab_nome: str):
+        """Renderiza card visual com informações VIP."""
+        st.subheader(f"🌟 Informações VIP - {lab_nome}")
+        
+        # Badge VIP
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #FFD700, #FFA500); 
+                    color: white; padding: 1rem; border-radius: 10px; 
+                    text-align: center; margin-bottom: 1rem; box-shadow: 0 4px 8px rgba(0,0,0,0.2);">
+            <h3 style="margin: 0; font-size: 1.5rem;">⭐ CLIENTE VIP ⭐</h3>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Informações VIP em colunas
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown(f"""
+            <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; 
+                        border-left: 4px solid #FFD700; text-align: center;">
+                <h4 style="margin: 0 0 0.5rem 0; color: #333;">🏆 Ranking</h4>
+                <p style="margin: 0; font-size: 1.2rem; font-weight: bold; color: #FFD700;">
+                    {info_vip.get('ranking', 'N/A')}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown(f"""
+            <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; 
+                        border-left: 4px solid #FFA500; text-align: center;">
+                <h4 style="margin: 0 0 0.5rem 0; color: #333;">🏅 Ranking Rede</h4>
+                <p style="margin: 0; font-size: 1.2rem; font-weight: bold; color: #FFA500;">
+                    {info_vip.get('ranking_rede', 'N/A')}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown(f"""
+            <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; 
+                        border-left: 4px solid #007bff; text-align: center;">
+                <h4 style="margin: 0 0 0.5rem 0; color: #333;">🏥 Rede</h4>
+                <p style="margin: 0; font-size: 1.2rem; font-weight: bold; color: #007bff;">
+                    {info_vip.get('rede', 'N/A')}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
 
 class FilterManager:
     """Gerenciador de filtros da interface."""
@@ -348,96 +472,112 @@ class FilterManager:
         self.filtros = {}
 
     def renderizar_sidebar_filtros(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Renderiza todos os filtros na sidebar."""
+        """Renderiza filtros otimizados na sidebar."""
         st.sidebar.markdown('<div class="sidebar-header"><h3>🔧 Filtros</h3></div>', unsafe_allow_html=True)
 
         filtros = {}
 
-        # Filtro por Estado
-        if 'Estado' in df.columns:
-            filtros['estados'] = st.sidebar.multiselect(
-                "🏛️ Estado",
-                options=sorted(df['Estado'].dropna().unique()),
-                default=sorted(df['Estado'].dropna().unique()),
-                help="Selecione os estados para filtrar"
-            )
-
-        # Filtro por Representante
-        if 'Representante_Nome' in df.columns:
-            filtros['representantes'] = st.sidebar.multiselect(
-                "👤 Representante",
-                options=sorted(df['Representante_Nome'].dropna().unique()),
-                default=sorted(df['Representante_Nome'].dropna().unique()),
-                help="Selecione os representantes para filtrar"
-            )
-
-        # Filtro por Status de Risco
-        if 'Status_Risco' in df.columns:
-            filtros['status_risco'] = st.sidebar.multiselect(
-                "⚠️ Status de Risco",
-                options=sorted(df['Status_Risco'].dropna().unique()),
-                default=sorted(df['Status_Risco'].dropna().unique()),
-                help="Selecione os status de risco para filtrar"
-            )
-
-        # Filtro por período
-        col1, col2 = st.sidebar.columns(2)
-        with col1:
-            filtros['data_inicio'] = st.sidebar.date_input(
-                "📅 Data Início",
-                value=datetime.now() - timedelta(days=30)
-            )
-        with col2:
-            filtros['data_fim'] = st.sidebar.date_input(
-                "📅 Data Fim",
-                value=datetime.now()
-            )
-
-        # Busca textual
-        filtros['busca_texto'] = st.sidebar.text_input(
-            "🔍 Buscar por CNPJ/Nome/Cidade",
-            help="Digite parte do CNPJ, nome do laboratório ou cidade"
+        # Filtro VIP com opção de alternar
+        filtros['apenas_vip'] = st.sidebar.toggle(
+            "🌟 Apenas Clientes VIP",
+            value=True,
+            help="Ative para mostrar apenas clientes VIP, desative para mostrar todos"
         )
+        
+        # Separador visual
+        st.sidebar.markdown("---")
+
+        # Filtro por período simplificado
+        st.sidebar.markdown("**📅 Período de Análise**")
+        
+        # Opções de período pré-definidas
+        opcoes_periodo = {
+            "Últimos 7 dias": 7,
+            "Últimos 15 dias": 15,
+            "Últimos 30 dias": 30,
+            "Últimos 60 dias": 60,
+            "Últimos 90 dias": 90,
+            "Personalizado": "custom"
+        }
+        
+        periodo_selecionado = st.sidebar.selectbox(
+            "Selecione o período:",
+            options=list(opcoes_periodo.keys()),
+            index=2,  # Padrão: 30 dias
+            help="Escolha o período para análise"
+        )
+        
+        if opcoes_periodo[periodo_selecionado] == "custom":
+            # Período personalizado
+            col1, col2 = st.sidebar.columns(2)
+            with col1:
+                filtros['data_inicio'] = st.sidebar.date_input(
+                    "Data Início",
+                    value=datetime.now() - timedelta(days=30),
+                    key="data_inicio_custom"
+                )
+            with col2:
+                filtros['data_fim'] = st.sidebar.date_input(
+                    "Data Fim",
+                    value=datetime.now(),
+                    key="data_fim_custom"
+                )
+        else:
+            # Período pré-definido
+            dias = opcoes_periodo[periodo_selecionado]
+            filtros['data_inicio'] = datetime.now() - timedelta(days=dias)
+            filtros['data_fim'] = datetime.now()
+        
+        # Mostrar período atual (texto discreto)
+        data_inicio_str = filtros['data_inicio'].strftime('%d/%m/%Y')
+        data_fim_str = filtros['data_fim'].strftime('%d/%m/%Y')
+        st.sidebar.markdown(f"<small>📊 {data_inicio_str} a {data_fim_str}</small>", unsafe_allow_html=True)
 
         self.filtros = filtros
         return filtros
 
     def aplicar_filtros(self, df: pd.DataFrame, filtros: Dict[str, Any]) -> pd.DataFrame:
-        """Aplica todos os filtros ao DataFrame."""
+        """Aplica filtros otimizados ao DataFrame."""
         if df.empty:
             return df
 
         df_filtrado = df.copy()
 
-        # Filtro por estados
-        if filtros.get('estados'):
-            df_filtrado = df_filtrado[df_filtrado['Estado'].isin(filtros['estados'])]
-
-        # Filtro por representantes
-        if filtros.get('representantes'):
-            df_filtrado = df_filtrado[df_filtrado['Representante_Nome'].isin(filtros['representantes'])]
-
-        # Filtro por status de risco
-        if filtros.get('status_risco'):
-            df_filtrado = df_filtrado[df_filtrado['Status_Risco'].isin(filtros['status_risco'])]
+        # Filtro VIP (sempre ativo)
+        if filtros.get('apenas_vip', False):
+            # Carregar dados VIP
+            df_vip = DataManager.carregar_dados_vip_excel()
+            if df_vip is not None and not df_vip.empty:
+                # Normalizar CNPJs para match
+                df_filtrado['CNPJ_Normalizado'] = df_filtrado['CNPJ_PCL'].apply(
+                    lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
+                )
+                df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(
+                    lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
+                )
+                
+                # Filtrar apenas registros que estão na lista VIP
+                df_filtrado = df_filtrado[df_filtrado['CNPJ_Normalizado'].isin(df_vip['CNPJ_Normalizado'])]
+            else:
+                # Se não há dados VIP, retornar DataFrame vazio
+                return pd.DataFrame()
 
         # Filtro por período
         if 'Data_Analise' in df_filtrado.columns and filtros.get('data_inicio') and filtros.get('data_fim'):
+            # Garantir que as datas sejam do tipo date
+            data_inicio = filtros['data_inicio']
+            data_fim = filtros['data_fim']
+            
+            # Se for datetime, converter para date
+            if hasattr(data_inicio, 'date'):
+                data_inicio = data_inicio.date()
+            if hasattr(data_fim, 'date'):
+                data_fim = data_fim.date()
+            
             df_filtrado = df_filtrado[
-                (df_filtrado['Data_Analise'].dt.date >= filtros['data_inicio']) &
-                (df_filtrado['Data_Analise'].dt.date <= filtros['data_fim'])
+                (df_filtrado['Data_Analise'].dt.date >= data_inicio) &
+                (df_filtrado['Data_Analise'].dt.date <= data_fim)
             ]
-
-        # Busca textual
-        if filtros.get('busca_texto'):
-            busca = filtros['busca_texto'].lower()
-            mask = (
-                df_filtrado['CNPJ_PCL'].astype(str).str.lower().str.contains(busca, na=False) |
-                df_filtrado['Razao_Social_PCL'].astype(str).str.lower().str.contains(busca, na=False) |
-                df_filtrado['Nome_Fantasia_PCL'].astype(str).str.lower().str.contains(busca, na=False) |
-                df_filtrado['Cidade'].astype(str).str.lower().str.contains(busca, na=False)
-            )
-            df_filtrado = df_filtrado[mask]
 
         return df_filtrado
 
@@ -478,6 +618,21 @@ class KPIManager:
 
 class ChartManager:
     """Gerenciador de criação de gráficos."""
+
+    @staticmethod
+    def _meses_ate_hoje(df: pd.DataFrame, ano: int) -> list:
+        """Retorna lista de códigos de meses disponíveis até o mês corrente para o ano informado.
+
+        - Garante ordem cronológica correta
+        - Considera apenas colunas que existem no DataFrame
+        - Para anos anteriores ao corrente, considera até Dezembro
+        """
+        meses_ordem = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+        ano_atual = pd.Timestamp.today().year
+        limite_mes = pd.Timestamp.today().month if ano == ano_atual else 12
+        meses_limite = meses_ordem[:limite_mes]
+        sufixo = str(ano)[-2:]
+        return [m for m in meses_limite if f'N_Coletas_{m}_{sufixo}' in df.columns]
 
     @staticmethod
     def criar_grafico_distribuicao_risco(df: pd.DataFrame):
@@ -579,7 +734,9 @@ class ChartManager:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
 
-        meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
+        meses = ChartManager._meses_ate_hoje(df, 2025)
+        if not meses:
+            return
         colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses]
         
         if lab_selecionado:
@@ -588,9 +745,12 @@ class ChartManager:
                 lab = lab_data.iloc[0]
                 valores_mensais = [lab[col] for col in colunas_meses]
                 
-                # Calcular média diária (assumindo 30 dias por mês)
-                dias_por_mes = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31]  # Jan-Out
-                medias_diarias = [val / dias for val, dias in zip(valores_mensais, dias_por_mes)]
+                # Calcular média diária (dias reais aproximados por mês)
+                dias_map = {
+                    'Jan': 31, 'Fev': 28, 'Mar': 31, 'Abr': 30, 'Mai': 31, 'Jun': 30,
+                    'Jul': 31, 'Ago': 31, 'Set': 30, 'Out': 31, 'Nov': 30, 'Dez': 31
+                }
+                medias_diarias = [val / max(1, dias_map.get(mes, 30)) for val, mes in zip(valores_mensais, meses)]
                 
                 fig = px.bar(
                     x=meses,
@@ -625,7 +785,7 @@ class ChartManager:
                 lab = lab_data.iloc[0]
                 
                 # Simular distribuição de coletas por dia (baseado no volume mensal)
-                meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
+                meses = ChartManager._meses_ate_hoje(df, 2025)
                 colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses]
                 valores_mensais = [lab[col] for col in colunas_meses]
                 
@@ -685,7 +845,10 @@ class ChartManager:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
 
-        meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
+        meses = ChartManager._meses_ate_hoje(df, 2025)
+        if not meses:
+            st.info("📊 Nenhum mês disponível até a data atual")
+            return
         colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses]
 
         if lab_selecionado:
@@ -695,7 +858,7 @@ class ChartManager:
                 lab = lab_data.iloc[0]
                 valores_2025 = [lab[col] for col in colunas_meses]
                 
-                # Dados 2024 se disponíveis
+                # Dados 2024 (mesmos meses para comparação direta)
                 colunas_2024 = [f'N_Coletas_{mes}_24' for mes in meses]
                 valores_2024 = [lab[col] if col in lab.index else 0 for col in colunas_2024]
                 
@@ -786,12 +949,15 @@ class ChartManager:
 
         # Garantir volume total
         if 'Volume_Total_2025' not in df.columns:
-            meses_2025 = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
+            meses_2025 = ChartManager._meses_ate_hoje(df, 2025)
             colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses_2025]
-            df['Volume_Total_2025'] = df[colunas_meses].sum(axis=1, skipna=True)
+            if colunas_meses:
+                df['Volume_Total_2025'] = df[colunas_meses].sum(axis=1, skipna=True)
+            else:
+                df['Volume_Total_2025'] = 0
 
         top_labs = df.nlargest(top_n, 'Volume_Total_2025')
-        meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
+        meses = ChartManager._meses_ate_hoje(df, 2025)
         colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses]
 
         dados_heatmap = []
@@ -998,15 +1164,18 @@ class MetricasAvancadas:
         
         lab = lab_data.iloc[0]
         
-        # Total de coletas 2025
-        meses_2025 = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
+        # Total de coletas 2025 (até o mês atual)
+        meses_2025 = ChartManager._meses_ate_hoje(df, 2025)
         colunas_2025 = [f'N_Coletas_{mes}_25' for mes in meses_2025]
-        total_coletas_2025 = lab[colunas_2025].sum() if all(col in lab.index for col in colunas_2025) else 0
+        total_coletas_2025 = lab[colunas_2025].sum() if colunas_2025 and all(col in lab.index for col in colunas_2025) else 0
         
-        # Média dos últimos 3 meses
-        ultimos_3_meses = ['Ago', 'Set', 'Out']
+        # Média dos últimos 3 meses (dinâmico)
+        if len(meses_2025) >= 3:
+            ultimos_3_meses = meses_2025[-3:]
+        else:
+            ultimos_3_meses = meses_2025
         colunas_3_meses = [f'N_Coletas_{mes}_25' for mes in ultimos_3_meses]
-        media_3_meses = lab[colunas_3_meses].mean() if all(col in lab.index for col in colunas_3_meses) else 0
+        media_3_meses = lab[colunas_3_meses].mean() if colunas_3_meses and all(col in lab.index for col in colunas_3_meses) else 0
         
         # Média diária (últimos 3 meses)
         dias_3_meses = 90  # Aproximadamente 3 meses
@@ -1043,8 +1212,13 @@ class AnaliseInteligente:
         """Calcula insights automáticos para cada laboratório."""
         df_insights = df.copy()
         
-        # Volume atual (último mês disponível)
-        df_insights['Volume_Atual_2025'] = df_insights.get('N_Coletas_Out_25', 0)
+        # Volume atual (último mês disponível dinâmico)
+        meses_validos_2025 = ChartManager._meses_ate_hoje(df_insights, 2025)
+        ultima_coluna_2025 = f"N_Coletas_{meses_validos_2025[-1]}_25" if meses_validos_2025 else None
+        if ultima_coluna_2025 and ultima_coluna_2025 in df_insights.columns:
+            df_insights['Volume_Atual_2025'] = df_insights[ultima_coluna_2025]
+        else:
+            df_insights['Volume_Atual_2025'] = 0
         
         # Volume máximo do ano passado
         colunas_2024 = [col for col in df_insights.columns if 'N_Coletas_' in col and '24' in col]
@@ -1359,14 +1533,15 @@ def main():
     # ========================================
     # ABAS PRINCIPAIS COM NOVA ORGANIZAÇÃO
     # ========================================
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "🏠 Visão Geral",
         "📋 Análise Detalhada",
         "👤 Por Representante",
         "📈 Tendências",
         "🔄 Visão 360°",
         "🏆 Rankings",
-        "🧠 Análises Inteligentes"
+        "🧠 Análises Inteligentes",
+        "🏢 Ranking Rede"
     ])
 
     # ========================================
@@ -1429,141 +1604,608 @@ def main():
     with tab2:
         st.header("📋 Análise Detalhada")
 
-        # Filtros avançados
-        with st.expander("🔍 Filtros Avançados", expanded=True):
+        # Filtros avançados com design moderno
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white; padding: 1.5rem; border-radius: 10px;
+                    margin-bottom: 1rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+            <h3 style="margin: 0; font-size: 1.3rem;">🔍 Busca Inteligente de Laboratórios</h3>
+            <p style="margin: 0.5rem 0 0 0; opacity: 0.9;">
+                Busque por CNPJ (com ou sem formatação) ou nome do laboratório
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        with st.container():
+            st.markdown('<div class="dataframe-container" style="padding: 1.5rem;">', unsafe_allow_html=True)
+
             # Seleção de laboratório específico
             if not df_filtrado.empty:
-                col1, col2 = st.columns([2, 1])
-                
+                # Layout melhorado com 3 colunas - ajustado para melhor alinhamento
+                col1, col2, col3 = st.columns([4, 1.5, 2.5])
+
                 with col1:
-                    # Campo de busca por CNPJ ou nome
+                    # Campo de busca aprimorado
                     busca_lab = st.text_input(
-                        "🔍 Buscar por CNPJ ou Nome:",
-                        placeholder="Digite CNPJ ou nome do laboratório...",
-                        help="Digite CNPJ (apenas números) ou nome do laboratório"
+                        "🔍 Buscar por CNPJ, Nome ou Cidade:",
+                        placeholder="Ex: 51.865.434/0012-48 ou BIOLOGICO ou São Paulo...",
+                        help="Digite CNPJ (com ou sem pontos/tracos), nome do laboratório, razão social ou cidade",
+                        key="busca_avancada"
                     )
-                
+
                 with col2:
+                    # Espaçamento para alinhamento
+                    st.write("")  # Espaço vazio para alinhar com o campo de texto
+                    # Botão de busca rápida
+                    buscar_btn = st.button("🔎 Buscar", type="primary", use_container_width=True)
+
+                with col3:
                     # Seleção por dropdown como alternativa
                     lab_selecionado = st.selectbox(
-                        "📊 Ou selecione:",
+                        "📋 Lista Rápida:",
                         options=[""] + sorted(df_filtrado['Nome_Fantasia_PCL'].unique()),
-                        help="Selecione um laboratório da lista"
+                        help="Ou selecione um laboratório da lista completa",
+                        key="lista_rapida"
                     )
-                
-                # Lógica de busca
+
+                # Informações de ajuda
+                with st.expander("💡 Dicas de Busca", expanded=False):
+                    st.markdown("""
+                    **🔢 Para CNPJ:**
+                    - Apenas números: `51865434001248`
+                    - Com formatação: `51.865.434/0012-48`
+
+                    **🏥 Para Nome:**
+                    - Nome fantasia, razão social ou cidade
+                    - Busca parcial e sem distinção de maiúsculas/minúsculas
+
+                    **📊 Resultados:**
+                    - 1 resultado: Selecionado automaticamente
+                    - Múltiplos: Lista para escolher o correto
+                    """)
+
+                # Estado da busca
                 lab_final = None
-                if busca_lab:
-                    # Buscar por CNPJ (apenas números)
-                    if busca_lab.isdigit():
-                        lab_encontrado = df_filtrado[df_filtrado['CNPJ_PCL'].str.contains(busca_lab, na=False)]
-                    else:
-                        # Buscar por nome
-                        lab_encontrado = df_filtrado[df_filtrado['Nome_Fantasia_PCL'].str.contains(busca_lab, case=False, na=False)]
-                    
-                    if not lab_encontrado.empty:
-                        lab_final = lab_encontrado.iloc[0]['Nome_Fantasia_PCL']
-                        st.success(f"✅ Laboratório encontrado: {lab_final}")
-                    else:
-                        st.warning("⚠️ Laboratório não encontrado")
-                elif lab_selecionado:
-                    lab_final = lab_selecionado
 
-                if lab_final:
-                    # Cards de métricas avançadas
-                    metricas = MetricasAvancadas.calcular_metricas_lab(df_filtrado, lab_final)
-                    
-                    if metricas:
-                        st.subheader(f"📊 Métricas Avançadas - {lab_final}")
-                        
-                        col1, col2, col3, col4 = st.columns(4)
-                        
-                        with col1:
-                            st.metric(
-                                "📈 Total de Coletas 2025",
-                                f"{metricas['total_coletas']:,}",
-                                help="Total de coletas realizadas em 2025"
+                # Verificar se há busca ativa ou laboratório selecionado
+                busca_ativa = buscar_btn or (busca_lab and len(busca_lab.strip()) > 2)
+                tem_selecao = lab_selecionado and lab_selecionado != ""
+
+                if busca_ativa or tem_selecao:
+                    # Lógica de busca aprimorada
+                    if busca_ativa and busca_lab:
+                        busca_normalizada = busca_lab.strip()
+
+                        # Verificar se é CNPJ (com ou sem formatação)
+                        cnpj_limpo = ''.join(filter(str.isdigit, busca_normalizada))
+
+                        if len(cnpj_limpo) >= 8:  # CNPJ válido tem pelo menos 8 dígitos
+                            # Buscar por CNPJ normalizado
+                            df_filtrado['CNPJ_Normalizado_Busca'] = df_filtrado['CNPJ_PCL'].apply(
+                                lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
                             )
-                        
-                        with col2:
-                            st.metric(
-                                "📅 Média 3 Meses",
-                                f"{metricas['media_3_meses']:.1f}",
-                                help="Média dos últimos 3 meses (Ago-Set-Out)"
-                            )
-                        
-                        with col3:
-                            st.metric(
-                                "📊 Média Diária",
-                                f"{metricas['media_diaria']:.1f}",
-                                help="Média diária baseada nos últimos 3 meses"
-                            )
-                        
-                        with col4:
-                            status_agudo = "🟢" if metricas['agudo'] == "Ativo" else "🔴"
-                            st.metric(
-                                f"{status_agudo} Status Agudo",
-                                metricas['agudo'],
-                                help="Atividade nos últimos 7 dias"
-                            )
-                        
-                        # Segunda linha de cards
-                        col5, col6, col7, col8 = st.columns(4)
-                        
-                        with col5:
-                            status_cronico = "📈" if metricas['cronico'] == "Crescimento" else "📉" if metricas['cronico'] == "Declínio" else "📊"
-                            st.metric(
-                                f"{status_cronico} Status Crônico",
-                                metricas['cronico'],
-                                help="Tendência baseada na variação percentual"
-                            )
-                        
-                        with col6:
-                            st.metric(
-                                "⏰ Dias sem Coleta",
-                                f"{metricas['dias_sem_coleta']}",
-                                help="Dias desde a última coleta"
-                            )
-                        
-                        with col7:
-                            delta_variacao = f"{metricas['variacao_percentual']:+.1f}%"
-                            st.metric(
-                                "📊 Variação %",
-                                delta_variacao,
-                                help="Variação percentual vs ano anterior"
-                            )
-                        
-                        with col8:
-                            # Status de risco
-                            if metricas['dias_sem_coleta'] > 60:
-                                risco = "🔴 Alto"
-                            elif metricas['dias_sem_coleta'] > 30:
-                                risco = "🟡 Médio"
+                            lab_encontrado = df_filtrado[df_filtrado['CNPJ_Normalizado_Busca'].str.startswith(cnpj_limpo)]
+                        else:
+                            # Buscar por nome (case insensitive e parcial)
+                            lab_encontrado = df_filtrado[
+                                df_filtrado['Nome_Fantasia_PCL'].str.contains(busca_normalizada, case=False, na=False) |
+                                df_filtrado['Razao_Social_PCL'].str.contains(busca_normalizada, case=False, na=False) |
+                                df_filtrado['Cidade'].str.contains(busca_normalizada, case=False, na=False)
+                            ]
+
+                        if not lab_encontrado.empty:
+                            if len(lab_encontrado) == 1:
+                                lab_final = lab_encontrado.iloc[0]['Nome_Fantasia_PCL']
+                                st.success(f"✅ Laboratório encontrado: {lab_final}")
                             else:
-                                risco = "🟢 Baixo"
-                            
-                            st.metric(
-                                "⚠️ Risco",
-                                risco,
-                                help="Classificação de risco baseada em dias sem coleta"
-                            )
-                    
-                    st.subheader(f"📈 Evolução Mensal - {lab_final}")
-                    ChartManager.criar_grafico_evolucao_mensal(df_filtrado, lab_final)
-                    
-                    # Novos gráficos
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.subheader("📊 Média Diária por Mês")
-                        ChartManager.criar_grafico_media_diaria(df_filtrado, lab_final)
-                    
-                    with col2:
-                        st.subheader("📅 Coletas por Dia do Mês")
-                        ChartManager.criar_grafico_coletas_por_dia(df_filtrado, lab_final)
+                                # Múltiplos resultados - mostrar opções
+                                st.info(f"🔍 Encontrados {len(lab_encontrado)} laboratórios. Selecione um:")
 
-        # Tabela completa de dados
-        UIManager.criar_tabela_detalhada(df_filtrado, "📋 Dados Completos dos Laboratórios")
+                                # Criar lista de opções com mais detalhes
+                                opcoes = []
+                                for _, row in lab_encontrado.head(10).iterrows():
+                                    nome = row['Nome_Fantasia_PCL']
+                                    cidade = row.get('Cidade', 'N/A')
+                                    estado = row.get('Estado', 'N/A')
+                                    cnpj = row.get('CNPJ_PCL', 'N/A')
+                                    opcao = f"{nome} - {cidade}/{estado} (CNPJ: {cnpj})"
+                                    opcoes.append(opcao)
+
+                                lab_selecionado_multiplo = st.selectbox(
+                                    "Selecione o laboratório correto:",
+                                    options=[""] + opcoes,
+                                    key="multiplo_resultados"
+                                )
+
+                                if lab_selecionado_multiplo and lab_selecionado_multiplo != "":
+                                    # Extrair nome do laboratório da opção selecionada
+                                    nome_selecionado = lab_selecionado_multiplo.split(" - ")[0]
+                                    lab_final = nome_selecionado
+                        else:
+                            st.warning("⚠️ Nenhum laboratório encontrado com os critérios informados")
+
+                    elif tem_selecao:
+                        # Laboratório selecionado diretamente da lista
+                        lab_final = lab_selecionado
+
+                    # Renderizar dados do laboratório encontrado/selecionado
+                    if lab_final:
+                        st.markdown("---")  # Separador antes dos dados
+
+                        # Verificar se é VIP
+                        df_vip = DataManager.carregar_dados_vip_excel()
+                        lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
+                        info_vip = None
+
+                        if not lab_data.empty and df_vip is not None:
+                            cnpj_lab = lab_data.iloc[0].get('CNPJ_PCL', '')
+                            info_vip = VIPManager.buscar_info_vip(cnpj_lab, df_vip)
+
+                        # Container principal para informações do laboratório
+                        st.markdown(f"""
+                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                    color: white; padding: 2rem; border-radius: 15px;
+                                    margin-bottom: 2rem; box-shadow: 0 8px 25px rgba(0,0,0,0.15);">
+                            <div style="display: flex; align-items: center;">
+                                <div style="font-size: 2rem; margin-right: 1rem;">🏥</div>
+                                <div>
+                                    <h2 style="margin: 0; font-size: 1.8rem; font-weight: 600;">{lab_final}</h2>
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        # Armazenar informações da rede para filtro automático na tabela
+                        if info_vip and 'rede' in info_vip:
+                            st.session_state['rede_lab_pesquisado'] = info_vip['rede']
+                        else:
+                            st.session_state['rede_lab_pesquisado'] = None
+
+                        # Ficha Técnica Comercial
+                        st.markdown("""
+                        <div style="background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem; 
+                                    border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                            <h3 style="margin: 0 0 1rem 0; color: #2c3e50; font-weight: 600; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">
+                                📋 Ficha Técnica Comercial
+                            </h3>
+                        """, unsafe_allow_html=True)
+
+                        # Informações de contato e localização
+                        lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
+                        if not lab_data.empty:
+                            lab_info = lab_data.iloc[0]
+                            
+                            # CNPJ formatado
+                            cnpj_raw = str(lab_info.get('CNPJ_PCL', ''))
+                            cnpj_formatado = f"{cnpj_raw[:2]}.{cnpj_raw[2:5]}.{cnpj_raw[5:8]}/{cnpj_raw[8:12]}-{cnpj_raw[12:14]}" if len(cnpj_raw) == 14 else cnpj_raw
+                            
+                            # Usar dados do Excel VIP se disponível, senão usar dados do laboratório
+                            telefone = info_vip.get('telefone', '') if info_vip else lab_info.get('Telefone', 'N/A')
+                            email = info_vip.get('email', '') if info_vip else lab_info.get('Email', 'N/A')
+                            contato = info_vip.get('contato', '') if info_vip else 'N/A'
+                            
+                            # Limpar dados vazios
+                            telefone = telefone if telefone and telefone != 'N/A' else 'N/A'
+                            email = email if email and email != 'N/A' else 'N/A'
+                            contato = contato if contato else 'N/A'
+                            
+                            st.markdown(f"""
+                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #6c757d;">
+                                <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">INFORMAÇÕES DE CONTATO</div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">CNPJ</div>
+                                        <div style="font-size: 1rem; font-weight: bold; color: #495057;">{cnpj_formatado}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">Localização</div>
+                                        <div style="font-size: 1rem; font-weight: bold; color: #495057;">{lab_info.get('Cidade', 'N/A')} - {lab_info.get('Estado', 'N/A')}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">Contato</div>
+                                        <div style="font-size: 1rem; font-weight: bold; color: #495057;">{contato}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">Telefone</div>
+                                        <div style="font-size: 1rem; font-weight: bold; color: #495057;">{telefone}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">Email</div>
+                                        <div style="font-size: 1rem; font-weight: bold; color: #495057;">{email}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                        # Informações VIP se disponível
+                        if info_vip:
+                            st.markdown(f"""
+                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #007bff;">
+                                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; text-align: center;">
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">RANKING GERAL</div>
+                                        <div style="font-size: 1.2rem; font-weight: bold; color: #FFD700;">{info_vip.get('ranking', 'N/A')}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">RANKING REDE</div>
+                                        <div style="font-size: 1.2rem; font-weight: bold; color: #FFA500;">{info_vip.get('ranking_rede', 'N/A')}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">REDE</div>
+                                        <div style="font-size: 1.1rem; font-weight: bold; color: #007bff;">{info_vip.get('rede', 'N/A')}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                        # Métricas comerciais essenciais
+                        metricas = MetricasAvancadas.calcular_metricas_lab(df_filtrado, lab_final)
+
+                        if metricas:
+                            # Dados de Performance
+                            st.markdown(f"""
+                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #28a745;">
+                                <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">PERFORMANCE 2025</div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; text-align: center;">
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Total Coletas</div>
+                                        <div style="font-size: 1.3rem; font-weight: bold; color: #28a745;">{metricas['total_coletas']:,}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Média 3 Meses</div>
+                                        <div style="font-size: 1.3rem; font-weight: bold; color: #28a745;">{metricas['media_3_meses']:.1f}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Média Diária</div>
+                                        <div style="font-size: 1.3rem; font-weight: bold; color: #28a745;">{metricas['media_diaria']:.1f}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                            # Status e Risco
+                            status_color = "#28a745" if metricas['agudo'] == "Ativo" else "#dc3545"
+                            risco_color = "#28a745" if metricas['dias_sem_coleta'] <= 7 else "#ffc107" if metricas['dias_sem_coleta'] <= 30 else "#dc3545"
+                            
+                            st.markdown(f"""
+                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid {risco_color};">
+                                <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">STATUS & RISCO</div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; text-align: center;">
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Status Atual</div>
+                                        <div style="font-size: 1.1rem; font-weight: bold; color: {status_color};">{metricas['agudo']}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Dias sem Coleta</div>
+                                        <div style="font-size: 1.1rem; font-weight: bold; color: {risco_color};">{metricas['dias_sem_coleta']}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Variação %</div>
+                                        <div style="font-size: 1.1rem; font-weight: bold; color: {'#28a745' if metricas['variacao_percentual'] > 0 else '#dc3545'};">{metricas['variacao_percentual']:+.1f}%</div>
+                                    </div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                            # Histórico de Performance
+                            # Calcular máxima de coletas histórica (respeitando meses disponíveis)
+                            meses_validos_2024 = ChartManager._meses_ate_hoje(df_filtrado, 2024)
+                            meses_validos_2025 = ChartManager._meses_ate_hoje(df_filtrado, 2025)
+                            colunas_meses_2024 = [f'N_Coletas_{mes}_24' for mes in meses_validos_2024]
+                            colunas_meses_2025 = [f'N_Coletas_{mes}_25' for mes in meses_validos_2025]
+
+                            max_2024 = 0
+                            max_2025 = 0
+                            mes_max_2024 = ""
+                            mes_max_2025 = ""
+                            
+                            # Mapeamento de códigos de mês para nomes
+                            meses_map = {
+                                'Jan': 'Janeiro', 'Fev': 'Fevereiro', 'Mar': 'Março', 'Abr': 'Abril',
+                                'Mai': 'Maio', 'Jun': 'Junho', 'Jul': 'Julho', 'Ago': 'Agosto',
+                                'Set': 'Setembro', 'Out': 'Outubro', 'Nov': 'Novembro', 'Dez': 'Dezembro'
+                            }
+                            
+                            if colunas_meses_2024:
+                                for col in colunas_meses_2024:
+                                    valor = pd.to_numeric(lab_info.get(col, 0), errors='coerce')
+                                    valor = 0 if pd.isna(valor) else valor
+                                    if valor and valor > max_2024:
+                                        max_2024 = valor
+                                        # Extrair código do mês corretamente
+                                        partes = col.split('_')
+                                        if len(partes) >= 3:
+                                            mes_codigo = partes[2]  # Ex: 'Out' de N_Coletas_Out_24
+                                            # Verificar se é um mês válido
+                                            if mes_codigo in meses_map:
+                                                mes_max_2024 = meses_map[mes_codigo]
+                                            else:
+                                                # Se não for um mês válido, usar o código original
+                                                mes_max_2024 = mes_codigo
+                            
+                            if colunas_meses_2025:
+                                for col in colunas_meses_2025:
+                                    valor = pd.to_numeric(lab_info.get(col, 0), errors='coerce')
+                                    valor = 0 if pd.isna(valor) else valor
+                                    if valor and valor > max_2025:
+                                        max_2025 = valor
+                                        # Extrair código do mês corretamente
+                                        partes = col.split('_')
+                                        if len(partes) >= 3:
+                                            mes_codigo = partes[2]  # Ex: 'Out' de N_Coletas_Out_25
+                                            # Verificar se é um mês válido
+                                            if mes_codigo in meses_map:
+                                                mes_max_2025 = meses_map[mes_codigo]
+                                            else:
+                                                # Se não for um mês válido, usar o código original
+                                                mes_max_2025 = mes_codigo
+                            
+                            max_historica = max(max_2024, max_2025)
+                            if max_2024 > max_2025:
+                                mes_max = mes_max_2024
+                                ano_max = "2024"
+                            else:
+                                mes_max = mes_max_2025
+                                ano_max = "2025"
+                            
+                            # Fallback se não conseguir determinar o mês
+                            if not mes_max or mes_max == "":
+                                mes_max = "N/A"
+                            
+                            st.markdown(f"""
+                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #17a2b8;">
+                                <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">HISTÓRICO DE PERFORMANCE</div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Máxima Histórica</div>
+                                        <div style="font-size: 1.3rem; font-weight: bold; color: #17a2b8;">{max_historica:,} coletas</div>
+                                        <div style="font-size: 0.7rem; color: #666;">{mes_max}/{ano_max}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Performance Atual vs Máxima</div>
+                                        <div style="font-size: 1.1rem; font-weight: bold; color: {'#28a745' if metricas['total_coletas'] >= max_historica * 0.8 else '#ffc107' if metricas['total_coletas'] >= max_historica * 0.5 else '#dc3545'};">
+                                            {(metricas['total_coletas'] / max_historica * 100):.0f}% da máxima
+                                        </div>
+                                        <div style="font-size: 0.7rem; color: #666;">{metricas['total_coletas']:,} vs {max_historica:,}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                            st.markdown("</div>", unsafe_allow_html=True)
+
+                        st.subheader(f"📈 Evolução Mensal - {lab_final}")
+                        ChartManager.criar_grafico_evolucao_mensal(df_filtrado, lab_final)
+
+                        # Novos gráficos
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            st.subheader("📊 Média Diária por Mês")
+                            ChartManager.criar_grafico_media_diaria(df_filtrado, lab_final)
+
+                        with col2:
+                            st.subheader("📅 Coletas por Dia do Mês")
+                            ChartManager.criar_grafico_coletas_por_dia(df_filtrado, lab_final)
+
+                # Fechar container
+                st.markdown('</div>', unsafe_allow_html=True)
+
+        # Tabela completa de dados com funcionalidade de rede
+        st.markdown("""
+        <div style="background: white; border-radius: 12px; padding: 1.5rem;
+                    box-shadow: 0 4px 15px rgba(0,0,0,0.08); margin-bottom: 2rem;
+                    border: 1px solid #f0f0f0;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem;">
+                <div style="display: flex; align-items: center;">
+                    <span style="font-size: 1.5rem; margin-right: 0.5rem;">📋</span>
+                    <h3 style="margin: 0; color: #2c3e50; font-weight: 600;">Dados Completos dos Laboratórios</h3>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        # Carregar dados VIP para análise de rede
+        df_vip_tabela = DataManager.carregar_dados_vip_excel()
+
+        # Adicionar informações de rede se disponível
+        df_tabela = df_filtrado.copy()
+        mostrar_rede = False
+
+        if df_vip_tabela is not None and not df_vip_tabela.empty:
+            # Merge dos dados com informações VIP
+            df_tabela['CNPJ_Normalizado'] = df_tabela['CNPJ_PCL'].apply(
+                lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
+            )
+            df_vip_tabela['CNPJ_Normalizado'] = df_vip_tabela['CNPJ'].apply(
+                lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
+            )
+
+            df_tabela = df_tabela.merge(
+                df_vip_tabela[['CNPJ_Normalizado', 'Rede', 'Ranking', 'Ranking Rede']],
+                on='CNPJ_Normalizado',
+                how='left'
+            )
+            mostrar_rede = True
+
+        # Filtro por rede (simplificado)
+        if mostrar_rede and 'Rede' in df_tabela.columns:
+            redes_disponiveis = ["Todas"] + sorted(df_tabela['Rede'].dropna().unique().tolist())
+
+            # Usar rede do laboratório pesquisado como padrão, se disponível
+            rede_padrao = st.session_state.get('rede_lab_pesquisado', "Todas")
+            if rede_padrao not in redes_disponiveis:
+                rede_padrao = "Todas"
+
+            # Aplicar filtro automático se há rede selecionada
+            if rede_padrao != "Todas":
+                rede_filtro = rede_padrao
+                # Mostrar indicador de filtro automático
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #e8f5e8, #f1f8e9); border-radius: 6px; padding: 0.8rem; margin-bottom: 1rem;">
+                    <span style="color: #2e7d32; font-size: 0.9rem;">🎯 <strong>Filtro automático ativo:</strong> mostrando apenas laboratórios da rede <strong>"{rede_padrao}"</strong></span>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Botão para limpar filtro automático
+                if st.button("🔄 Mostrar Todas as Redes", key="limpar_filtro_auto", help="Mostrar laboratórios de todas as redes"):
+                    st.session_state['rede_lab_pesquisado'] = None
+                    st.rerun()
+            else:
+                # Seleção manual de rede
+                rede_filtro = st.selectbox(
+                    "🏢 Filtrar por Rede:",
+                    options=redes_disponiveis,
+                    index=0,  # Sempre "Todas" por padrão
+                    help="Selecione uma rede para filtrar",
+                    key="filtro_rede_tabela"
+                )
+        else:
+            rede_filtro = "Todas"
+
+        # Aplicar filtros
+        df_tabela_filtrada = df_tabela.copy()
+
+        # Filtro por rede
+        if rede_filtro != "Todas" and mostrar_rede:
+            df_tabela_filtrada = df_tabela_filtrada[df_tabela_filtrada['Rede'] == rede_filtro]
+
+        # Mostrar informações da rede se filtrada
+        if rede_filtro != "Todas" and mostrar_rede and not df_tabela_filtrada.empty:
+            # Estatísticas da rede
+            stats_rede = {
+                'total_labs': len(df_tabela_filtrada),
+                'volume_total': df_tabela_filtrada['Volume_Total_2025'].sum() if 'Volume_Total_2025' in df_tabela_filtrada.columns else 0,
+                'media_volume': df_tabela_filtrada['Volume_Total_2025'].mean() if 'Volume_Total_2025' in df_tabela_filtrada.columns else 0,
+                'labs_risco_alto': len(df_tabela_filtrada[df_tabela_filtrada['Status_Risco'] == 'Alto']) if 'Status_Risco' in df_tabela_filtrada.columns else 0,
+                'labs_ativos': len(df_tabela_filtrada[df_tabela_filtrada['Dias_Sem_Coleta'] <= 30]) if 'Dias_Sem_Coleta' in df_tabela_filtrada.columns else 0
+            }
+
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #e3f2fd, #f3e5f5); border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
+                <h4 style="margin: 0 0 0.5rem 0; color: #1976d2;">📊 Estatísticas da Rede: {rede_filtro}</h4>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 1.5rem; font-weight: bold; color: #1976d2;">{stats_rede['total_labs']}</div>
+                        <div style="font-size: 0.8rem; color: #666;">Laboratórios</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="font-size: 1.5rem; font-weight: bold; color: #1976d2;">{stats_rede['volume_total']:,.0f}</div>
+                        <div style="font-size: 0.8rem; color: #666;">Volume Total</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="font-size: 1.5rem; font-weight: bold; color: #1976d2;">{stats_rede['media_volume']:.0f}</div>
+                        <div style="font-size: 0.8rem; color: #666;">Média por Lab</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="font-size: 1.5rem; font-weight: bold; color: #f44336;">{stats_rede['labs_risco_alto']}</div>
+                        <div style="font-size: 0.8rem; color: #666;">Alto Risco</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="font-size: 1.5rem; font-weight: bold; color: #4caf50;">{stats_rede['labs_ativos']}</div>
+                        <div style="font-size: 0.8rem; color: #666;">Ativos (30d)</div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Configurar colunas da tabela
+        colunas_principais = [
+            'Nome_Fantasia_PCL', 'Estado', 'Cidade', 'Representante_Nome',
+            'Status_Risco', 'Dias_Sem_Coleta', 'Variacao_Percentual',
+            'Volume_Atual_2025', 'Volume_Maximo_2024', 'Tendencia_Volume'
+        ]
+
+        # Adicionar colunas de rede se disponível
+        if mostrar_rede:
+            colunas_principais.extend(['Rede', 'Ranking', 'Ranking Rede'])
+
+        colunas_existentes = [col for col in colunas_principais if col in df_tabela_filtrada.columns]
+
+        if not df_tabela_filtrada.empty and colunas_existentes:
+            df_exibicao = df_tabela_filtrada[colunas_existentes].copy()
+
+            # Formatação de colunas
+            if 'Variacao_Percentual' in df_exibicao.columns:
+                df_exibicao['Variacao_Percentual'] = df_exibicao['Variacao_Percentual'].round(2)
+
+            if 'Volume_Atual_2025' in df_exibicao.columns:
+                df_exibicao['Volume_Atual_2025'] = df_exibicao['Volume_Atual_2025'].astype(int)
+
+            if 'Volume_Maximo_2024' in df_exibicao.columns:
+                df_exibicao['Volume_Maximo_2024'] = df_exibicao['Volume_Maximo_2024'].astype(int)
+
+            # Mostrar tabela com contador
+            st.markdown(f"**Mostrando {len(df_exibicao)} laboratórios**")
+
+            st.dataframe(
+                df_exibicao,
+                use_container_width=True,
+                height=500,
+                column_config={
+                    "Status_Risco": st.column_config.TextColumn(
+                        "Status de Risco",
+                        help="Classificação de risco do laboratório"
+                    ),
+                    "Variacao_Percentual": st.column_config.NumberColumn(
+                        "Variação %",
+                        format="%.2f%%",
+                        help="Variação percentual em relação ao ano anterior"
+                    ),
+                    "Volume_Atual_2025": st.column_config.NumberColumn(
+                        "Volume Atual 2025",
+                        help="Volume atual de coletas em 2025"
+                    ),
+                    "Volume_Maximo_2024": st.column_config.NumberColumn(
+                        "Volume Máximo 2024",
+                        help="Volume máximo de coletas em 2024"
+                    ),
+                    "Tendencia_Volume": st.column_config.TextColumn(
+                        "Tendência",
+                        help="Tendência de volume (Crescimento/Declínio/Estável)"
+                    ),
+                    "Rede": st.column_config.TextColumn(
+                        "🏢 Rede",
+                        help="Rede à qual o laboratório pertence"
+                    ),
+                    "Ranking": st.column_config.TextColumn(
+                        "🏆 Ranking",
+                        help="Ranking individual do laboratório"
+                    ),
+                    "Ranking Rede": st.column_config.TextColumn(
+                        "🏅 Ranking Rede",
+                        help="Ranking da rede do laboratório"
+                    )
+                }
+            )
+
+            # Botões de download
+            col_download1, col_download2 = st.columns(2)
+
+            with col_download1:
+                csv_data = df_exibicao.to_csv(index=False, encoding='utf-8')
+                st.download_button(
+                    label="📥 Download CSV",
+                    data=csv_data,
+                    file_name=f"dados_laboratorios_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    key="download_csv_tabela"
+                )
+
+            with col_download2:
+                excel_buffer = BytesIO()
+                df_exibicao.to_excel(excel_buffer, index=False, engine='openpyxl')
+                excel_data = excel_buffer.getvalue()
+                st.download_button(
+                    label="📥 Download Excel",
+                    data=excel_data,
+                    file_name=f"dados_laboratorios_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_excel_tabela"
+                )
+        else:
+            st.info("📋 Nenhum laboratório encontrado com os filtros aplicados.")
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # ========================================
     # ABA 3: ANÁLISE POR REPRESENTANTE
@@ -1909,6 +2551,369 @@ def main():
                 st.metric("⚖️ Estáveis", len(df_filtrado[df_filtrado['Tendencia_Volume'] == 'Estável']))
         else:
             st.success("✅ Nenhum laboratório crítico identificado!")
+
+    # ========================================
+    # ABA 8: RANKING REDE
+    # ========================================
+    with tab8:
+        st.header("🏢 Ranking por Rede")
+
+        # Carregar dados VIP para análise de rede
+        df_vip = DataManager.carregar_dados_vip_excel()
+
+        if df_vip is not None and not df_vip.empty:
+            # Merge dos dados principais com dados VIP
+            df_com_rede = df_filtrado.copy()
+
+            # Adicionar coluna CNPJ normalizado para match
+            df_com_rede['CNPJ_Normalizado'] = df_com_rede['CNPJ_PCL'].apply(
+                lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
+            )
+            df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(
+                lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
+            )
+
+            # Merge dos dados
+            df_com_rede = df_com_rede.merge(
+                df_vip[['CNPJ_Normalizado', 'Rede', 'Ranking', 'Ranking Rede']],
+                on='CNPJ_Normalizado',
+                how='left'
+            )
+
+            # Filtros específicos para ranking de rede
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+                        color: white; padding: 1rem; border-radius: 8px;
+                        margin-bottom: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <h4 style="margin: 0;">🔍 Filtros para Análise de Redes</h4>
+            </div>
+            """, unsafe_allow_html=True)
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                redes_disponiveis = sorted(df_com_rede['Rede'].dropna().unique())
+                rede_selecionada = st.multiselect(
+                    "🏢 Redes:",
+                    options=redes_disponiveis,
+                    default=redes_disponiveis if len(redes_disponiveis) <= 5 else [],
+                    help="Selecione as redes para análise"
+                )
+
+            with col2:
+                rankings_rede = sorted(df_com_rede['Ranking Rede'].dropna().unique())
+                ranking_rede_selecionado = st.multiselect(
+                    "🏅 Ranking Rede:",
+                    options=rankings_rede,
+                    default=rankings_rede if len(rankings_rede) <= 5 else [],
+                    help="Selecione os rankings de rede"
+                )
+
+            with col3:
+                tipo_analise = st.selectbox(
+                    "📊 Tipo de Análise:",
+                    options=["Visão Geral", "Por Volume", "Por Performance", "Por Risco"],
+                    help="Escolha o tipo de análise a ser realizada"
+                )
+
+            # Aplicar filtros
+            df_rede_filtrado = df_com_rede.copy()
+
+            if rede_selecionada:
+                df_rede_filtrado = df_rede_filtrado[df_rede_filtrado['Rede'].isin(rede_selecionada)]
+
+            if ranking_rede_selecionado:
+                df_rede_filtrado = df_rede_filtrado[df_rede_filtrado['Ranking Rede'].isin(ranking_rede_selecionado)]
+
+            if not df_rede_filtrado.empty:
+                # Análise baseada no tipo selecionado
+                if tipo_analise == "Visão Geral":
+                    # Cards de métricas gerais
+                    col1, col2, col3, col4 = st.columns(4)
+
+                    total_redes = df_rede_filtrado['Rede'].nunique()
+                    total_labs_rede = len(df_rede_filtrado)
+                    volume_total_rede = df_rede_filtrado['Volume_Total_2025'].sum() if 'Volume_Total_2025' in df_rede_filtrado.columns else 0
+
+                    with col1:
+                        st.metric("🏢 Total de Redes", total_redes)
+
+                    with col2:
+                        st.metric("🏥 Labs nas Redes", f"{total_labs_rede:,}")
+
+                    with col3:
+                        st.metric("📦 Volume Total", f"{volume_total_rede:,}")
+
+                    with col4:
+                        media_por_rede = volume_total_rede / total_redes if total_redes > 0 else 0
+                        st.metric("📊 Média por Rede", f"{media_por_rede:,.0f}")
+
+                    # Distribuição por rede
+                    st.subheader("📊 Distribuição por Rede")
+                    if 'Rede' in df_rede_filtrado.columns:
+                        rede_stats = df_rede_filtrado.groupby('Rede').agg({
+                            'Nome_Fantasia_PCL': 'count',
+                            'Volume_Total_2025': 'sum',
+                            'Score_Risco': 'mean'
+                        }).reset_index()
+
+                        rede_stats.columns = ['Rede', 'Qtd_Labs', 'Volume_Total', 'Score_Medio_Risco']
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            # Gráfico de quantidade de labs por rede
+                            fig_labs = px.bar(
+                                rede_stats.sort_values('Qtd_Labs', ascending=False),
+                                x='Rede',
+                                y='Qtd_Labs',
+                                title="🏥 Quantidade de Laboratórios por Rede",
+                                color='Qtd_Labs',
+                                color_continuous_scale='Blues'
+                            )
+                            fig_labs.update_layout(xaxis_tickangle=-45)
+                            st.plotly_chart(fig_labs, use_container_width=True)
+
+                        with col2:
+                            # Gráfico de volume por rede
+                            fig_volume = px.bar(
+                                rede_stats.sort_values('Volume_Total', ascending=False),
+                                x='Rede',
+                                y='Volume_Total',
+                                title="📦 Volume Total por Rede",
+                                color='Volume_Total',
+                                color_continuous_scale='Greens'
+                            )
+                            fig_volume.update_layout(xaxis_tickangle=-45)
+                            st.plotly_chart(fig_volume, use_container_width=True)
+
+                        # Tabela detalhada
+                        st.subheader("📋 Detalhamento por Rede")
+                        st.dataframe(
+                            rede_stats.round(2),
+                            use_container_width=True,
+                            column_config={
+                                "Rede": st.column_config.TextColumn("🏢 Rede"),
+                                "Qtd_Labs": st.column_config.NumberColumn("🏥 Qtd Labs"),
+                                "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f"),
+                                "Score_Medio_Risco": st.column_config.NumberColumn("⚠️ Score Médio Risco", format="%.1f")
+                            }
+                        )
+
+                elif tipo_analise == "Por Volume":
+                    st.subheader("📦 Análise por Volume de Coletas")
+
+                    # Ranking de redes por volume
+                    volume_por_rede = df_rede_filtrado.groupby('Rede')['Volume_Total_2025'].agg(['sum', 'mean', 'count']).reset_index()
+                    volume_por_rede.columns = ['Rede', 'Volume_Total', 'Volume_Medio', 'Qtd_Labs']
+                    volume_por_rede = volume_por_rede.sort_values('Volume_Total', ascending=False)
+
+                    # Gráfico de ranking
+                    fig_ranking = px.bar(
+                        volume_por_rede.head(10),
+                        x='Rede',
+                        y='Volume_Total',
+                        title="🏆 Top 10 Redes por Volume Total",
+                        color='Volume_Medio',
+                        color_continuous_scale='Viridis',
+                        text='Volume_Total'
+                    )
+                    fig_ranking.update_traces(texttemplate='%{text:.0f}', textposition='outside')
+                    fig_ranking.update_layout(xaxis_tickangle=-45)
+                    st.plotly_chart(fig_ranking, use_container_width=True)
+
+                    # Tabela detalhada
+                    st.dataframe(
+                        volume_por_rede.round(2),
+                        use_container_width=True,
+                        column_config={
+                            "Rede": st.column_config.TextColumn("🏢 Rede"),
+                            "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f"),
+                            "Volume_Medio": st.column_config.NumberColumn("📊 Volume Médio", format="%.1f"),
+                            "Qtd_Labs": st.column_config.NumberColumn("🏥 Qtd Labs")
+                        }
+                    )
+
+                elif tipo_analise == "Por Performance":
+                    st.subheader("📈 Análise de Performance por Rede")
+
+                    # Performance por rede (baseado em crescimento/variacao)
+                    if 'Variacao_Percentual' in df_rede_filtrado.columns:
+                        perf_rede = df_rede_filtrado.groupby('Rede').agg({
+                            'Variacao_Percentual': ['mean', 'count'],
+                            'Volume_Total_2025': 'sum'
+                        }).reset_index()
+
+                        perf_rede.columns = ['Rede', 'Variacao_Media', 'Qtd_Labs', 'Volume_Total']
+                        perf_rede = perf_rede.sort_values('Variacao_Media', ascending=False)
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            # Performance por variação
+                            fig_perf = px.bar(
+                                perf_rede.head(10),
+                                x='Rede',
+                                y='Variacao_Media',
+                                title="📈 Top 10 Redes por Performance (Variação %)",
+                                color='Variacao_Media',
+                                color_continuous_scale='RdYlGn',
+                                text='Variacao_Media'
+                            )
+                            fig_perf.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+                            fig_perf.update_layout(xaxis_tickangle=-45)
+                            st.plotly_chart(fig_perf, use_container_width=True)
+
+                        with col2:
+                            # Scatter plot: Volume vs Performance
+                            fig_scatter = px.scatter(
+                                perf_rede,
+                                x='Volume_Total',
+                                y='Variacao_Media',
+                                size='Qtd_Labs',
+                                color='Rede',
+                                title="📊 Volume vs Performance por Rede",
+                                labels={'Volume_Total': 'Volume Total', 'Variacao_Media': 'Variação Média %'}
+                            )
+                            st.plotly_chart(fig_scatter, use_container_width=True)
+
+                        # Tabela de performance
+                        st.dataframe(
+                            perf_rede.round(2),
+                            use_container_width=True,
+                            column_config={
+                                "Rede": st.column_config.TextColumn("🏢 Rede"),
+                                "Variacao_Media": st.column_config.NumberColumn("📈 Variação Média %", format="%.2f%%"),
+                                "Qtd_Labs": st.column_config.NumberColumn("🏥 Qtd Labs"),
+                                "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f")
+                            }
+                        )
+
+                elif tipo_analise == "Por Risco":
+                    st.subheader("⚠️ Análise de Risco por Rede")
+
+                    if 'Score_Risco' in df_rede_filtrado.columns:
+                        # Risco por rede
+                        risco_rede = df_rede_filtrado.groupby('Rede').agg({
+                            'Score_Risco': ['mean', 'max', 'count'],
+                            'Volume_Total_2025': 'sum'
+                        }).reset_index()
+
+                        risco_rede.columns = ['Rede', 'Score_Medio', 'Score_Max', 'Qtd_Labs', 'Volume_Total']
+                        risco_rede = risco_rede.sort_values('Score_Medio', ascending=False)
+
+                        # Distribuição de risco
+                        fig_risco = px.bar(
+                            risco_rede.head(10),
+                            x='Rede',
+                            y='Score_Medio',
+                            title="⚠️ Top 10 Redes por Score de Risco",
+                            color='Score_Medio',
+                            color_continuous_scale='Reds',
+                            text='Score_Medio'
+                        )
+                        fig_risco.update_traces(texttemplate='%{text:.1f}', textposition='outside')
+                        fig_risco.update_layout(xaxis_tickangle=-45)
+                        st.plotly_chart(fig_risco, use_container_width=True)
+
+                        # Distribuição de labs por nível de risco e rede
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            # Labs de alto risco por rede
+                            alto_risco = df_rede_filtrado[df_rede_filtrado['Score_Risco'] > 70].groupby('Rede').size().reset_index(name='Qtd_Alto_Risco')
+                            alto_risco = alto_risco.sort_values('Qtd_Alto_Risco', ascending=False)
+
+                            fig_alto = px.bar(
+                                alto_risco.head(10),
+                                x='Rede',
+                                y='Qtd_Alto_Risco',
+                                title="🚨 Labs de Alto Risco por Rede",
+                                color='Qtd_Alto_Risco',
+                                color_continuous_scale='Reds'
+                            )
+                            fig_alto.update_layout(xaxis_tickangle=-45)
+                            st.plotly_chart(fig_alto, use_container_width=True)
+
+                        with col2:
+                            # Status de risco por rede
+                            risco_status = df_rede_filtrado.groupby(['Rede', 'Status_Risco']).size().reset_index(name='Qtd')
+                            fig_status = px.bar(
+                                risco_status,
+                                x='Rede',
+                                y='Qtd',
+                                color='Status_Risco',
+                                title="📊 Status de Risco por Rede",
+                                color_discrete_map={'Alto': '#d62728', 'Médio': '#ff7f0e', 'Baixo': '#2ca02c', 'Inativo': '#9467bd'}
+                            )
+                            fig_status.update_layout(xaxis_tickangle=-45)
+                            st.plotly_chart(fig_status, use_container_width=True)
+
+                        # Tabela de risco detalhada
+                        st.dataframe(
+                            risco_rede.round(2),
+                            use_container_width=True,
+                            column_config={
+                                "Rede": st.column_config.TextColumn("🏢 Rede"),
+                                "Score_Medio": st.column_config.NumberColumn("⚠️ Score Médio", format="%.1f"),
+                                "Score_Max": st.column_config.NumberColumn("🚨 Score Máximo", format="%.1f"),
+                                "Qtd_Labs": st.column_config.NumberColumn("🏥 Qtd Labs"),
+                                "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f")
+                            }
+                        )
+
+                # Análise de relacionamentos (quem pertence a quem)
+                st.markdown("---")
+                st.subheader("🔗 Análise de Relacionamentos")
+
+                # Mostrar hierarquia Rede -> Ranking -> Labs
+                if 'Ranking' in df_rede_filtrado.columns and 'Ranking Rede' in df_rede_filtrado.columns:
+                    # Criar tabela hierárquica
+                    hierarquia = df_rede_filtrado.groupby(['Rede', 'Ranking', 'Ranking Rede']).agg({
+                        'Nome_Fantasia_PCL': 'count',
+                        'Volume_Total_2025': 'sum'
+                    }).reset_index()
+
+                    hierarquia.columns = ['Rede', 'Ranking', 'Ranking_Rede', 'Qtd_Labs', 'Volume_Total']
+                    hierarquia = hierarquia.sort_values(['Rede', 'Ranking', 'Ranking_Rede'])
+
+                    st.dataframe(
+                        hierarquia,
+                        use_container_width=True,
+                        column_config={
+                            "Rede": st.column_config.TextColumn("🏢 Rede"),
+                            "Ranking": st.column_config.TextColumn("🏆 Ranking"),
+                            "Ranking_Rede": st.column_config.TextColumn("🏅 Ranking Rede"),
+                            "Qtd_Labs": st.column_config.NumberColumn("🏥 Qtd Labs"),
+                            "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f")
+                        }
+                    )
+
+                    # Gráfico de sunburst para hierarquia
+                    if len(hierarquia) > 0:
+                        # Filtrar apenas dados com volume positivo para evitar erro de normalização
+                        hierarquia_plot = hierarquia[hierarquia['Volume_Total'] > 0].copy()
+
+                        if not hierarquia_plot.empty:
+                            # Garantir que não há valores zero ou negativos
+                            hierarquia_plot['Volume_Total'] = hierarquia_plot['Volume_Total'].clip(lower=0.1)
+
+                            fig_sunburst = px.sunburst(
+                                hierarquia_plot,
+                                path=['Rede', 'Ranking', 'Ranking_Rede'],
+                                values='Volume_Total',
+                                title="🌅 Hierarquia: Rede → Ranking → Ranking Rede",
+                                color='Qtd_Labs',
+                                color_continuous_scale='Blues'
+                            )
+                            st.plotly_chart(fig_sunburst, use_container_width=True)
+                        else:
+                            st.info("ℹ️ Não há dados suficientes com volume positivo para gerar o gráfico hierárquico.")
+
+            else:
+                st.warning("⚠️ Nenhum dado encontrado com os filtros aplicados.")
+        else:
+            st.warning("⚠️ Dados VIP não disponíveis. Verifique se o arquivo Excel foi carregado corretamente.")
 
     # ========================================
     # RODAPÉ

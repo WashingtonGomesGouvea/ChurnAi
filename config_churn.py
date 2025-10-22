@@ -147,3 +147,8 @@ ALERTA_THRESHOLD_ALTO = 5  # Número de labs em alto risco para enviar alerta
 # Configurações para KPIs
 DIAS_ATIVO_REcente_7 = 7
 DIAS_ATIVO_REcente_30 = 30
+
+# Configurações para dados VIP
+VIP_EXCEL_FILE = "Matriz CS 2025 ATUAL.xlsx"
+VIP_COLUMNS = ["CNPJ", "Ranking", "Ranking Rede", "Rede"]
+VIP_CACHE_TTL = 300  # 5 minutos

@@ -365,30 +365,30 @@ class DataManager:
 
     @staticmethod
     @st.cache_data(ttl=VIP_CACHE_TTL)
-    def carregar_dados_vip_excel() -> Optional[pd.DataFrame]:
-        """Carrega dados VIP do Excel com cache."""
+    def carregar_dados_vip() -> Optional[pd.DataFrame]:
+        """Carrega dados VIP do CSV normalizado com cache."""
         try:
-            # Tentar múltiplos caminhos possíveis
+            # Tentar múltiplos caminhos possíveis para o CSV normalizado
             caminhos_possiveis = [
-                VIP_EXCEL_FILE,  # Diretório atual
-                os.path.join(os.path.dirname(OUTPUT_DIR), VIP_EXCEL_FILE),  # Pai do OUTPUT_DIR
-                os.path.join(OUTPUT_DIR, VIP_EXCEL_FILE)  # Dentro do OUTPUT_DIR
+                VIP_CSV_FILE,  # Diretório atual
+                os.path.join(OUTPUT_DIR, VIP_CSV_FILE),  # Dentro do OUTPUT_DIR
+                os.path.join(os.path.dirname(OUTPUT_DIR), VIP_CSV_FILE),  # Pai do OUTPUT_DIR
             ]
             
-            arquivo_excel = None
+            arquivo_csv = None
             for caminho in caminhos_possiveis:
                 if os.path.exists(caminho):
-                    arquivo_excel = caminho
+                    arquivo_csv = caminho
                     break
             
-            if arquivo_excel:
-                df_vip = pd.read_excel(arquivo_excel, engine='openpyxl')
+            if arquivo_csv:
+                df_vip = pd.read_csv(arquivo_csv, encoding='utf-8-sig')
                 # Normalizar CNPJ para match
                 df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
                 st.success(f"✅ Dados VIP carregados: {len(df_vip)} registros")
                 return df_vip
             else:
-                st.warning(f"Arquivo VIP não encontrado em nenhum dos caminhos: {caminhos_possiveis}")
+                st.warning(f"Arquivo VIP normalizado não encontrado em nenhum dos caminhos: {caminhos_possiveis}")
                 return None
         except Exception as e:
             st.warning(f"Erro ao carregar arquivo VIP: {e}")
@@ -553,7 +553,7 @@ class FilterManager:
         if filtros.get('apenas_vip', False):
             try:
                 # Carregar dados VIP
-                df_vip = DataManager.carregar_dados_vip_excel()
+                df_vip = DataManager.carregar_dados_vip()
                 if df_vip is not None and not df_vip.empty:
                     # Normalizar CNPJs para match com tratamento de erro
                     df_filtrado['CNPJ_Normalizado'] = df_filtrado['CNPJ_PCL'].apply(
@@ -1568,12 +1568,13 @@ def main():
     # ========================================
     # ABAS PRINCIPAIS COM NOVA ORGANIZAÇÃO
     # ========================================
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🏠 Visão Geral",
         "📋 Análise Detalhada",
         "👤 Por Representante",
         "🧠 Análises Inteligentes",
-        "🏢 Ranking Rede"
+        "🏢 Ranking Rede",
+        "🔧 Manutenção VIPs"
     ])
 
     # ========================================
@@ -1764,7 +1765,7 @@ def main():
                         st.markdown("---")  # Separador antes dos dados
 
                         # Verificar se é VIP
-                        df_vip = DataManager.carregar_dados_vip_excel()
+                        df_vip = DataManager.carregar_dados_vip()
                         lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
                         info_vip = None
 
@@ -2036,7 +2037,7 @@ def main():
         """, unsafe_allow_html=True)
 
         # Carregar dados VIP para análise de rede
-        df_vip_tabela = DataManager.carregar_dados_vip_excel()
+        df_vip_tabela = DataManager.carregar_dados_vip()
 
         # Adicionar informações de rede se disponível
         df_tabela = df_filtrado.copy()
@@ -2418,7 +2419,7 @@ def main():
         st.header("🏢 Ranking por Rede")
 
         # Carregar dados VIP para análise de rede
-        df_vip = DataManager.carregar_dados_vip_excel()
+        df_vip = DataManager.carregar_dados_vip()
 
         if df_vip is not None and not df_vip.empty:
             # Merge dos dados principais com dados VIP
@@ -2750,7 +2751,7 @@ def main():
                         column_config={
                             "Rede": st.column_config.TextColumn("🏢 Rede"),
                             "Ranking": st.column_config.TextColumn("🏆 Ranking"),
-                            "Ranking_Rede": st.column_config.TextColumn("🏅 Ranking Rede"),
+                            "Ranking Rede": st.column_config.TextColumn("🏅 Ranking Rede"),
                             "Qtd_Labs": st.column_config.NumberColumn("🏥 Qtd Labs"),
                             "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f")
                         }
@@ -2786,6 +2787,617 @@ def main():
     # RODAPÉ
     # ========================================
     st.markdown("---")
+    # ========================================
+    # ABA 6: MANUTENÇÃO VIPs
+    # ========================================
+    with tab6:
+        st.header("🔧 Manutenção de Dados VIP")
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                    color: white; padding: 1rem; border-radius: 8px; margin-bottom: 2rem;">
+            <h3 style="margin: 0; color: white;">Gerenciamento de Laboratórios VIP</h3>
+            <p style="margin: 0.5rem 0 0 0; opacity: 0.9;">Adicione, edite e gerencie laboratórios VIP com validação completa e histórico de alterações.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Importar módulos necessários
+        try:
+            from vip_history_manager import VIPHistoryManager
+            from vip_integration import VIPIntegration
+            import json
+            import shutil
+        except ImportError as e:
+            st.error(f"Erro ao importar módulos VIP: {e}")
+            st.stop()
+        
+        # Inicializar gerenciadores
+        history_manager = VIPHistoryManager(OUTPUT_DIR)
+        vip_integration = VIPIntegration(OUTPUT_DIR)
+        
+        # Sub-abas para diferentes funcionalidades
+        sub_tab1, sub_tab2, sub_tab3, sub_tab4 = st.tabs([
+            "📋 Visualizar VIPs",
+            "➕ Adicionar VIP",
+            "✏️ Editar VIP",
+            "📊 Histórico"
+        ])
+        
+        with sub_tab1:
+            st.subheader("📋 Lista de Laboratórios VIP")
+            
+            # Carregar dados VIP
+            df_vip = DataManager.carregar_dados_vip()
+            
+            if df_vip is not None and not df_vip.empty:
+                # Filtros
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    ranking_filtro = st.selectbox(
+                        "🏆 Ranking:",
+                        options=["Todos"] + sorted(df_vip['Ranking'].dropna().unique().tolist()),
+                        help="Filtrar por ranking individual"
+                    )
+                
+                with col2:
+                    ranking_rede_filtro = st.selectbox(
+                        "🏅 Ranking Rede:",
+                        options=["Todos"] + sorted(df_vip['Ranking Rede'].dropna().unique().tolist()),
+                        help="Filtrar por ranking de rede"
+                    )
+                
+                with col3:
+                    rede_filtro = st.selectbox(
+                        "🏢 Rede:",
+                        options=["Todas"] + sorted(df_vip['Rede'].dropna().unique().tolist()),
+                        help="Filtrar por rede"
+                    )
+                
+                # Aplicar filtros
+                df_filtrado = df_vip.copy()
+                
+                if ranking_filtro != "Todos":
+                    df_filtrado = df_filtrado[df_filtrado['Ranking'] == ranking_filtro]
+                
+                if ranking_rede_filtro != "Todos":
+                    df_filtrado = df_filtrado[df_filtrado['Ranking Rede'] == ranking_rede_filtro]
+                
+                if rede_filtro != "Todas":
+                    df_filtrado = df_filtrado[df_filtrado['Rede'] == rede_filtro]
+                
+                # Estatísticas
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("📊 Total VIPs", len(df_filtrado))
+                
+                with col2:
+                    st.metric("🏆 Rankings", len(df_filtrado['Ranking'].unique()))
+                
+                with col3:
+                    st.metric("🏢 Redes", len(df_filtrado['Rede'].unique()))
+                
+                with col4:
+                    st.metric("🏅 Rankings Rede", len(df_filtrado['Ranking Rede'].unique()))
+                
+                # Tabela de dados
+                st.subheader("📋 Dados VIP Filtrados")
+                
+                # Configurar colunas para exibição
+                colunas_exibir = ['CNPJ', 'RAZÃO SOCIAL', 'NOME FANTASIA', 'Cidade ', 'UF', 
+                                'Ranking', 'Ranking Rede', 'Rede', 'STATUS']
+                
+                colunas_existentes = [col for col in colunas_exibir if col in df_filtrado.columns]
+                
+                if colunas_existentes:
+                    st.dataframe(
+                        df_filtrado[colunas_existentes],
+                        use_container_width=True,
+                        height=400,
+                        column_config={
+                            "CNPJ": st.column_config.TextColumn("📄 CNPJ", help="CNPJ do laboratório"),
+                            "RAZÃO SOCIAL": st.column_config.TextColumn("🏢 Razão Social"),
+                            "NOME FANTASIA": st.column_config.TextColumn("🏥 Nome Fantasia"),
+                            "Cidade ": st.column_config.TextColumn("🏙️ Cidade"),
+                            "UF": st.column_config.TextColumn("🗺️ Estado"),
+                            "Ranking": st.column_config.TextColumn("🏆 Ranking"),
+                            "Ranking Rede": st.column_config.TextColumn("🏅 Ranking Rede"),
+                            "Rede": st.column_config.TextColumn("🏢 Rede"),
+                            "STATUS": st.column_config.TextColumn("📊 Status")
+                        }
+                    )
+                else:
+                    st.warning("Nenhuma coluna válida encontrada para exibição")
+            else:
+                st.warning("⚠️ Nenhum dado VIP encontrado. Execute primeiro o script de normalização.")
+        
+        with sub_tab2:
+            st.subheader("➕ Adicionar Novo Laboratório VIP")
+            
+            # Formulário para adicionar VIP
+            with st.form("form_adicionar_vip"):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    cnpj_novo = st.text_input(
+                        "📄 CNPJ:",
+                        placeholder="00.000.000/0000-00",
+                        help="CNPJ do laboratório (será validado automaticamente)"
+                    )
+                    
+                    razao_social = st.text_input(
+                        "🏢 Razão Social:",
+                        placeholder="Nome da empresa"
+                    )
+                    
+                    nome_fantasia = st.text_input(
+                        "🏥 Nome Fantasia:",
+                        placeholder="Nome comercial"
+                    )
+                    
+                    cidade = st.text_input(
+                        "🏙️ Cidade:",
+                        placeholder="Nome da cidade"
+                    )
+                
+                with col2:
+                    uf = st.selectbox(
+                        "🗺️ Estado:",
+                        options=[""] + ESTADOS_BRASIL,
+                        help="Selecione o estado"
+                    )
+                    
+                    ranking = st.selectbox(
+                        "🏆 Ranking:",
+                        options=list(CATEGORIAS_RANKING.keys()),
+                        help="Ranking individual do laboratório"
+                    )
+                    
+                    ranking_rede = st.selectbox(
+                        "🏅 Ranking Rede:",
+                        options=list(CATEGORIAS_RANKING_REDE.keys()),
+                        help="Ranking da rede"
+                    )
+                    
+                    rede = st.text_input(
+                        "🏢 Rede:",
+                        placeholder="Nome da rede"
+                    )
+                
+                contato = st.text_input(
+                    "👤 Contato:",
+                    placeholder="Nome do contato"
+                )
+                
+                telefone = st.text_input(
+                    "📞 Telefone/WhatsApp:",
+                    placeholder="(00) 00000-0000"
+                )
+                
+                observacoes = st.text_area(
+                    "📝 Observações:",
+                    placeholder="Observações adicionais (opcional)"
+                )
+                
+                submitted = st.form_submit_button("➕ Adicionar VIP", type="primary")
+                
+                if submitted:
+                    # Validações
+                    erros = []
+                    
+                    # Validar CNPJ
+                    if not cnpj_novo:
+                        erros.append("CNPJ é obrigatório")
+                    else:
+                        valido, mensagem = vip_integration.validar_cnpj(cnpj_novo)
+                        if not valido:
+                            erros.append(f"CNPJ inválido: {mensagem}")
+                        elif vip_integration.verificar_cnpj_vip_existe(cnpj_novo):
+                            erros.append("CNPJ já existe na lista VIP")
+                    
+                    # Validar campos obrigatórios
+                    if not razao_social:
+                        erros.append("Razão Social é obrigatória")
+                    
+                    if not nome_fantasia:
+                        erros.append("Nome Fantasia é obrigatório")
+                    
+                    if not uf:
+                        erros.append("Estado é obrigatório")
+                    
+                    if not rede:
+                        erros.append("Rede é obrigatória")
+                    
+                    if erros:
+                        for erro in erros:
+                            st.error(f"❌ {erro}")
+                    else:
+                        # Auto-completar dados se CNPJ existe nos laboratórios
+                        dados_lab = vip_integration.buscar_laboratorio_por_cnpj(cnpj_novo)
+                        if dados_lab:
+                            if not razao_social:
+                                razao_social = dados_lab.get('razao_social', '')
+                            if not nome_fantasia:
+                                nome_fantasia = dados_lab.get('nome_fantasia', '')
+                            if not cidade:
+                                cidade = dados_lab.get('cidade', '')
+                            if not uf:
+                                uf = dados_lab.get('estado', '')
+                        
+                        # Criar backup antes de adicionar
+                        if VIP_AUTO_BACKUP:
+                            try:
+                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                backup_path = os.path.join(VIP_BACKUP_DIR, f"vip_backup_{timestamp}.csv")
+                                os.makedirs(VIP_BACKUP_DIR, exist_ok=True)
+                                
+                                if os.path.exists(os.path.join(OUTPUT_DIR, VIP_CSV_FILE)):
+                                    shutil.copy2(os.path.join(OUTPUT_DIR, VIP_CSV_FILE), backup_path)
+                                    st.success(f"✅ Backup criado: {backup_path}")
+                            except Exception as e:
+                                st.warning(f"⚠️ Erro ao criar backup: {e}")
+                        
+                        # Adicionar novo VIP
+                        try:
+                            # Carregar dados existentes
+                            df_vip_atual = DataManager.carregar_dados_vip()
+                            if df_vip_atual is None:
+                                df_vip_atual = pd.DataFrame()
+                            
+                            # Criar novo registro
+                            novo_registro = {
+                                'CNPJ': cnpj_novo,
+                                'RAZÃO SOCIAL': razao_social,
+                                'NOME FANTASIA': nome_fantasia,
+                                'Cidade ': cidade,
+                                'UF': uf,
+                                'Contato PCL': contato,
+                                'Whatsapp/telefone': telefone,
+                                'REP': '',  # Será preenchido automaticamente se CNPJ existir
+                                'CS': '',   # Será preenchido automaticamente se CNPJ existir
+                                'STATUS': 'ATIVO',
+                                'Ranking': ranking,
+                                'Ranking Rede': ranking_rede,
+                                'Rede': rede
+                            }
+                            
+                            # Adicionar ao DataFrame
+                            df_novo = pd.DataFrame([novo_registro])
+                            df_vip_atualizado = pd.concat([df_vip_atual, df_novo], ignore_index=True)
+                            
+                            # Salvar CSV atualizado
+                            caminho_csv = os.path.join(OUTPUT_DIR, VIP_CSV_FILE)
+                            df_vip_atualizado.to_csv(caminho_csv, index=False, encoding='utf-8-sig')
+                            
+                            # Registrar no histórico
+                            history_manager.registrar_insercao(
+                                cnpj=cnpj_novo,
+                                dados_novos=novo_registro,
+                                usuario="streamlit_user",
+                                observacoes=observacoes
+                            )
+                            
+                            # Limpar cache
+                            DataManager.carregar_dados_vip.clear()
+                            
+                            st.success(f"✅ Laboratório VIP adicionado com sucesso!")
+                            st.success(f"📄 CNPJ: {cnpj_novo}")
+                            st.success(f"🏥 Nome: {nome_fantasia}")
+                            
+                            # Mostrar sugestões de laboratórios similares
+                            sugestoes = vip_integration.obter_sugestoes_laboratorios(limite=5)
+                            if sugestoes:
+                                st.info("💡 Outros laboratórios que ainda não são VIP:")
+                                for sug in sugestoes[:3]:
+                                    st.write(f"• {sug['nome_fantasia']} ({sug['cnpj']}) - {sug['estado']}")
+                            
+                        except Exception as e:
+                            st.error(f"❌ Erro ao adicionar VIP: {e}")
+        
+        with sub_tab3:
+            st.subheader("✏️ Editar Laboratório VIP")
+            
+            # Carregar dados VIP
+            df_vip = DataManager.carregar_dados_vip()
+            
+            if df_vip is not None and not df_vip.empty:
+                # Selecionar VIP para editar
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    # Busca por CNPJ ou nome
+                    busca = st.text_input(
+                        "🔍 Buscar VIP:",
+                        placeholder="Digite CNPJ ou nome do laboratório"
+                    )
+                
+                with col2:
+                    if busca:
+                        # Filtrar resultados
+                        mask = (
+                            df_vip['CNPJ'].str.contains(busca, case=False, na=False) |
+                            df_vip['NOME FANTASIA'].str.contains(busca, case=False, na=False) |
+                            df_vip['RAZÃO SOCIAL'].str.contains(busca, case=False, na=False)
+                        )
+                        df_filtrado = df_vip[mask]
+                    else:
+                        df_filtrado = df_vip
+                
+                if not df_filtrado.empty:
+                    # Selecionar VIP
+                    vip_selecionado = st.selectbox(
+                        "📋 Selecionar VIP para editar:",
+                        options=df_filtrado.index,
+                        format_func=lambda x: f"{df_filtrado.loc[x, 'NOME FANTASIA']} - {df_filtrado.loc[x, 'CNPJ']}",
+                        help="Selecione o laboratório VIP para editar"
+                    )
+                    
+                    if vip_selecionado is not None:
+                        vip_data = df_filtrado.loc[vip_selecionado]
+                        
+                        st.markdown("---")
+                        st.subheader(f"✏️ Editando: {vip_data['NOME FANTASIA']}")
+                        
+                        # Formulário de edição
+                        with st.form("form_editar_vip"):
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                cnpj_edit = st.text_input(
+                                    "📄 CNPJ:",
+                                    value=vip_data['CNPJ'],
+                                    disabled=True,  # CNPJ não pode ser alterado
+                                    help="CNPJ não pode ser alterado"
+                                )
+                                
+                                razao_social_edit = st.text_input(
+                                    "🏢 Razão Social:",
+                                    value=vip_data.get('RAZÃO SOCIAL', '')
+                                )
+                                
+                                nome_fantasia_edit = st.text_input(
+                                    "🏥 Nome Fantasia:",
+                                    value=vip_data.get('NOME FANTASIA', '')
+                                )
+                                
+                                cidade_edit = st.text_input(
+                                    "🏙️ Cidade:",
+                                    value=vip_data.get('Cidade ', '')
+                                )
+                            
+                            with col2:
+                                uf_edit = st.selectbox(
+                                    "🗺️ Estado:",
+                                    options=ESTADOS_BRASIL,
+                                    index=ESTADOS_BRASIL.index(vip_data.get('UF', '')) if vip_data.get('UF', '') in ESTADOS_BRASIL else 0
+                                )
+                                
+                                ranking_edit = st.selectbox(
+                                    "🏆 Ranking:",
+                                    options=list(CATEGORIAS_RANKING.keys()),
+                                    index=list(CATEGORIAS_RANKING.keys()).index(vip_data.get('Ranking', 'BRONZE')) if vip_data.get('Ranking', '') in CATEGORIAS_RANKING else 0
+                                )
+                                
+                                ranking_rede_edit = st.selectbox(
+                                    "🏅 Ranking Rede:",
+                                    options=list(CATEGORIAS_RANKING_REDE.keys()),
+                                    index=list(CATEGORIAS_RANKING_REDE.keys()).index(vip_data.get('Ranking Rede', 'BRONZE')) if vip_data.get('Ranking Rede', '') in CATEGORIAS_RANKING_REDE else 0
+                                )
+                                
+                                rede_edit = st.text_input(
+                                    "🏢 Rede:",
+                                    value=vip_data.get('Rede', '')
+                                )
+                            
+                            contato_edit = st.text_input(
+                                "👤 Contato:",
+                                value=vip_data.get('Contato PCL', '')
+                            )
+                            
+                            telefone_edit = st.text_input(
+                                "📞 Telefone/WhatsApp:",
+                                value=vip_data.get('Whatsapp/telefone', '')
+                            )
+                            
+                            status_edit = st.selectbox(
+                                "📊 Status:",
+                                options=['ATIVO', 'INATIVO', 'DELETADO'],
+                                index=['ATIVO', 'INATIVO', 'DELETADO'].index(vip_data.get('STATUS', 'ATIVO'))
+                            )
+                            
+                            observacoes_edit = st.text_area(
+                                "📝 Observações da Edição:",
+                                placeholder="Descreva as alterações realizadas"
+                            )
+                            
+                            submitted_edit = st.form_submit_button("💾 Salvar Alterações", type="primary")
+                            
+                            if submitted_edit:
+                                # Verificar se houve alterações
+                                alteracoes = []
+                                
+                                if razao_social_edit != vip_data.get('RAZÃO SOCIAL', ''):
+                                    alteracoes.append(('RAZÃO SOCIAL', vip_data.get('RAZÃO SOCIAL', ''), razao_social_edit))
+                                
+                                if nome_fantasia_edit != vip_data.get('NOME FANTASIA', ''):
+                                    alteracoes.append(('NOME FANTASIA', vip_data.get('NOME FANTASIA', ''), nome_fantasia_edit))
+                                
+                                if ranking_edit != vip_data.get('Ranking', ''):
+                                    alteracoes.append(('Ranking', vip_data.get('Ranking', ''), ranking_edit))
+                                
+                                if ranking_rede_edit != vip_data.get('Ranking Rede', ''):
+                                    alteracoes.append(('Ranking Rede', vip_data.get('Ranking Rede', ''), ranking_rede_edit))
+                                
+                                if rede_edit != vip_data.get('Rede', ''):
+                                    alteracoes.append(('Rede', vip_data.get('Rede', ''), rede_edit))
+                                
+                                if status_edit != vip_data.get('STATUS', ''):
+                                    alteracoes.append(('STATUS', vip_data.get('STATUS', ''), status_edit))
+                                
+                                if alteracoes:
+                                    # Criar backup antes de editar
+                                    if VIP_AUTO_BACKUP:
+                                        try:
+                                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                            backup_path = os.path.join(VIP_BACKUP_DIR, f"vip_backup_{timestamp}.csv")
+                                            os.makedirs(VIP_BACKUP_DIR, exist_ok=True)
+                                            
+                                            if os.path.exists(os.path.join(OUTPUT_DIR, VIP_CSV_FILE)):
+                                                shutil.copy2(os.path.join(OUTPUT_DIR, VIP_CSV_FILE), backup_path)
+                                                st.success(f"✅ Backup criado: {backup_path}")
+                                        except Exception as e:
+                                            st.warning(f"⚠️ Erro ao criar backup: {e}")
+                                    
+                                    # Atualizar dados
+                                    try:
+                                        # Atualizar DataFrame
+                                        df_vip_atualizado = df_vip.copy()
+                                        df_vip_atualizado.loc[vip_selecionado, 'RAZÃO SOCIAL'] = razao_social_edit
+                                        df_vip_atualizado.loc[vip_selecionado, 'NOME FANTASIA'] = nome_fantasia_edit
+                                        df_vip_atualizado.loc[vip_selecionado, 'Cidade '] = cidade_edit
+                                        df_vip_atualizado.loc[vip_selecionado, 'UF'] = uf_edit
+                                        df_vip_atualizado.loc[vip_selecionado, 'Ranking'] = ranking_edit
+                                        df_vip_atualizado.loc[vip_selecionado, 'Ranking Rede'] = ranking_rede_edit
+                                        df_vip_atualizado.loc[vip_selecionado, 'Rede'] = rede_edit
+                                        df_vip_atualizado.loc[vip_selecionado, 'Contato PCL'] = contato_edit
+                                        df_vip_atualizado.loc[vip_selecionado, 'Whatsapp/telefone'] = telefone_edit
+                                        df_vip_atualizado.loc[vip_selecionado, 'STATUS'] = status_edit
+                                        
+                                        # Salvar CSV atualizado
+                                        caminho_csv = os.path.join(OUTPUT_DIR, VIP_CSV_FILE)
+                                        df_vip_atualizado.to_csv(caminho_csv, index=False, encoding='utf-8-sig')
+                                        
+                                        # Registrar alterações no histórico
+                                        for campo, valor_anterior, valor_novo in alteracoes:
+                                            history_manager.registrar_edicao(
+                                                cnpj=vip_data['CNPJ'],
+                                                campo_alterado=campo,
+                                                valor_anterior=valor_anterior,
+                                                valor_novo=valor_novo,
+                                                dados_antes=vip_data.to_dict(),
+                                                dados_depois=df_vip_atualizado.loc[vip_selecionado].to_dict(),
+                                                usuario="streamlit_user",
+                                                observacoes=observacoes_edit
+                                            )
+                                        
+                                        # Limpar cache
+                                        DataManager.carregar_dados_vip.clear()
+                                        
+                                        st.success(f"✅ Laboratório VIP atualizado com sucesso!")
+                                        st.success(f"📝 {len(alteracoes)} campo(s) alterado(s)")
+                                        
+                                        # Mostrar resumo das alterações
+                                        for campo, valor_anterior, valor_novo in alteracoes:
+                                            st.info(f"🔄 {campo}: '{valor_anterior}' → '{valor_novo}'")
+                                        
+                                    except Exception as e:
+                                        st.error(f"❌ Erro ao atualizar VIP: {e}")
+                                else:
+                                    st.info("ℹ️ Nenhuma alteração detectada")
+            else:
+                st.warning("⚠️ Nenhum dado VIP encontrado. Execute primeiro o script de normalização.")
+        
+        with sub_tab4:
+            st.subheader("📊 Histórico de Alterações")
+            
+            # Estatísticas do histórico
+            stats = history_manager.obter_estatisticas()
+            
+            if stats['total_alteracoes'] > 0:
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("📊 Total Alterações", stats['total_alteracoes'])
+                
+                with col2:
+                    st.metric("➕ Inserções", stats['por_tipo'].get('insercao', 0))
+                
+                with col3:
+                    st.metric("✏️ Edições", stats['por_tipo'].get('edicao', 0))
+                
+                with col4:
+                    st.metric("🗑️ Exclusões", stats['por_tipo'].get('exclusao', 0))
+                
+                # Filtros para histórico
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    tipo_filtro = st.selectbox(
+                        "🔍 Tipo de Alteração:",
+                        options=["Todos"] + list(stats['por_tipo'].keys()),
+                        help="Filtrar por tipo de alteração"
+                    )
+                
+                with col2:
+                    cnpj_filtro = st.text_input(
+                        "📄 CNPJ:",
+                        placeholder="Digite CNPJ para filtrar",
+                        help="Filtrar por CNPJ específico"
+                    )
+                
+                with col3:
+                    dias_filtro = st.selectbox(
+                        "📅 Período:",
+                        options=["Todos", "Últimos 7 dias", "Últimos 30 dias", "Últimos 90 dias"],
+                        help="Filtrar por período"
+                    )
+                
+                # Obter histórico filtrado
+                if cnpj_filtro:
+                    historico_filtrado = history_manager.buscar_historico_cnpj(cnpj_filtro)
+                else:
+                    historico_filtrado = history_manager.historico
+                
+                # Filtrar por tipo
+                if tipo_filtro != "Todos":
+                    historico_filtrado = [alt for alt in historico_filtrado if alt['tipo'] == tipo_filtro]
+                
+                # Filtrar por período
+                if dias_filtro != "Todos":
+                    dias = {"Últimos 7 dias": 7, "Últimos 30 dias": 30, "Últimos 90 dias": 90}[dias_filtro]
+                    data_limite = datetime.now() - timedelta(days=dias)
+                    historico_filtrado = [alt for alt in historico_filtrado 
+                                        if datetime.fromisoformat(alt['timestamp']) >= data_limite]
+                
+                # Mostrar histórico
+                if historico_filtrado:
+                    st.subheader(f"📋 Histórico Filtrado ({len(historico_filtrado)} registros)")
+                    
+                    # Ordenar por timestamp (mais recente primeiro)
+                    historico_filtrado.sort(key=lambda x: x['timestamp'], reverse=True)
+                    
+                    for i, alt in enumerate(historico_filtrado[:20]):  # Mostrar apenas os 20 mais recentes
+                        with st.expander(f"{alt['tipo'].title()} - {alt['cnpj']} - {alt['timestamp'][:19]}"):
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.write(f"**Tipo:** {alt['tipo'].title()}")
+                                st.write(f"**CNPJ:** {alt['cnpj']}")
+                                st.write(f"**Data/Hora:** {alt['timestamp'][:19]}")
+                                st.write(f"**Usuário:** {alt.get('usuario', 'N/A')}")
+                            
+                            with col2:
+                                if alt['tipo'] == 'edicao':
+                                    st.write(f"**Campo:** {alt.get('campo_alterado', 'N/A')}")
+                                    st.write(f"**De:** {alt.get('valor_anterior', 'N/A')}")
+                                    st.write(f"**Para:** {alt.get('valor_novo', 'N/A')}")
+                                
+                                if alt.get('observacoes'):
+                                    st.write(f"**Observações:** {alt['observacoes']}")
+                    
+                    # Botão para exportar histórico
+                    if st.button("📥 Exportar Histórico CSV"):
+                        try:
+                            caminho_export = history_manager.exportar_historico_csv()
+                            if caminho_export:
+                                st.success(f"✅ Histórico exportado: {caminho_export}")
+                        except Exception as e:
+                            st.error(f"❌ Erro ao exportar histórico: {e}")
+                else:
+                    st.info("ℹ️ Nenhum registro encontrado com os filtros aplicados")
+            else:
+                st.info("ℹ️ Nenhuma alteração registrada ainda")
+
     st.markdown("""
     <div class="footer">
         <p>📊 <strong>Churn PCLs v2.0</strong> - Dashboard profissional de análise de retenção de laboratórios</p>

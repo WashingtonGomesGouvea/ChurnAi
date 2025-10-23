@@ -148,7 +148,42 @@ ALERTA_THRESHOLD_ALTO = 5  # Número de labs em alto risco para enviar alerta
 DIAS_ATIVO_REcente_7 = 7
 DIAS_ATIVO_REcente_30 = 30
 
-# Configurações para dados VIP
-VIP_EXCEL_FILE = "Matriz CS 2025 ATUAL.xlsx"
-VIP_COLUMNS = ["CNPJ", "Ranking", "Ranking Rede", "Rede"]
+# ========================================
+# CONFIGURAÇÕES PARA DADOS VIP
+# ========================================
+
+# Arquivo VIP normalizado (CSV)
+VIP_CSV_FILE = "matriz_cs_normalizada.csv"
+VIP_EXCEL_FILE = "Matriz CS 2025 ATUAL.xlsx"  # Arquivo original (para backup)
+VIP_COLUMNS = ["CNPJ", "Ranking", "Ranking_Rede", "Rede"]
 VIP_CACHE_TTL = 300  # 5 minutos
+
+# Categorias fixas para Ranking Rede
+CATEGORIAS_RANKING_REDE = {
+    'BRONZE': ['bronze', 'bronze ', 'bronze.', 'BRONZE', 'Bronze'],
+    'PRATA': ['prata', 'prata ', 'prata.', 'PRATA', 'Prata'],
+    'OURO': ['ouro', 'ouro ', 'ouro.', 'OURO', 'Ouro'],
+    'DIAMANTE': ['diamante', 'diamante ', 'diamante.', 'DIAMANTE', 'Diamante'],
+    'DELETADO': ['deletado', 'deletado ', 'deletado.', 'DELETADO', 'Deletado'],
+    'INATIVO': ['inativo', 'inativo ', 'inativo.', 'INATIVO', 'Inativo'],
+    'IM': ['im', 'im ', 'im.', 'IM', 'Im']
+}
+
+# Categorias fixas para Ranking individual
+CATEGORIAS_RANKING = {
+    'BRONZE': ['bronze', 'bronze ', 'bronze.', 'BRONZE', 'Bronze'],
+    'PRATA': ['prata', 'prata ', 'prata.', 'PRATA', 'Prata'],
+    'OURO': ['ouro', 'ouro ', 'ouro.', 'OURO', 'Ouro'],
+    'DIAMANTE': ['diamante', 'diamante ', 'diamante.', 'DIAMANTE', 'Diamante']
+}
+
+# Configurações de backup e versionamento VIP
+VIP_BACKUP_DIR = os.path.join(OUTPUT_DIR, "backups_vip")
+VIP_HISTORY_FILE = "vip_alteracoes_history.json"
+VIP_BACKUP_RETENTION_DAYS = 30  # Dias para manter backups
+VIP_AUTO_BACKUP = True  # Criar backup automático antes de alterações
+
+# Configurações de validação VIP
+VIP_VALIDATE_CNPJ_FORMAT = True
+VIP_VALIDATE_CNPJ_EXISTS = True  # Verificar se CNPJ existe nos dados de laboratórios
+VIP_AUTO_COMPLETE_FROM_LABS = True  # Auto-completar dados do arquivo latest

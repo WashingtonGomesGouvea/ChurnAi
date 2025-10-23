@@ -343,7 +343,13 @@ class DataManager:
 
         # Calcular volume total se não existir (até o mês atual)
         try:
-            meses_2025_dyn = ChartManager._meses_ate_hoje(df, 2025)
+            # Função inline para evitar dependência circular
+            meses_ordem = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+            ano_atual = pd.Timestamp.today().year
+            limite_mes = pd.Timestamp.today().month if 2025 == ano_atual else 12
+            meses_limite = meses_ordem[:limite_mes]
+            sufixo = str(2025)[-2:]
+            meses_2025_dyn = [m for m in meses_limite if f'N_Coletas_{m}_{sufixo}' in df.columns]
         except Exception:
             meses_2025_dyn = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
         colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses_2025_dyn]
@@ -545,39 +551,68 @@ class FilterManager:
 
         # Filtro VIP (sempre ativo)
         if filtros.get('apenas_vip', False):
-            # Carregar dados VIP
-            df_vip = DataManager.carregar_dados_vip_excel()
-            if df_vip is not None and not df_vip.empty:
-                # Normalizar CNPJs para match
-                df_filtrado['CNPJ_Normalizado'] = df_filtrado['CNPJ_PCL'].apply(
-                    lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
-                )
-                df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(
-                    lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
-                )
-                
-                # Filtrar apenas registros que estão na lista VIP
-                df_filtrado = df_filtrado[df_filtrado['CNPJ_Normalizado'].isin(df_vip['CNPJ_Normalizado'])]
-            else:
-                # Se não há dados VIP, retornar DataFrame vazio
+            try:
+                # Carregar dados VIP
+                df_vip = DataManager.carregar_dados_vip_excel()
+                if df_vip is not None and not df_vip.empty:
+                    # Normalizar CNPJs para match com tratamento de erro
+                    df_filtrado['CNPJ_Normalizado'] = df_filtrado['CNPJ_PCL'].apply(
+                        lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) and str(x).strip() != '' else ''
+                    )
+                    df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(
+                        lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) and str(x).strip() != '' else ''
+                    )
+                    
+                    # Filtrar apenas registros que estão na lista VIP (com validação)
+                    if 'CNPJ_Normalizado' in df_filtrado.columns and 'CNPJ_Normalizado' in df_vip.columns:
+                        # Remover CNPJs vazios antes do match
+                        df_filtrado = df_filtrado[df_filtrado['CNPJ_Normalizado'] != '']
+                        df_vip_clean = df_vip[df_vip['CNPJ_Normalizado'] != '']
+                        
+                        if not df_vip_clean.empty:
+                            df_filtrado = df_filtrado[df_filtrado['CNPJ_Normalizado'].isin(df_vip_clean['CNPJ_Normalizado'])]
+                        else:
+                            # Se não há CNPJs válidos na lista VIP, retornar DataFrame vazio
+                            return pd.DataFrame()
+                    else:
+                        # Se as colunas não existem, retornar DataFrame vazio
+                        return pd.DataFrame()
+                else:
+                    # Se não há dados VIP, retornar DataFrame vazio
+                    return pd.DataFrame()
+            except Exception as e:
+                # Em caso de erro, retornar DataFrame vazio e log do erro
+                st.error(f"Erro ao aplicar filtro VIP: {str(e)}")
                 return pd.DataFrame()
 
         # Filtro por período
         if 'Data_Analise' in df_filtrado.columns and filtros.get('data_inicio') and filtros.get('data_fim'):
-            # Garantir que as datas sejam do tipo date
-            data_inicio = filtros['data_inicio']
-            data_fim = filtros['data_fim']
-            
-            # Se for datetime, converter para date
-            if hasattr(data_inicio, 'date'):
-                data_inicio = data_inicio.date()
-            if hasattr(data_fim, 'date'):
-                data_fim = data_fim.date()
-            
-            df_filtrado = df_filtrado[
-                (df_filtrado['Data_Analise'].dt.date >= data_inicio) &
-                (df_filtrado['Data_Analise'].dt.date <= data_fim)
-            ]
+            try:
+                # Garantir que as datas sejam do tipo date
+                data_inicio = filtros['data_inicio']
+                data_fim = filtros['data_fim']
+                
+                # Se for datetime, converter para date
+                if hasattr(data_inicio, 'date'):
+                    data_inicio = data_inicio.date()
+                if hasattr(data_fim, 'date'):
+                    data_fim = data_fim.date()
+                
+                # Verificar se a coluna Data_Analise é do tipo datetime
+                if df_filtrado['Data_Analise'].dtype == 'object':
+                    # Tentar converter para datetime
+                    df_filtrado['Data_Analise'] = pd.to_datetime(df_filtrado['Data_Analise'], errors='coerce')
+                
+                # Aplicar filtro apenas se a conversão foi bem-sucedida
+                if df_filtrado['Data_Analise'].dtype.name.startswith('datetime'):
+                    df_filtrado = df_filtrado[
+                        (df_filtrado['Data_Analise'].dt.date >= data_inicio) &
+                        (df_filtrado['Data_Analise'].dt.date <= data_fim)
+                    ]
+            except Exception as e:
+                # Em caso de erro no filtro de data, continuar sem filtrar
+                st.warning(f"Aviso: Erro ao aplicar filtro de período: {str(e)}")
+                pass
 
         return df_filtrado
 
@@ -1533,13 +1568,10 @@ def main():
     # ========================================
     # ABAS PRINCIPAIS COM NOVA ORGANIZAÇÃO
     # ========================================
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🏠 Visão Geral",
         "📋 Análise Detalhada",
         "👤 Por Representante",
-        "📈 Tendências",
-        "🔄 Visão 360°",
-        "🏆 Rankings",
         "🧠 Análises Inteligentes",
         "🏢 Ranking Rede"
     ])
@@ -1627,9 +1659,9 @@ def main():
                 with col1:
                     # Campo de busca aprimorado
                     busca_lab = st.text_input(
-                        "🔍 Buscar por CNPJ, Nome ou Cidade:",
-                        placeholder="Ex: 51.865.434/0012-48 ou BIOLOGICO ou São Paulo...",
-                        help="Digite CNPJ (com ou sem pontos/tracos), nome do laboratório, razão social ou cidade",
+                        "🔍 Buscar por CNPJ ou Nome:",
+                        placeholder="Ex: 51.865.434/0012-48 ou BIOLOGICO...",
+                        help="Digite CNPJ (com ou sem pontos/tracos) ou nome do laboratório/razão social",
                         key="busca_avancada"
                     )
 
@@ -1656,7 +1688,7 @@ def main():
                     - Com formatação: `51.865.434/0012-48`
 
                     **🏥 Para Nome:**
-                    - Nome fantasia, razão social ou cidade
+                    - Nome fantasia ou razão social
                     - Busca parcial e sem distinção de maiúsculas/minúsculas
 
                     **📊 Resultados:**
@@ -1686,11 +1718,10 @@ def main():
                             )
                             lab_encontrado = df_filtrado[df_filtrado['CNPJ_Normalizado_Busca'].str.startswith(cnpj_limpo)]
                         else:
-                            # Buscar por nome (case insensitive e parcial)
+                            # Buscar por nome (case insensitive e parcial) - apenas nome fantasia e razão social
                             lab_encontrado = df_filtrado[
                                 df_filtrado['Nome_Fantasia_PCL'].str.contains(busca_normalizada, case=False, na=False) |
-                                df_filtrado['Razao_Social_PCL'].str.contains(busca_normalizada, case=False, na=False) |
-                                df_filtrado['Cidade'].str.contains(busca_normalizada, case=False, na=False)
+                                df_filtrado['Razao_Social_PCL'].str.contains(busca_normalizada, case=False, na=False)
                             ]
 
                         if not lab_encontrado.empty:
@@ -2257,185 +2288,13 @@ def main():
                 # Tabela detalhada do representante
                 UIManager.criar_tabela_detalhada(df_rep, f"🏥 Laboratórios - {representante_selecionado}")
 
+
+
+
     # ========================================
-    # ABA 4: TENDÊNCIAS HISTÓRICAS
+    # ABA 4: ANÁLISES INTELIGENTES
     # ========================================
     with tab4:
-        st.header("📈 Tendências Históricas")
-
-        # Evolução mensal agregada
-        with st.expander("📈 Evolução Mensal Agregada", expanded=True):
-            ChartManager.criar_grafico_evolucao_mensal(df_filtrado)
-
-        # Comparativo ano a ano
-        if ('Media_Coletas_Mensal_2024' in df_filtrado.columns and
-            'Media_Coletas_Mensal_2025' in df_filtrado.columns):
-
-            with st.expander("📊 Comparativo 2024 vs 2025", expanded=False):
-                media_2024 = df_filtrado['Media_Coletas_Mensal_2024'].mean()
-                media_2025 = df_filtrado['Media_Coletas_Mensal_2025'].mean()
-
-                fig = go.Figure(data=[
-                    go.Bar(
-                        name='2024',
-                        x=['Média Mensal'],
-                        y=[media_2024],
-                        marker_color='#1f77b4',
-                        text=f'{media_2024:.1f}',
-                        textposition='auto'
-                    ),
-                    go.Bar(
-                        name='2025',
-                        x=['Média Mensal'],
-                        y=[media_2025],
-                        marker_color='#ff7f0e',
-                        text=f'{media_2025:.1f}',
-                        textposition='auto'
-                    )
-                ])
-
-                fig.update_layout(
-                    title="📊 Comparativo de Médias Mensais",
-                    xaxis_title="Período",
-                    yaxis_title="Média de Coletas",
-                    showlegend=True,
-                    barmode='group'
-                )
-
-                st.plotly_chart(fig, use_container_width=True)
-
-                # Indicador de variação
-                variacao_yoy = ((media_2025 - media_2024) / media_2024 * 100) if media_2024 > 0 else 0
-                delta_color = "normal" if variacao_yoy >= 0 else "inverse"
-                st.metric(
-                    "📈 Variação YoY",
-                    f"{variacao_yoy:+.1f}%",
-                    delta=f"{variacao_yoy:+.1f}%",
-                    delta_color=delta_color
-                )
-
-        # Heatmap de coletas
-        with st.expander("🔥 Heatmap de Coletas (Top 20)", expanded=False):
-            ChartManager.criar_heatmap_coletas(df_filtrado, top_n=20)
-
-    # ========================================
-    # ABA 5: VISÃO 360°
-    # ========================================
-    with tab5:
-        st.header("🔄 Visão 360° da Saúde dos PCLs")
-
-        # Criar status composto para visão 360
-        if not df_filtrado.empty:
-            df_360 = df_filtrado.copy()
-            
-            # Limpar dados nulos e vazios para o gráfico sunburst
-            df_360 = df_360.dropna(subset=['Estado', 'Representante_Nome', 'Nome_Fantasia_PCL'])
-            df_360 = df_360[df_360['Estado'] != '']
-            df_360 = df_360[df_360['Representante_Nome'] != '']
-            df_360 = df_360[df_360['Nome_Fantasia_PCL'] != '']
-            
-            if not df_360.empty and 'Tendencia' in df_360.columns and 'Status_Risco' in df_360.columns:
-                df_360['Status_360'] = df_360.apply(
-                    lambda row: f"{row['Tendencia']} - {row['Status_Risco']}",
-                    axis=1
-                )
-
-                # Definir cores para diferentes combinações
-                cores_360 = {
-                    'Crescimento - Baixo': 'darkgreen',
-                    'Crescimento - Médio': 'limegreen',
-                    'Crescimento - Alto': 'lightgreen',
-                    'Crescimento - Inativo': 'gray',
-                    'Estável - Baixo': 'blue',
-                    'Estável - Médio': 'lightblue',
-                    'Estável - Alto': 'darkblue',
-                    'Estável - Inativo': 'gray',
-                    'Declínio - Baixo': 'orange',
-                    'Declínio - Médio': 'darkorange',
-                    'Declínio - Alto': 'red',
-                    'Declínio - Inativo': 'darkred'
-                }
-
-                fig_360 = px.sunburst(
-                    df_360,
-                    path=['Estado', 'Representante_Nome', 'Nome_Fantasia_PCL'],
-                    values='Volume_Total_2025',
-                    color='Status_360',
-                    color_discrete_map=cores_360,
-                    title="🔄 Distribuição Hierárquica: Estado → Representante → Laboratório",
-                    hover_data=['Variacao_Percentual', 'Dias_Sem_Coleta', 'Status_Risco']
-                )
-
-                fig_360.update_layout(margin=dict(t=50, l=0, r=0, b=0))
-                st.plotly_chart(fig_360, use_container_width=True)
-
-                # Legenda explicativa
-                with st.expander("📖 Como Interpretar", expanded=False):
-                    st.markdown("""
-                    **🟢 Verde:** Laboratórios crescendo (tendência positiva)
-                    **🔵 Azul:** Laboratórios estáveis
-                    **🟠 Laranja:** Laboratórios em declínio mas ainda ativos
-                    **🔴 Vermelho:** Laboratórios em declínio e alto risco
-                    **⚫ Cinza:** Laboratórios inativos
-
-                    **Hierarquia:**
-                    - **Nível 1:** Estados brasileiros
-                    - **Nível 2:** Representantes
-                    - **Nível 3:** Laboratórios individuais
-
-                    **Tamanho dos segmentos:** Representa o volume total de coletas
-                    """)
-            else:
-                st.warning("⚠️ Dados insuficientes para visualização 360°. Verifique se os campos Estado, Representante_Nome e Nome_Fantasia_PCL estão preenchidos.")
-        else:
-            st.warning("⚠️ Nenhum dado disponível para visualização 360°")
-
-    # ========================================
-    # ABA 6: RANKINGS
-    # ========================================
-    with tab6:
-        st.header("🏆 Rankings de Performance")
-
-        if 'Variacao_Percentual' in df_filtrado.columns:
-            # Rankings de variações
-            col1, col2 = st.columns(2)
-
-            with col1:
-                st.subheader("📉 Maiores Quedas")
-                top_quedas = df_filtrado.nsmallest(15, 'Variacao_Percentual')[
-                    ['Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado', 'Representante_Nome']
-                ].reset_index(drop=True)
-                st.dataframe(top_quedas, use_container_width=True, height=400)
-
-            with col2:
-                st.subheader("📈 Maiores Recuperações")
-                top_recuperacoes = df_filtrado.nlargest(15, 'Variacao_Percentual')[
-                    ['Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado', 'Representante_Nome']
-                ].reset_index(drop=True)
-                st.dataframe(top_recuperacoes, use_container_width=True, height=400)
-
-            # Gráfico comparativo
-            st.subheader("📊 Distribuição de Variações")
-            fig_variacao = px.histogram(
-                df_filtrado,
-                x='Variacao_Percentual',
-                nbins=50,
-                title="Distribuição das Variações Percentuais",
-                labels={'Variacao_Percentual': 'Variação %', 'count': 'Número de Labs'},
-                color_discrete_sequence=['#1f77b4']
-            )
-            fig_variacao.add_vline(
-                x=0,
-                line_dash="dash",
-                line_color="red",
-                annotation_text="Ponto de Equilíbrio"
-            )
-            st.plotly_chart(fig_variacao, use_container_width=True)
-
-    # ========================================
-    # ABA 7: ANÁLISES INTELIGENTES
-    # ========================================
-    with tab7:
         st.header("🧠 Análises Inteligentes")
         st.markdown("**Dashboard com insights automáticos e análises preditivas**")
         
@@ -2553,9 +2412,9 @@ def main():
             st.success("✅ Nenhum laboratório crítico identificado!")
 
     # ========================================
-    # ABA 8: RANKING REDE
+    # ABA 5: RANKING REDE
     # ========================================
-    with tab8:
+    with tab5:
         st.header("🏢 Ranking por Rede")
 
         # Carregar dados VIP para análise de rede
@@ -2651,7 +2510,10 @@ def main():
                     # Distribuição por rede
                     st.subheader("📊 Distribuição por Rede")
                     if 'Rede' in df_rede_filtrado.columns:
-                        rede_stats = df_rede_filtrado.groupby('Rede').agg({
+                        # Remover duplicatas baseado no CNPJ antes da contagem
+                        df_sem_duplicatas_rede = df_rede_filtrado.drop_duplicates(subset=['CNPJ_PCL'], keep='first')
+                        
+                        rede_stats = df_sem_duplicatas_rede.groupby('Rede').agg({
                             'Nome_Fantasia_PCL': 'count',
                             'Volume_Total_2025': 'sum',
                             'Score_Risco': 'mean'
@@ -2703,8 +2565,9 @@ def main():
                 elif tipo_analise == "Por Volume":
                     st.subheader("📦 Análise por Volume de Coletas")
 
-                    # Ranking de redes por volume
-                    volume_por_rede = df_rede_filtrado.groupby('Rede')['Volume_Total_2025'].agg(['sum', 'mean', 'count']).reset_index()
+                    # Ranking de redes por volume - remover duplicatas antes da contagem
+                    df_sem_duplicatas_volume = df_rede_filtrado.drop_duplicates(subset=['CNPJ_PCL'], keep='first')
+                    volume_por_rede = df_sem_duplicatas_volume.groupby('Rede')['Volume_Total_2025'].agg(['sum', 'mean', 'count']).reset_index()
                     volume_por_rede.columns = ['Rede', 'Volume_Total', 'Volume_Medio', 'Qtd_Labs']
                     volume_por_rede = volume_por_rede.sort_values('Volume_Total', ascending=False)
 
@@ -2737,9 +2600,10 @@ def main():
                 elif tipo_analise == "Por Performance":
                     st.subheader("📈 Análise de Performance por Rede")
 
-                    # Performance por rede (baseado em crescimento/variacao)
+                    # Performance por rede (baseado em crescimento/variacao) - remover duplicatas
                     if 'Variacao_Percentual' in df_rede_filtrado.columns:
-                        perf_rede = df_rede_filtrado.groupby('Rede').agg({
+                        df_sem_duplicatas_perf = df_rede_filtrado.drop_duplicates(subset=['CNPJ_PCL'], keep='first')
+                        perf_rede = df_sem_duplicatas_perf.groupby('Rede').agg({
                             'Variacao_Percentual': ['mean', 'count'],
                             'Volume_Total_2025': 'sum'
                         }).reset_index()
@@ -2868,8 +2732,11 @@ def main():
 
                 # Mostrar hierarquia Rede -> Ranking -> Labs
                 if 'Ranking' in df_rede_filtrado.columns and 'Ranking Rede' in df_rede_filtrado.columns:
-                    # Criar tabela hierárquica
-                    hierarquia = df_rede_filtrado.groupby(['Rede', 'Ranking', 'Ranking Rede']).agg({
+                    # Criar tabela hierárquica - garantir que cada laboratório seja contado apenas uma vez
+                    # Remover duplicatas baseado no CNPJ antes da contagem
+                    df_sem_duplicatas = df_rede_filtrado.drop_duplicates(subset=['CNPJ_PCL'], keep='first')
+                    
+                    hierarquia = df_sem_duplicatas.groupby(['Rede', 'Ranking', 'Ranking Rede']).agg({
                         'Nome_Fantasia_PCL': 'count',
                         'Volume_Total_2025': 'sum'
                     }).reset_index()

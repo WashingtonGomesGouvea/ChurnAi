@@ -313,8 +313,11 @@ def calcular_metricas_churn():
                 logger.warning(f"Erro ao converter datas: {e}")
                 gatherings_2025_lab['createdAt'] = pd.to_datetime(gatherings_2025_lab['createdAt'], format='mixed', errors='coerce')
             
-            for mes in range(1, 11):  # Jan a Out
-                mes_key = f'N_Coletas_{["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out"][mes-1]}_25'
+            # Meses dinâmicos até o mês corrente do ano
+            meses_ordem = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+            mes_limite = min(datetime.now().month, 12)
+            for mes in range(1, mes_limite + 1):
+                mes_key = f'N_Coletas_{meses_ordem[mes-1]}_25'
                 coletas_mes = len(gatherings_2025_lab[gatherings_2025_lab['createdAt'].dt.month == mes])
                 coletas_mensais_2025[mes_key] = coletas_mes
         
@@ -390,7 +393,8 @@ def calcular_metricas_churn():
         
         # Calcular médias mensais
         media_mensal_2024 = total_coletas_2024 / 12 if total_coletas_2024 > 0 else 0
-        media_mensal_2025 = total_coletas_2025 / 10 if total_coletas_2025 > 0 else 0  # Jan a Out
+        meses_ate_agora_2025 = min(datetime.now().month, 12)
+        media_mensal_2025 = (total_coletas_2025 / meses_ate_agora_2025) if (total_coletas_2025 > 0 and meses_ate_agora_2025 > 0) else 0
         
         # Calcular variação percentual
         variacao_percentual = 0
@@ -459,17 +463,6 @@ def calcular_metricas_churn():
             'N_Coletas_Nov_24': coletas_mensais_2024.get('N_Coletas_Nov_24', 0),
             'N_Coletas_Dez_24': coletas_mensais_2024.get('N_Coletas_Dez_24', 0),
             
-            # Coletas mensais 2025
-            'N_Coletas_Jan_25': coletas_mensais_2025.get('N_Coletas_Jan_25', 0),
-            'N_Coletas_Fev_25': coletas_mensais_2025.get('N_Coletas_Fev_25', 0),
-            'N_Coletas_Mar_25': coletas_mensais_2025.get('N_Coletas_Mar_25', 0),
-            'N_Coletas_Abr_25': coletas_mensais_2025.get('N_Coletas_Abr_25', 0),
-            'N_Coletas_Mai_25': coletas_mensais_2025.get('N_Coletas_Mai_25', 0),
-            'N_Coletas_Jun_25': coletas_mensais_2025.get('N_Coletas_Jun_25', 0),
-            'N_Coletas_Jul_25': coletas_mensais_2025.get('N_Coletas_Jul_25', 0),
-            'N_Coletas_Ago_25': coletas_mensais_2025.get('N_Coletas_Ago_25', 0),
-            'N_Coletas_Set_25': coletas_mensais_2025.get('N_Coletas_Set_25', 0),
-            'N_Coletas_Out_25': coletas_mensais_2025.get('N_Coletas_Out_25', 0),
             
             # Análise de churn
             'Data_Ultima_Coleta': data_ultima_coleta,
@@ -488,6 +481,11 @@ def calcular_metricas_churn():
             'Total_Coletas_2024': total_coletas_2024,
             'Total_Coletas_2025': total_coletas_2025
         }
+        
+        # Adicionar dinamicamente as colunas de 2025 até o mês atual
+        for mes_nome in ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"][:meses_ate_agora_2025]:
+            chave = f'N_Coletas_{mes_nome}_25'
+            registro_churn[chave] = coletas_mensais_2025.get(chave, 0)
         
         dados_churn.append(registro_churn)
     
@@ -559,6 +557,54 @@ def executar_gerador():
         except Exception as e:
             logger.error(f"Erro no loop principal: {e}")
             time.sleep(60)
+
+# ==========================
+# Função de alerta (segura)
+# ==========================
+def enviar_alerta_email(df_churn: pd.DataFrame) -> None:
+    """Envia alerta por e-mail de forma segura (ou apenas loga se indisponível).
+
+    - Usa credenciais do config_churn se disponíveis
+    - Nunca lança exceção para não interromper o gerador
+    """
+    try:
+        alto_risco = df_churn[df_churn.get('Status_Risco') == 'Alto']
+        total_alto = len(alto_risco)
+        mensagem = f"Alerta: {total_alto} laboratórios em ALTO RISCO."
+
+        # Verificar se temos credenciais mínimas
+        has_creds = all([
+            'EMAIL_ALERTA' in globals() and EMAIL_ALERTA,
+            'SMTP_SERVER' in globals() and SMTP_SERVER,
+            'SMTP_PORT' in globals() and SMTP_PORT,
+            'SMTP_USER' in globals() and SMTP_USER,
+            'SMTP_PASSWORD' in globals() and SMTP_PASSWORD,
+        ])
+
+        if not has_creds:
+            logger.info(f"[ALERTA-LOG] {mensagem} (e-mail desabilitado por falta de credenciais)")
+            return
+
+        import smtplib
+        from email.mime.text import MIMEText
+
+        body = "\n".join([
+            mensagem,
+            "",
+            alto_risco.head(20)[['Nome_Fantasia_PCL','Estado','Cidade']].to_string(index=False) if not alto_risco.empty else "",
+        ])
+        msg = MIMEText(body, _charset='utf-8')
+        msg['Subject'] = 'Alerta Churn - Labs em Alto Risco'
+        msg['From'] = SMTP_USER
+        msg['To'] = EMAIL_ALERTA
+
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(SMTP_USER, [EMAIL_ALERTA], msg.as_string())
+        logger.info("Alerta por e-mail enviado com sucesso.")
+    except Exception as e:
+        logger.warning(f"Falha ao enviar alerta por e-mail (ignorando): {e}")
 
 if __name__ == "__main__":
     executar_gerador()

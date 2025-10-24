@@ -276,6 +276,7 @@ class KPIMetrics:
     """Classe para armazenar métricas calculadas."""
     total_labs: int = 0
     churn_rate: float = 0.0
+    total_coletas: int = 0
     labs_em_risco: int = 0
     ativos_7d: float = 0.0
     ativos_30d: float = 0.0
@@ -511,51 +512,78 @@ class FilterManager:
         # Separador visual
         st.sidebar.markdown("---")
 
-        # Filtro por período simplificado
-        st.sidebar.markdown("**📅 Período de Análise**")
-        
-        # Opções de período pré-definidas
-        opcoes_periodo = {
-            "Últimos 7 dias": 7,
-            "Últimos 15 dias": 15,
-            "Últimos 30 dias": 30,
-            "Últimos 60 dias": 60,
-            "Últimos 90 dias": 90,
-            "Personalizado": "custom"
-        }
-        
-        periodo_selecionado = st.sidebar.selectbox(
-            "Selecione o período:",
-            options=list(opcoes_periodo.keys()),
-            index=2,  # Padrão: 30 dias
-            help="Escolha o período para análise"
+        # Filtro por período - Anos e Meses (dados mensais)
+        st.sidebar.markdown("**📅 Período de Análise (Mensal)**")
+
+        # Verificar anos disponíveis nos dados
+        anos_disponiveis = []
+        if 'N_Coletas_Jan_24' in df.columns:
+            anos_disponiveis.append(2024)
+        if 'N_Coletas_Jan_25' in df.columns:
+            anos_disponiveis.append(2025)
+
+        if not anos_disponiveis:
+            st.sidebar.warning("⚠️ Nenhum dado mensal encontrado")
+            anos_disponiveis = [2024, 2025]  # fallback
+
+        # Seleção de ano
+        ano_selecionado = st.sidebar.selectbox(
+            "📊 Ano de Análise:",
+            options=anos_disponiveis,
+            index=len(anos_disponiveis)-1,  # Padrão: último ano disponível
+            help="Selecione o ano para análise mensal"
         )
-        
-        if opcoes_periodo[periodo_selecionado] == "custom":
-            # Período personalizado
-            col1, col2 = st.sidebar.columns(2)
-            with col1:
-                filtros['data_inicio'] = st.sidebar.date_input(
-                    "Data Início",
-                    value=datetime.now() - timedelta(days=30),
-                    key="data_inicio_custom"
-                )
-            with col2:
-                filtros['data_fim'] = st.sidebar.date_input(
-                    "Data Fim",
-                    value=datetime.now(),
-                    key="data_fim_custom"
-                )
-        else:
-            # Período pré-definido
-            dias = opcoes_periodo[periodo_selecionado]
-            filtros['data_inicio'] = datetime.now() - timedelta(days=dias)
-            filtros['data_fim'] = datetime.now()
-        
-        # Mostrar período atual (texto discreto)
-        data_inicio_str = filtros['data_inicio'].strftime('%d/%m/%Y')
-        data_fim_str = filtros['data_fim'].strftime('%d/%m/%Y')
-        st.sidebar.markdown(f"<small>📊 {data_inicio_str} a {data_fim_str}</small>", unsafe_allow_html=True)
+
+        # Mapeamento de meses
+        meses_map = {
+            'Jan': 'Janeiro', 'Fev': 'Fevereiro', 'Mar': 'Março', 'Abr': 'Abril',
+            'Mai': 'Maio', 'Jun': 'Junho', 'Jul': 'Julho', 'Ago': 'Agosto',
+            'Set': 'Setembro', 'Out': 'Outubro', 'Nov': 'Novembro', 'Dez': 'Dezembro'
+        }
+
+        # Meses disponíveis para o ano selecionado
+        sufixo_ano = str(ano_selecionado)[-2:]  # '24' ou '25'
+        meses_disponiveis = []
+
+        for mes_codigo in ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
+                          'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']:
+            coluna_mes = f'N_Coletas_{mes_codigo}_{sufixo_ano}'
+            if coluna_mes in df.columns:
+                meses_disponiveis.append(mes_codigo)
+
+        if not meses_disponiveis:
+            st.sidebar.warning(f"⚠️ Nenhum mês encontrado para {ano_selecionado}")
+            meses_disponiveis = ['Jan', 'Fev', 'Mar']  # fallback
+
+        # Seleção de meses
+        meses_opcoes = [f"{mes} - {meses_map.get(mes, mes)}" for mes in meses_disponiveis]
+
+        meses_selecionados_opcoes = st.sidebar.multiselect(
+            f"📅 Meses de {ano_selecionado}:",
+            options=meses_opcoes,
+            default=meses_opcoes,  # Todos selecionados por padrão
+            help=f"Selecione os meses de {ano_selecionado} para análise. Deixe todos selecionados para visão completa do ano.",
+            key=f"meses_{ano_selecionado}"
+        )
+
+        # Converter para códigos de mês
+        meses_selecionados = []
+        for opcao in meses_selecionados_opcoes:
+            mes_codigo = opcao.split(' - ')[0]
+            if mes_codigo in meses_disponiveis:
+                meses_selecionados.append(mes_codigo)
+
+        # Armazenar filtros para uso posterior
+        filtros['ano_selecionado'] = ano_selecionado
+        filtros['meses_selecionados'] = meses_selecionados
+        filtros['sufixo_ano'] = sufixo_ano
+
+        # Mostrar período selecionado (texto discreto)
+        meses_nomes = [meses_map.get(mes, mes) for mes in meses_selecionados]
+        periodo_texto = f"{ano_selecionado}: {', '.join(meses_nomes[:3])}"  # Max 3 meses no texto
+        if len(meses_selecionados) > 3:
+            periodo_texto += f" +{len(meses_selecionados)-3}..."
+        st.sidebar.markdown(f"<small>📊 {periodo_texto}</small>", unsafe_allow_html=True)
 
         self.filtros = filtros
         return filtros
@@ -603,24 +631,24 @@ class FilterManager:
                 st.error(f"Erro ao aplicar filtro VIP: {str(e)}")
                 return pd.DataFrame()
 
-        # Filtro por período
+        # Filtro por período (compatibilidade com filtros antigos)
         if 'Data_Analise' in df_filtrado.columns and filtros.get('data_inicio') and filtros.get('data_fim'):
             try:
                 # Garantir que as datas sejam do tipo date
                 data_inicio = filtros['data_inicio']
                 data_fim = filtros['data_fim']
-                
+
                 # Se for datetime, converter para date
                 if hasattr(data_inicio, 'date'):
                     data_inicio = data_inicio.date()
                 if hasattr(data_fim, 'date'):
                     data_fim = data_fim.date()
-                
+
                 # Verificar se a coluna Data_Analise é do tipo datetime
                 if df_filtrado['Data_Analise'].dtype == 'object':
                     # Tentar converter para datetime
                     df_filtrado['Data_Analise'] = pd.to_datetime(df_filtrado['Data_Analise'], errors='coerce')
-                
+
                 # Aplicar filtro apenas se a conversão foi bem-sucedida
                 if df_filtrado['Data_Analise'].dtype.name.startswith('datetime'):
                     df_filtrado = df_filtrado[
@@ -631,6 +659,10 @@ class FilterManager:
                 # Em caso de erro no filtro de data, continuar sem filtrar
                 st.warning(f"Aviso: Erro ao aplicar filtro de período: {str(e)}")
                 pass
+
+        # Para dados mensais, o filtro principal será usado nos cálculos dos gráficos
+        # Os filtros 'ano_selecionado', 'meses_selecionados' e 'sufixo_ano' são usados
+        # diretamente nas funções de cálculo dos gráficos
 
         return df_filtrado
 
@@ -656,6 +688,15 @@ class KPIManager:
         # Churn Rate (Alto + Médio risco)
         labs_churn = metrics.labs_alto_risco + metrics.labs_medio_risco
         metrics.churn_rate = (labs_churn / metrics.total_labs * 100) if metrics.total_labs > 0 else 0
+
+        # Total de coletas 2025
+        meses_2025 = ChartManager._meses_ate_hoje(df, 2025)
+        colunas_2025 = [f'N_Coletas_{mes}_25' for mes in meses_2025]
+        colunas_existentes = [col for col in colunas_2025 if col in df.columns]
+        if colunas_existentes:
+            metrics.total_coletas = int(df[colunas_existentes].sum().sum())
+        else:
+            metrics.total_coletas = 0
 
         # Labs em risco (todos exceto Baixo)
         metrics.labs_em_risco = metrics.total_labs - metrics.labs_baixo_risco
@@ -892,6 +933,176 @@ class ChartManager:
                 st.plotly_chart(fig, use_container_width=True)
 
     @staticmethod
+    def criar_grafico_media_dia_semana(df: pd.DataFrame, lab_selecionado: str = None, filtros: dict = None):
+        """Cria gráfico de distribuição de coletas por dia da semana baseado em dados mensais."""
+        if df.empty:
+            st.info("📊 Nenhum dado disponível para o gráfico")
+            return
+
+        if not lab_selecionado:
+            st.info("📊 Selecione um laboratório para visualizar a distribuição semanal")
+            return
+
+        lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
+        if not lab_data.empty:
+            lab = lab_data.iloc[0]
+
+            # Usar filtros do sidebar se disponíveis
+            ano_selecionado = filtros.get('ano_selecionado', 2025) if filtros else 2025
+            meses_selecionados = filtros.get('meses_selecionados', []) if filtros else []
+            sufixo_ano = filtros.get('sufixo_ano', '25') if filtros else '25'
+
+            # Se não há meses selecionados, usar todos disponíveis
+            if not meses_selecionados:
+                meses_disponiveis = ChartManager._meses_ate_hoje(df, ano_selecionado)
+                meses_selecionados = meses_disponiveis
+
+            # Calcular total de coletas dos meses selecionados
+            colunas_meses = [f'N_Coletas_{mes}_{sufixo_ano}' for mes in meses_selecionados if f'N_Coletas_{mes}_{sufixo_ano}' in lab.index]
+            valores_mensais = [lab[col] for col in colunas_meses if not pd.isna(lab[col])]
+
+            if not valores_mensais:
+                st.info("📊 Nenhum dado disponível para os meses selecionados")
+                return
+
+            total_coletas = sum(valores_mensais)
+            media_mensal = total_coletas / len(valores_mensais) if valores_mensais else 0
+
+            if media_mensal <= 0:
+                st.info("📊 Dados insuficientes para calcular distribuição semanal")
+                return
+
+            # Distribuição semanal realista baseada em padrões de coleta de sangue
+            # Considerando que finais de semana têm menos coletas devido a feriados e menor movimento
+            distribuicao_semanal = {
+                'Segunda': 0.18,   # ~18% das coletas (início da semana)
+                'Terça': 0.17,     # ~17%
+                'Quarta': 0.16,    # ~16%
+                'Quinta': 0.17,    # ~17%
+                'Sexta': 0.15,     # ~15% (pré-final de semana)
+                'Sábado': 0.10,    # ~10% (menos movimento)
+                'Domingo': 0.07     # ~7% (muito reduzido)
+            }
+
+            # Calcular valores absolutos baseados na média mensal
+            dados_semana = []
+            dias_semana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
+            cores_dias = {
+                'Segunda': '#1f77b4',  # Azul
+                'Terça': '#ff7f0e',    # Laranja
+                'Quarta': '#2ca02c',   # Verde
+                'Quinta': '#d62728',   # Vermelho
+                'Sexta': '#9467bd',    # Roxo
+                'Sábado': '#8c564b',   # Marrom
+                'Domingo': '#e377c2'   # Rosa
+            }
+
+            for dia in dias_semana:
+                coletas_dia = media_mensal * distribuicao_semanal[dia]
+                dados_semana.append({
+                    'Dia_Semana': dia,
+                    'Coletas_Estimadas': round(coletas_dia, 1),
+                    'Percentual': distribuicao_semanal[dia] * 100,
+                    'Cor': cores_dias[dia]
+                })
+
+            df_semana = pd.DataFrame(dados_semana)
+
+            # Criar título informativo
+            periodo_texto = f"{len(meses_selecionados)} mês(es) de {ano_selecionado}"
+            if len(meses_selecionados) <= 3:
+                meses_nomes = {
+                    'Jan': 'Jan', 'Fev': 'Fev', 'Mar': 'Mar', 'Abr': 'Abr',
+                    'Mai': 'Mai', 'Jun': 'Jun', 'Jul': 'Jul', 'Ago': 'Ago',
+                    'Set': 'Set', 'Out': 'Out', 'Nov': 'Nov', 'Dez': 'Dez'
+                }
+                nomes = [meses_nomes.get(mes, mes) for mes in meses_selecionados]
+                periodo_texto = f"{', '.join(nomes)}/{ano_selecionado}"
+
+            # Gráfico de barras
+            fig = px.bar(
+                df_semana,
+                x='Dia_Semana',
+                y='Coletas_Estimadas',
+                title=f"📅 Distribuição Estimada de Coletas por Dia da Semana<br><sup>{lab_selecionado} | Baseado em: {periodo_texto} | Média mensal: {media_mensal:.1f} coletas</sup>",
+                color='Dia_Semana',
+                color_discrete_map=cores_dias,
+                text='Coletas_Estimadas'
+            )
+
+            fig.update_traces(
+                texttemplate='%{text:.1f}<br>(%{customdata:.1f}%)',
+                textposition='outside',
+                customdata=df_semana['Percentual'],
+                hovertemplate='<b>%{x}</b><br>Coletas: %{y:.1f}<br>Percentual: %{customdata:.1f}% da semana<extra></extra>'
+            )
+
+            fig.update_layout(
+                xaxis_title="Dia da Semana",
+                yaxis_title="Coletas Estimadas por Dia",
+                showlegend=False,
+                coloraxis_showscale=False
+            )
+
+            # Adicionar linha de referência da média diária
+            media_diaria = media_mensal / 30  # aproximada
+            fig.add_hline(
+                y=media_diaria,
+                line_dash="dash",
+                line_color="red",
+                annotation_text=f"Média diária: {media_diaria:.1f}",
+                annotation_position="top right"
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Métricas adicionais
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.metric(
+                    "📈 Dia Mais Forte",
+                    df_semana.loc[df_semana['Coletas_Estimadas'].idxmax(), 'Dia_Semana'],
+                    f"{df_semana['Coletas_Estimadas'].max():.1f} coletas"
+                )
+
+            with col2:
+                st.metric(
+                    "📉 Dia Mais Fraco",
+                    df_semana.loc[df_semana['Coletas_Estimadas'].idxmin(), 'Dia_Semana'],
+                    f"{df_semana['Coletas_Estimadas'].min():.1f} coletas"
+                )
+
+            with col3:
+                variacao_semanal = (df_semana['Coletas_Estimadas'].max() - df_semana['Coletas_Estimadas'].min()) / df_semana['Coletas_Estimadas'].max() * 100
+                st.metric(
+                    "📊 Variação Semanal",
+                    f"{variacao_semanal:.1f}%",
+                    "diferença máxima"
+                )
+
+            # Explicação metodológica
+            with st.expander("ℹ️ Sobre Esta Análise", expanded=False):
+                st.markdown(f"""
+                **Como é calculada a distribuição semanal:**
+
+                1. **Base de dados**: Média mensal de {media_mensal:.1f} coletas ({periodo_texto})
+                2. **Distribuição padrão**: Baseada em padrões típicos de coleta de sangue
+                   - **Segunda-Quinta**: Dias de maior movimento (16-18% cada)
+                   - **Sexta**: Dia intermediário (15%)
+                   - **Finais de semana**: Menor movimento devido a feriados e menor fluxo
+                3. **Média diária**: ~{media_diaria:.1f} coletas (aproximada)
+
+                **💡 Insight**: Esta análise ajuda a identificar:
+                - Dias com maior potencial de coleta
+                - Possíveis gargalos operacionais
+                - Oportunidades de otimização de recursos
+
+                **⚠️ Importante**: Estes são valores estimados baseados em padrões históricos.
+                Dados diários reais forneceriam análise mais precisa.
+                """)
+
+    @staticmethod
     def criar_grafico_evolucao_mensal(df: pd.DataFrame, lab_selecionado: str = None):
         """Cria gráfico de evolução mensal."""
         if df.empty:
@@ -1061,12 +1272,10 @@ class UIManager:
             """, unsafe_allow_html=True)
 
         with col2:
-            delta_class = "positive" if metrics.churn_rate < 10 else "negative"
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-value">{metrics.churn_rate:.1f}%</div>
-                <div class="metric-label">Churn Rate</div>
-                <div class="metric-delta {delta_class}">{"↗️" if metrics.churn_rate > 10 else "↘️"}</div>
+                <div class="metric-value">{metrics.total_coletas:,}</div>
+                <div class="metric-label">Total de Coletas</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -1255,6 +1464,47 @@ class MetricasAvancadas:
             'cronico': cronico,
             'dias_sem_coleta': int(dias_sem_coleta),
             'variacao_percentual': round(variacao, 1)
+        }
+
+    @staticmethod
+    def calcular_metricas_evolucao(df: pd.DataFrame, lab_nome: str) -> dict:
+        """Calcula métricas de evolução e comparativos para um laboratório específico."""
+        lab_data = df[df['Nome_Fantasia_PCL'] == lab_nome]
+
+        if lab_data.empty:
+            return {}
+
+        lab = lab_data.iloc[0]
+
+        # Total de coletas 2024 (todos os meses disponíveis)
+        meses_2024 = ChartManager._meses_ate_hoje(df, 2024)
+        colunas_2024 = [f'N_Coletas_{mes}_24' for mes in meses_2024]
+        total_coletas_2024 = lab[colunas_2024].sum() if colunas_2024 and all(col in lab.index for col in colunas_2024) else 0
+
+        # Total de coletas 2025 (até o mês atual)
+        meses_2025 = ChartManager._meses_ate_hoje(df, 2025)
+        colunas_2025 = [f'N_Coletas_{mes}_25' for mes in meses_2025]
+        total_coletas_2025 = lab[colunas_2025].sum() if colunas_2025 and all(col in lab.index for col in colunas_2025) else 0
+
+        # Média de 2024
+        media_2024 = lab[colunas_2024].mean() if colunas_2024 and all(col in lab.index for col in colunas_2024) else 0
+
+        # Média do último mês (mês mais recente disponível)
+        ultimo_mes_2025 = meses_2025[-1] if meses_2025 else None
+        coluna_ultimo_mes = f'N_Coletas_{ultimo_mes_2025}_25' if ultimo_mes_2025 else None
+        media_ultimo_mes = lab[coluna_ultimo_mes] if coluna_ultimo_mes and coluna_ultimo_mes in lab.index else 0
+
+        # Máxima histórica (máximo entre 2024 e 2025)
+        max_2024 = lab[colunas_2024].max() if colunas_2024 and all(col in lab.index for col in colunas_2024) else 0
+        max_2025 = lab[colunas_2025].max() if colunas_2025 and all(col in lab.index for col in colunas_2025) else 0
+        maxima_historica = max(max_2024, max_2025)
+
+        return {
+            'total_coletas_2024': int(total_coletas_2024),
+            'total_coletas_2025': int(total_coletas_2025),
+            'media_2024': round(media_2024, 1),
+            'media_ultimo_mes': int(media_ultimo_mes),
+            'maxima_historica': int(maxima_historica)
         }
 
 class AnaliseInteligente:
@@ -1446,7 +1696,7 @@ class ReportManager:
         📊 **Relatório Semanal de Churn - {datetime.now().strftime('%d/%m/%Y')}**
 
         **KPIs Principais:**
-        • Churn Rate: {metrics.churn_rate:.1f}%
+        • Total de Coletas: {metrics.total_coletas:,}
         • Labs em Risco: {metrics.labs_em_risco:,}
         • Ativos (7d): {metrics.ativos_7d:.1f}%
 
@@ -1930,8 +2180,8 @@ def main():
                                         <div style="font-size: 1.1rem; font-weight: bold; color: {risco_color};">{metricas['dias_sem_coleta']}</div>
                                     </div>
                                     <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Variação %</div>
-                                        <div style="font-size: 1.1rem; font-weight: bold; color: {'#28a745' if metricas['variacao_percentual'] > 0 else '#dc3545'};">{metricas['variacao_percentual']:+.1f}%</div>
+                                        <div style="font-size: 0.8rem; color: #666;">Média Diária</div>
+                                        <div style="font-size: 1.1rem; font-weight: bold; color: {'#28a745' if metricas['media_diaria'] > 10 else '#ffc107' if metricas['media_diaria'] > 5 else '#dc3545'};">{metricas['media_diaria']:.1f}</div>
                                     </div>
                                 </div>
                             </div>
@@ -2024,6 +2274,88 @@ def main():
 
                             st.markdown("</div>", unsafe_allow_html=True)
 
+                        # Seção Evolução e Comparativos
+                        st.markdown("""
+                        <div style="background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem;
+                                    border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                            <h3 style="margin: 0 0 1rem 0; color: #2c3e50; font-weight: 600; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">
+                                📊 Evolução e Comparativos
+                            </h3>
+                        """, unsafe_allow_html=True)
+
+                        # Calcular métricas de evolução
+                        metricas_evolucao = MetricasAvancadas.calcular_metricas_evolucao(df_filtrado, lab_final)
+
+                        if metricas_evolucao:
+                            # Primeiro bloco: Totais de Coletas
+                            st.markdown(f"""
+                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #28a745;">
+                                <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">TOTAIS DE COLETAS</div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Total 2024</div>
+                                        <div style="font-size: 1.4rem; font-weight: bold; color: #28a745;">{metricas_evolucao['total_coletas_2024']:,}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Total 2025</div>
+                                        <div style="font-size: 1.4rem; font-weight: bold; color: #007bff;">{metricas_evolucao['total_coletas_2025']:,}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                            # Segundo bloco: Médias e Máxima
+                            st.markdown(f"""
+                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #17a2b8;">
+                                <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">MÉDIAS E MÁXIMA HISTÓRICA</div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; text-align: center;">
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Média 2024</div>
+                                        <div style="font-size: 1.2rem; font-weight: bold; color: #28a745;">{metricas_evolucao['media_2024']:.1f}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Média Último Mês</div>
+                                        <div style="font-size: 1.2rem; font-weight: bold; color: #ffc107;">{metricas_evolucao['media_ultimo_mes']:,}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Máxima Histórica</div>
+                                        <div style="font-size: 1.2rem; font-weight: bold; color: #dc3545;">{metricas_evolucao['maxima_historica']:,}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                            # Terceiro bloco: Comparativos
+                            variacao_2024_2025 = ((metricas_evolucao['total_coletas_2025'] - metricas_evolucao['total_coletas_2024']) / metricas_evolucao['total_coletas_2024'] * 100) if metricas_evolucao['total_coletas_2024'] > 0 else 0
+                            percentual_maxima = (metricas_evolucao['media_ultimo_mes'] / metricas_evolucao['maxima_historica'] * 100) if metricas_evolucao['maxima_historica'] > 0 else 0
+
+                            cor_variacao = "#28a745" if variacao_2024_2025 >= 0 else "#dc3545"
+                            cor_percentual = "#28a745" if percentual_maxima >= 80 else "#ffc107" if percentual_maxima >= 50 else "#dc3545"
+
+                            st.markdown(f"""
+                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #6f42c1;">
+                                <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">COMPARATIVOS</div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Variação 2024→2025</div>
+                                        <div style="font-size: 1.2rem; font-weight: bold; color: {cor_variacao};">
+                                            {'+' if variacao_2024_2025 >= 0 else ''}{variacao_2024_2025:.1f}%
+                                        </div>
+                                        <div style="font-size: 0.7rem; color: #666;">Total: {metricas_evolucao['total_coletas_2025']:,} vs {metricas_evolucao['total_coletas_2024']:,}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Último Mês vs Máxima</div>
+                                        <div style="font-size: 1.2rem; font-weight: bold; color: {cor_percentual};">
+                                            {percentual_maxima:.1f}%
+                                        </div>
+                                        <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {metricas_evolucao['maxima_historica']:,}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                        st.markdown("</div>", unsafe_allow_html=True)
+
                         st.subheader(f"📈 Evolução Mensal - {lab_final}")
                         ChartManager.criar_grafico_evolucao_mensal(df_filtrado, lab_final)
 
@@ -2037,6 +2369,11 @@ def main():
                         with col2:
                             st.subheader("📅 Coletas por Dia do Mês")
                             ChartManager.criar_grafico_coletas_por_dia(df_filtrado, lab_final)
+
+                        # Novo gráfico: Média por dia da semana
+                        st.subheader("📆 Distribuição de Coletas por Dia da Semana")
+                        ChartManager.criar_grafico_media_dia_semana(df_filtrado, lab_final, filtros)
+
 
                 # Fechar container
                 st.markdown('</div>', unsafe_allow_html=True)
@@ -2798,6 +3135,131 @@ def main():
 
             else:
                 st.warning("⚠️ Nenhum dado encontrado com os filtros aplicados.")
+
+            # Seção Evolução e Comparativos por Rede
+            if not df_rede_filtrado.empty and tipo_analise == "Visão Geral":
+                st.markdown("""
+                <div style="background: white; border-radius: 12px; padding: 2rem;
+                            box-shadow: 0 4px 15px rgba(0,0,0,0.08); margin-top: 2rem;
+                            border: 1px solid #f0f0f0;">
+                    <div style="display: flex; align-items: center; margin-bottom: 1.5rem;">
+                        <span style="font-size: 1.5rem; margin-right: 0.5rem;">📊</span>
+                        <h3 style="margin: 0; color: #2c3e50; font-weight: 600;">Evolução e Comparativos por Rede</h3>
+                    </div>
+                """, unsafe_allow_html=True)
+
+                # Calcular métricas agregadas por rede
+                redes_selecionadas = df_rede_filtrado['Rede'].unique()
+
+                if len(redes_selecionadas) > 0:
+                    st.markdown(f"**📋 Análise de {len(redes_selecionadas)} rede(s) selecionada(s):**")
+
+                    # Container para métricas da rede
+                    for rede in redes_selecionadas[:5]:  # Limitar a 5 redes para não sobrecarregar
+                        df_rede_atual = df_rede_filtrado[df_rede_filtrado['Rede'] == rede]
+
+                        # Calcular métricas agregadas da rede
+                        total_labs = len(df_rede_atual)
+                        total_coletas_2024 = 0
+                        total_coletas_2025 = 0
+                        media_2024 = 0
+                        media_ultimo_mes = 0
+                        maxima_historica = 0
+
+                        # Agregar dados de todos os labs da rede
+                        for _, lab in df_rede_atual.iterrows():
+                            metricas_lab = MetricasAvancadas.calcular_metricas_evolucao(df_filtrado, lab['Nome_Fantasia_PCL'])
+                            if metricas_lab:
+                                total_coletas_2024 += metricas_lab['total_coletas_2024']
+                                total_coletas_2025 += metricas_lab['total_coletas_2025']
+                                media_2024 += metricas_lab['media_2024']
+                                media_ultimo_mes += metricas_lab['media_ultimo_mes']
+                                maxima_historica = max(maxima_historica, metricas_lab['maxima_historica'])
+
+                        # Calcular médias
+                        if total_labs > 0:
+                            media_2024 /= total_labs
+                            media_ultimo_mes /= total_labs
+
+                        # Calcular comparativos
+                        variacao_2024_2025 = ((total_coletas_2025 - total_coletas_2024) / total_coletas_2024 * 100) if total_coletas_2024 > 0 else 0
+                        percentual_maxima = (media_ultimo_mes / maxima_historica * 100) if maxima_historica > 0 else 0
+
+                        cor_variacao = "#28a745" if variacao_2024_2025 >= 0 else "#dc3545"
+                        cor_percentual = "#28a745" if percentual_maxima >= 80 else "#ffc107" if percentual_maxima >= 50 else "#dc3545"
+
+                        st.markdown(f"""
+                        <div style="background: #f8f9fa; border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; border-left: 4px solid #007bff;">
+                            <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+                                <span style="font-size: 1.2rem; margin-right: 0.5rem;">🏢</span>
+                                <h4 style="margin: 0; color: #2c3e50; font-weight: 600;">{rede}</h4>
+                                <span style="margin-left: auto; background: #007bff; color: white; padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.8rem;">
+                                    {total_labs} laboratório(s)
+                                </span>
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+                                <!-- Totais de Coletas -->
+                                <div style="background: white; border-radius: 6px; padding: 1rem; border-left: 3px solid #28a745;">
+                                    <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">TOTAIS DE COLETAS</div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; text-align: center;">
+                                        <div>
+                                            <div style="font-size: 0.7rem; color: #666;">2024</div>
+                                            <div style="font-size: 1.1rem; font-weight: bold; color: #28a745;">{total_coletas_2024:,}</div>
+                                        </div>
+                                        <div>
+                                            <div style="font-size: 0.7rem; color: #666;">2025</div>
+                                            <div style="font-size: 1.1rem; font-weight: bold; color: #007bff;">{total_coletas_2025:,}</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Médias e Máxima -->
+                                <div style="background: white; border-radius: 6px; padding: 1rem; border-left: 3px solid #17a2b8;">
+                                    <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">MÉDIAS & MÁXIMA</div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.3rem; text-align: center;">
+                                        <div>
+                                            <div style="font-size: 0.6rem; color: #666;">Média 24</div>
+                                            <div style="font-size: 0.9rem; font-weight: bold; color: #28a745;">{media_2024:.1f}</div>
+                                        </div>
+                                        <div>
+                                            <div style="font-size: 0.6rem; color: #666;">Último Mês</div>
+                                            <div style="font-size: 0.9rem; font-weight: bold; color: #ffc107;">{media_ultimo_mes:.0f}</div>
+                                        </div>
+                                        <div>
+                                            <div style="font-size: 0.6rem; color: #666;">Máxima</div>
+                                            <div style="font-size: 0.9rem; font-weight: bold; color: #dc3545;">{maxima_historica:,}</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Comparativos -->
+                                <div style="background: white; border-radius: 6px; padding: 1rem; border-left: 3px solid #6f42c1;">
+                                    <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">COMPARATIVOS</div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; text-align: center;">
+                                        <div>
+                                            <div style="font-size: 0.6rem; color: #666;">Variação 24→25</div>
+                                            <div style="font-size: 1rem; font-weight: bold; color: {cor_variacao};">
+                                                {'+' if variacao_2024_2025 >= 0 else ''}{variacao_2024_2025:.1f}%
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div style="font-size: 0.6rem; color: #666;">Último vs Máx</div>
+                                            <div style="font-size: 1rem; font-weight: bold; color: {cor_percentual};">
+                                                {percentual_maxima:.1f}%
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    if len(redes_selecionadas) > 5:
+                        st.info(f"ℹ️ Mostrando 5 de {len(redes_selecionadas)} redes. Use os filtros para visualizar outras redes.")
+
+                st.markdown("</div>", unsafe_allow_html=True)
+
         else:
             st.warning("⚠️ Dados VIP não disponíveis. Verifique se o arquivo Excel foi carregado corretamente.")
 

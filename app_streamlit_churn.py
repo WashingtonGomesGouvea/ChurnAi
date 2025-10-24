@@ -1,5 +1,5 @@
 """
-Sistema de Análise de Churn PCLs v2.0
+Sistema Syntox Churn
 Dashboard moderno e profissional para análise de retenção de laboratórios
 """
 
@@ -164,12 +164,12 @@ def baixar_sharepoint(arquivo_remoto: str = None, force: bool = False) -> Option
 
 # Configuração da página
 st.set_page_config(
-    page_title="📊 Churn PCLs v2.0",
+    page_title="📊 Syntox Churn",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
-        'About': "Dashboard de Análise de Churn v2.0 - Sistema profissional para monitoramento de retenção de PCLs"
+        'About': "Syntox Churn - Sistema profissional para monitoramento de retenção de PCLs"
     }
 )
 
@@ -1550,7 +1550,7 @@ class UIManager:
         """Renderiza o cabeçalho principal."""
         st.markdown("""
         <div class="main-header">
-            <h1>📊 Churn PCLs v2.0</h1>
+            <h1>📊 Syntox Churn</h1>
             <p>Dashboard profissional para análise de retenção de laboratórios</p>
         </div>
         """, unsafe_allow_html=True)
@@ -2129,7 +2129,8 @@ def main():
     # Botão de refresh
     if st.sidebar.button("🔄 Atualizar Dados", help="Limpar cache e recarregar dados"):
         st.cache_data.clear()
-        st.rerun()
+        # Remover st.rerun() para evitar refresh indesejado
+        st.success("✅ Cache limpo! Os dados serão recarregados automaticamente.")
 
     # Seção de relatórios na sidebar
     st.sidebar.markdown("---")
@@ -2762,7 +2763,8 @@ def main():
                 # Botão para limpar filtro automático
                 if st.button("🔄 Mostrar Todas as Redes", key="limpar_filtro_auto", help="Mostrar laboratórios de todas as redes"):
                     st.session_state['rede_lab_pesquisado'] = None
-                    st.rerun()
+                    # Remover st.rerun() para evitar refresh indesejado
+                    st.success("✅ Filtro de rede limpo! Todas as redes serão exibidas.")
             else:
                 # Seleção manual de rede
                 rede_filtro = st.selectbox(
@@ -4276,7 +4278,7 @@ def main():
 
     st.markdown("""
     <div class="footer">
-        <p>📊 <strong>Churn PCLs v2.0</strong> - Dashboard profissional de análise de retenção de laboratórios</p>
+        <p>📊 <strong>Syntox Churn</strong> - Dashboard profissional de análise de retenção de laboratórios</p>
         <p>Desenvolvido com ❤️ para otimizar a gestão de relacionamento com PCLs</p>
     </div>
     """, unsafe_allow_html=True)

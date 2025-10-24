@@ -45,31 +45,48 @@ class MicrosoftAuth:
     def _get_redirect_uri(self) -> str:
         """Determinar URI de redirecionamento baseado no ambiente"""
         try:
-            # Verificar se estamos em produção real (streamlit.app)
-            host = os.getenv("STREAMLIT_SERVER_HEADLESS", "false").lower() == "true"
-            base_url = os.getenv("STREAMLIT_SERVER_BASE_URL_PATH", "")
-            server_name = os.getenv("STREAMLIT_SERVER_NAME", "")
-            is_production = host or "streamlit.app" in base_url or "streamlit.app" in server_name
+            # Estratégia simplificada: detectar se estamos no Streamlit Cloud
+            # No Streamlit Cloud, várias variáveis específicas estão presentes
+            streamlit_env_vars = [
+                "STREAMLIT_RUNTIME_VERSION",
+                "IS_STREAMLIT_CLOUD",
+                "STREAMLIT_SERVER_BASE_URL_PATH"
+            ]
 
-            logger.info(f"Ambiente detectado - HOST: {host}, BASE_URL: {base_url}, SERVER_NAME: {server_name}, IS_PROD: {is_production}")
+            # Verificar se pelo menos uma variável específica do Streamlit Cloud existe
+            is_streamlit_cloud = any(os.getenv(var) for var in streamlit_env_vars)
+
+            # Verificar se o hostname sugere produção
+            hostname = os.getenv("HOSTNAME", "")
+            is_production_hostname = "streamlit" in hostname.lower() or hostname.startswith("pod-")
+
+            # Verificar se estamos rodando em um path que sugere produção
+            base_url_path = os.getenv("STREAMLIT_SERVER_BASE_URL_PATH", "")
+            is_production_url = "streamlit.app" in base_url_path
+
+            # Combinação final: se qualquer indicador de produção for verdadeiro
+            is_production = is_streamlit_cloud or is_production_hostname or is_production_url
+
+            # Log detalhado
+            logger.info(f"Detecção produção - Cloud: {is_streamlit_cloud}, Hostname: {hostname}, URL: {base_url_path}")
+            logger.info(f"IS_PRODUCTION: {is_production}")
 
             if is_production:
-                # Em produção real, usar URI de produção
-                logger.info("Ambiente de produção detectado - usando redirect_uri_prod")
+                # Em produção (Streamlit Cloud), usar URI de produção
+                logger.info("Ambiente de PRODUÇÃO detectado - usando redirect_uri_prod")
                 return self.redirect_uri_prod
             else:
-                # Em desenvolvimento local, tentar usar URI local se disponível
-                # Como fallback, usar produção (pode não funcionar completamente)
-                logger.warning("Ambiente de desenvolvimento detectado")
+                # Em desenvolvimento local, usar URI local se disponível
+                logger.warning("Ambiente de DESENVOLVIMENTO detectado")
                 logger.warning("IMPORTANTE: Adicione 'http://localhost:8501' como Redirect URI no Azure AD")
-                logger.warning("Enquanto isso, usando redirect_uri_prod como fallback")
 
-                # Verificar se temos URI local configurado
+                # Usar URI local para desenvolvimento
                 if hasattr(self, 'redirect_uri_local') and self.redirect_uri_local:
-                    logger.info(f"Tentando usar URI local: {self.redirect_uri_local}")
+                    logger.info(f"Usando URI local: {self.redirect_uri_local}")
                     return self.redirect_uri_local
 
-                # Fallback para produção
+                # Fallback para produção (não funcionará completamente, mas pelo menos tentará)
+                logger.warning("FALLBACK: usando redirect_uri_prod (adicione localhost no Azure AD)")
                 return self.redirect_uri_prod
 
         except Exception as e:

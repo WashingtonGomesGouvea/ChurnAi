@@ -21,6 +21,17 @@ from config_churn import *
 # Importar sistema de autenticação Microsoft
 from auth_microsoft import MicrosoftAuth, AuthManager, create_login_page, create_user_header
 
+# Debug de ambiente em produção
+try:
+    hostname = os.getenv("HOSTNAME", "")
+    if "streamlit" in hostname.lower() or hostname.startswith("pod-"):
+        print("=== DEBUG PRODUÇÃO - INICIANDO ===")
+        import debug_env
+        debug_env.debug_environment()
+        print("=== DEBUG PRODUÇÃO - FINALIZADO ===")
+except ImportError:
+    pass
+
 # ============================================
 # FUNÇÕES DE INTEGRAÇÃO SHAREPOINT/ONEDRIVE
 # ============================================

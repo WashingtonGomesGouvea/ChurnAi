@@ -45,13 +45,36 @@ class MicrosoftAuth:
     def _get_redirect_uri(self) -> str:
         """Determinar URI de redirecionamento baseado no ambiente"""
         try:
-            # Verificar se estamos em produção
+            # Verificar se estamos em produção real (streamlit.app)
             host = os.getenv("STREAMLIT_SERVER_HEADLESS", "false").lower() == "true"
-            if host or "streamlit.app" in os.getenv("STREAMLIT_SERVER_BASE_URL_PATH", ""):
+            base_url = os.getenv("STREAMLIT_SERVER_BASE_URL_PATH", "")
+            server_name = os.getenv("STREAMLIT_SERVER_NAME", "")
+            is_production = host or "streamlit.app" in base_url or "streamlit.app" in server_name
+
+            logger.info(f"Ambiente detectado - HOST: {host}, BASE_URL: {base_url}, SERVER_NAME: {server_name}, IS_PROD: {is_production}")
+
+            if is_production:
+                # Em produção real, usar URI de produção
+                logger.info("Ambiente de produção detectado - usando redirect_uri_prod")
                 return self.redirect_uri_prod
-            return self.redirect_uri_local
-        except:
-            return self.redirect_uri_local
+            else:
+                # Em desenvolvimento local, tentar usar URI local se disponível
+                # Como fallback, usar produção (pode não funcionar completamente)
+                logger.warning("Ambiente de desenvolvimento detectado")
+                logger.warning("IMPORTANTE: Adicione 'http://localhost:8501' como Redirect URI no Azure AD")
+                logger.warning("Enquanto isso, usando redirect_uri_prod como fallback")
+
+                # Verificar se temos URI local configurado
+                if hasattr(self, 'redirect_uri_local') and self.redirect_uri_local:
+                    logger.info(f"Tentando usar URI local: {self.redirect_uri_local}")
+                    return self.redirect_uri_local
+
+                # Fallback para produção
+                return self.redirect_uri_prod
+
+        except Exception as e:
+            logger.error(f"Erro ao determinar redirect URI: {e}")
+            return self.redirect_uri_prod
 
     def get_login_url(self) -> str:
         """Gera URL de autenticação Microsoft"""

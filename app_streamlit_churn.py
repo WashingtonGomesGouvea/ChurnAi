@@ -553,17 +553,23 @@ class DataManager:
                     encoding='utf-8-sig'
                 )
                 
-                # Verificar se tem coluna CNPJ
+                # Verificar se tem coluna CNPJ ou CNPJ_PCL
                 if 'CNPJ' in df_vip.columns:
-                    # Ler CNPJ como string para preservar zeros à esquerda
-                    df_vip['CNPJ'] = df_vip['CNPJ'].astype(str)
-                    df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
-                    st.success(f"✅ Dados VIP carregados: {len(df_vip)} registros")
-                    return df_vip
+                    coluna_cnpj = 'CNPJ'
+                elif 'CNPJ_PCL' in df_vip.columns:
+                    coluna_cnpj = 'CNPJ_PCL'
+                    # Renomear para CNPJ para compatibilidade
+                    df_vip['CNPJ'] = df_vip['CNPJ_PCL']
                 else:
-                    st.warning("⚠️ Coluna 'CNPJ' não encontrada no arquivo VIP. Colunas disponíveis:")
+                    st.warning("⚠️ Coluna 'CNPJ' ou 'CNPJ_PCL' não encontrada no arquivo VIP. Colunas disponíveis:")
                     st.write(df_vip.columns.tolist())
                     return None
+                
+                # Ler CNPJ como string para preservar zeros à esquerda
+                df_vip['CNPJ'] = df_vip['CNPJ'].astype(str)
+                df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
+                st.success(f"✅ Dados VIP carregados: {len(df_vip)} registros")
+                return df_vip
             
             # FALLBACK: Tentar múltiplos caminhos locais
             caminhos_possiveis = [
@@ -1838,23 +1844,35 @@ class AnaliseInteligente:
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            labs_criticos = len(df[df['Score_Risco'] > 80])
-            st.metric("🚨 Labs Críticos", labs_criticos, 
-                     delta=f"{labs_criticos/len(df)*100:.1f}%" if len(df) > 0 else "0%")
+            if 'Score_Risco' in df.columns:
+                labs_criticos = len(df[df['Score_Risco'] > 80])
+                st.metric("🚨 Labs Críticos", labs_criticos, 
+                         delta=f"{labs_criticos/len(df)*100:.1f}%" if len(df) > 0 else "0%")
+            else:
+                st.metric("🚨 Labs Críticos", "N/A", delta="Coluna não encontrada")
         
         with col2:
-            labs_crescimento = len(df[df['Tendencia_Volume'] == 'Crescimento'])
-            st.metric("📈 Labs em Crescimento", labs_crescimento,
-                     delta=f"{labs_crescimento/len(df)*100:.1f}%" if len(df) > 0 else "0%")
+            if 'Tendencia_Volume' in df.columns:
+                labs_crescimento = len(df[df['Tendencia_Volume'] == 'Crescimento'])
+                st.metric("📈 Labs em Crescimento", labs_crescimento,
+                         delta=f"{labs_crescimento/len(df)*100:.1f}%" if len(df) > 0 else "0%")
+            else:
+                st.metric("📈 Labs em Crescimento", "N/A", delta="Coluna não encontrada")
         
         with col3:
-            score_medio = df['Score_Risco'].mean() if 'Score_Risco' in df.columns else 0
-            st.metric("📊 Score Médio", f"{score_medio:.1f}/100")
+            if 'Score_Risco' in df.columns:
+                score_medio = df['Score_Risco'].mean()
+                st.metric("📊 Score Médio", f"{score_medio:.1f}/100")
+            else:
+                st.metric("📊 Score Médio", "N/A", delta="Coluna não encontrada")
         
         with col4:
-            labs_estaveis = len(df[df['Tendencia_Volume'] == 'Estável'])
-            st.metric("⚖️ Labs Estáveis", labs_estaveis,
-                     delta=f"{labs_estaveis/len(df)*100:.1f}%" if len(df) > 0 else "0%")
+            if 'Tendencia_Volume' in df.columns:
+                labs_estaveis = len(df[df['Tendencia_Volume'] == 'Estável'])
+                st.metric("⚖️ Labs Estáveis", labs_estaveis,
+                         delta=f"{labs_estaveis/len(df)*100:.1f}%" if len(df) > 0 else "0%")
+            else:
+                st.metric("⚖️ Labs Estáveis", "N/A", delta="Coluna não encontrada")
         
         # Gráfico de distribuição de risco
         if 'Score_Risco' in df.columns:
@@ -1867,7 +1885,7 @@ class AnaliseInteligente:
         
         # Top insights automáticos
         st.subheader("💡 Insights Automáticos")
-        if 'Insights_Automaticos' in df.columns:
+        if 'Insights_Automaticos' in df.columns and 'Score_Risco' in df.columns:
             insights_df = df[['Nome_Fantasia_PCL', 'Score_Risco', 'Insights_Automaticos']].copy()
             insights_df = insights_df[insights_df['Score_Risco'] > 50].sort_values('Score_Risco', ascending=False)
             
@@ -1875,6 +1893,8 @@ class AnaliseInteligente:
                 st.dataframe(insights_df, use_container_width=True)
             else:
                 st.success("✅ Nenhum laboratório com insights críticos!")
+        else:
+            st.info("ℹ️ Colunas 'Score_Risco' ou 'Insights_Automaticos' não encontradas nos dados.")
 
 class ReportManager:
     """Gerenciador de geração de relatórios."""

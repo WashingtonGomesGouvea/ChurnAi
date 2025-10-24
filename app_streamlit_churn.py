@@ -1061,8 +1061,9 @@ class ChartManager:
 
         fig.update_traces(
             textposition='inside',
-            textinfo='percent+label',
-            hovertemplate='<b>%{label}</b><br>%{value} laboratórios<br>%{percent}'
+            textinfo='percent+label+value',
+            texttemplate='%{label}<br>%{value} labs<br>(%{percent})',
+            hovertemplate='<b>%{label}</b><br>%{value} laboratórios<br>%{percent}<extra></extra>'
         )
 
         fig.update_layout(
@@ -1118,9 +1119,9 @@ class ChartManager:
         )
 
         fig.update_traces(
-            texttemplate='%{text:.0f}',
+            texttemplate='%{text:.0f} dias',
             textposition='outside',
-            hovertemplate='<b>%{y}</b><br>Dias sem coleta: %{x:.0f}<br>Status: %{marker.color}'
+            hovertemplate='<b>%{y}</b><br>Dias sem coleta: %{x:.0f}<br>Status: %{marker.color}<extra></extra>'
         )
 
         fig.update_layout(
@@ -1162,11 +1163,14 @@ class ChartManager:
                     y=medias_diarias,
                     title=f"📊 Média Diária por Mês - {lab_selecionado}",
                     color=medias_diarias,
-                    color_continuous_scale='Blues'
+                    color_continuous_scale='Blues',
+                    text=[f"{val:.0f}" for val in medias_diarias]
                 )
                 
                 fig.update_traces(
-                    hovertemplate='<b>Mês:</b> %{x}<br><b>Média Diária:</b> %{y:.1f} coletas<extra></extra>'
+                    texttemplate='%{text} coletas',
+                    textposition='outside',
+                    hovertemplate='<b>Mês:</b> %{x}<br><b>Média Diária:</b> %{y:.0f} coletas<extra></extra>'
                 )
                 
                 fig.update_layout(
@@ -1242,7 +1246,7 @@ class ChartManager:
                 )
                 
                 fig.update_traces(
-                    hovertemplate='<b>Dia:</b> %{x}<br><b>Mês:</b> %{legendgroup}<br><b>Coletas:</b> %{y:.1f}<extra></extra>'
+                    hovertemplate='<b>Dia:</b> %{x}<br><b>Mês:</b> %{legendgroup}<br><b>Coletas:</b> %{y:.0f}<extra></extra>'
                 )
                 
                 fig.update_layout(
@@ -1352,17 +1356,17 @@ class ChartManager:
                 df_semana,
                 x='Dia_Semana',
                 y='Coletas_Estimadas',
-                title=f"📅 Distribuição Estimada de Coletas por Dia da Semana<br><sup>{lab_selecionado} | Baseado em: {periodo_texto} | Média mensal: {media_mensal:.1f} coletas</sup>",
+                title=f"📅 Distribuição Estimada de Coletas por Dia da Semana<br><sup>{lab_selecionado} | Baseado em: {periodo_texto} | Média mensal: {media_mensal:.0f} coletas</sup>",
                 color='Dia_Semana',
                 color_discrete_map=cores_dias,
                 text='Coletas_Estimadas'
             )
 
             fig.update_traces(
-                texttemplate='%{text:.1f}<br>(%{customdata:.1f}%)',
+                texttemplate='%{text:.0f} coletas<br>(%{customdata:.0f}%)',
                 textposition='outside',
                 customdata=df_semana['Percentual'],
-                hovertemplate='<b>%{x}</b><br>Coletas: %{y:.1f}<br>Percentual: %{customdata:.1f}% da semana<extra></extra>'
+                hovertemplate='<b>%{x}</b><br>Coletas: %{y:.0f}<br>Percentual: %{customdata:.0f}% da semana<extra></extra>'
             )
 
             fig.update_layout(
@@ -1378,7 +1382,7 @@ class ChartManager:
                 y=media_diaria,
                 line_dash="dash",
                 line_color="red",
-                annotation_text=f"Média diária: {media_diaria:.1f}",
+                annotation_text=f"Média diária: {media_diaria:.0f} coletas",
                 annotation_position="top right"
             )
 
@@ -1391,14 +1395,14 @@ class ChartManager:
                 st.metric(
                     "📈 Dia Mais Forte",
                     df_semana.loc[df_semana['Coletas_Estimadas'].idxmax(), 'Dia_Semana'],
-                    f"{df_semana['Coletas_Estimadas'].max():.1f} coletas"
+                    f"{df_semana['Coletas_Estimadas'].max():.0f} coletas"
                 )
 
             with col2:
                 st.metric(
                     "📉 Dia Mais Fraco",
                     df_semana.loc[df_semana['Coletas_Estimadas'].idxmin(), 'Dia_Semana'],
-                    f"{df_semana['Coletas_Estimadas'].min():.1f} coletas"
+                    f"{df_semana['Coletas_Estimadas'].min():.0f} coletas"
                 )
 
             with col3:
@@ -1414,12 +1418,12 @@ class ChartManager:
                 st.markdown(f"""
                 **Como é calculada a distribuição semanal:**
 
-                1. **Base de dados**: Média mensal de {media_mensal:.1f} coletas ({periodo_texto})
+                1. **Base de dados**: Média mensal de {media_mensal:.0f} coletas ({periodo_texto})
                 2. **Distribuição padrão**: Baseada em padrões típicos de coleta de sangue
                    - **Segunda-Quinta**: Dias de maior movimento (16-18% cada)
                    - **Sexta**: Dia intermediário (15%)
                    - **Finais de semana**: Menor movimento devido a feriados e menor fluxo
-                3. **Média diária**: ~{media_diaria:.1f} coletas (aproximada)
+                3. **Média diária**: ~{media_diaria:.0f} coletas (aproximada)
 
                 **💡 Insight**: Esta análise ajuda a identificar:
                 - Dias com maior potencial de coleta

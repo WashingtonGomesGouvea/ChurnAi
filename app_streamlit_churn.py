@@ -18,6 +18,131 @@ warnings.filterwarnings('ignore')
 # Importar configurações
 from config_churn import *
 
+# ============================================
+# FUNÇÕES DE INTEGRAÇÃO SHAREPOINT/ONEDRIVE
+# ============================================
+
+def _get_graph_config() -> Optional[Dict[str, Any]]:
+    """Extrai configurações do Graph API dos secrets do Streamlit."""
+    try:
+        graph = st.secrets.get("graph", {})
+        files = st.secrets.get("files", {})
+        onedrive = st.secrets.get("onedrive", {})
+        if not graph:
+            return None
+        return {
+            "tenant_id": graph.get("tenant_id", ""),
+            "client_id": graph.get("client_id", ""),
+            "client_secret": graph.get("client_secret", ""),
+            "hostname": graph.get("hostname", ""),
+            "site_path": graph.get("site_path", ""),
+            "library_name": graph.get("library_name", "Documents"),
+            "user_upn": onedrive.get("user_upn", ""),
+            "arquivo": files.get("arquivo", ""),
+        }
+    except Exception:
+        return None
+
+def _is_valid_csv(path: str) -> bool:
+    """Verifica se arquivo CSV é válido."""
+    try:
+        if not os.path.exists(path):
+            return False
+        df = pd.read_csv(path, nrows=5)
+        return len(df.columns) > 0
+    except:
+        return False
+
+def _is_valid_parquet(path: str) -> bool:
+    """Verifica se arquivo Parquet é válido."""
+    try:
+        if not os.path.exists(path):
+            return False
+        df = pd.read_parquet(path)
+        return len(df.columns) > 0
+    except:
+        return False
+
+def should_download_sharepoint(force: bool = False) -> bool:
+    """Verifica se deve baixar arquivo do SharePoint."""
+    if force:
+        return True
+    
+    # Verificar se existe arquivo local recente (< 5 minutos)
+    arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
+    if os.path.exists(arquivo_local):
+        import time
+        idade_arquivo = time.time() - os.path.getmtime(arquivo_local)
+        if idade_arquivo < CACHE_TTL:  # CACHE_TTL definido em config_churn.py
+            return False
+    
+    return True
+
+def baixar_sharepoint(arquivo_remoto: str = None, force: bool = False) -> Optional[str]:
+    """
+    Baixa arquivo do OneDrive/SharePoint via Microsoft Graph.
+    
+    Args:
+        arquivo_remoto: Caminho do arquivo no OneDrive (usa config padrão se None)
+        force: Força download mesmo se cache válido
+    
+    Returns:
+        Caminho local do arquivo baixado ou None se falhar
+    """
+    cfg = _get_graph_config()
+    
+    # Sem configuração Graph, retornar arquivo local se existir
+    if not cfg or not (cfg.get("tenant_id") and cfg.get("client_id") and cfg.get("client_secret")):
+        arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
+        if os.path.exists(arquivo_local):
+            return arquivo_local
+        return None
+    
+    # Verificar se precisa baixar
+    if not should_download_sharepoint(force=force):
+        arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
+        if os.path.exists(arquivo_local):
+            return arquivo_local
+    
+    try:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        
+        # Usar ChurnSPConnector
+        from churn_sp_connector import ChurnSPConnector
+        
+        connector = ChurnSPConnector(config=st.secrets)
+        
+        # Determinar arquivo remoto
+        if arquivo_remoto is None:
+            arquivo_remoto = cfg.get("arquivo", "Data Analysis/Churn PCLs/churn_analysis_latest.csv")
+        
+        # Baixar arquivo
+        content = connector.download(arquivo_remoto)
+        
+        # Salvar localmente
+        base_name = os.path.basename(arquivo_remoto)
+        if not base_name:
+            base_name = "churn_analysis_latest.csv"
+        
+        local_path = os.path.join(OUTPUT_DIR, base_name)
+        
+        with open(local_path, "wb") as f:
+            f.write(content)
+        
+        # Validar arquivo baixado
+        if _is_valid_csv(local_path) or _is_valid_parquet(local_path):
+            return local_path
+        
+        return None
+        
+    except Exception as e:
+        st.warning(f"⚠️ Não foi possível baixar do SharePoint: {e}")
+        # Tentar usar arquivo local se existir
+        arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
+        if os.path.exists(arquivo_local):
+            return arquivo_local
+        return None
+
 
 # Configuração da página
 st.set_page_config(
@@ -313,6 +438,23 @@ class DataManager:
     def carregar_dados_churn() -> Optional[pd.DataFrame]:
         """Carrega dados de análise de churn com cache inteligente."""
         try:
+            # PRIMEIRO: Tentar baixar do SharePoint/OneDrive
+            arquivo_sharepoint = baixar_sharepoint()
+            
+            if arquivo_sharepoint and os.path.exists(arquivo_sharepoint):
+                # Tentar ler como CSV primeiro
+                try:
+                    df = pd.read_csv(arquivo_sharepoint, encoding=ENCODING, low_memory=False)
+                    return df
+                except Exception:
+                    # Tentar como Parquet
+                    try:
+                        df = pd.read_parquet(arquivo_sharepoint, engine='pyarrow')
+                        return df
+                    except Exception:
+                        pass
+            
+            # FALLBACK: Tentar arquivos locais
             # Primeiro tenta CSV (mais comum)
             arquivo_csv = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
             if os.path.exists(arquivo_csv):
@@ -324,8 +466,9 @@ class DataManager:
             if os.path.exists(arquivo_path):
                 df = pd.read_parquet(arquivo_path, engine='pyarrow')
                 return df
-            else:
-                return None
+            
+            return None
+            
         except Exception as e:
             st.error(f"❌ Erro ao carregar dados: {e}")
             return None
@@ -350,6 +493,23 @@ class DataManager:
                 st.sidebar.write(f"✅ Cidade: {df['Cidade'].nunique()} valores únicos")
             else:
                 st.sidebar.write("❌ Campo 'Cidade' não encontrado")
+            
+            # Verificar Status_Risco
+            if 'Status_Risco' in df.columns:
+                st.sidebar.write(f"✅ Status_Risco: {df['Status_Risco'].nunique()} valores únicos")
+            else:
+                st.sidebar.write("❌ Campo 'Status_Risco' não encontrado")
+                # Mostrar colunas que podem ser Status_Risco
+                colunas_similares = [col for col in df.columns if 'status' in col.lower() or 'risco' in col.lower()]
+                if colunas_similares:
+                    st.sidebar.write(f"Colunas similares encontradas: {colunas_similares}")
+                else:
+                    st.sidebar.write("Nenhuma coluna similar encontrada")
+            
+            # Mostrar todas as colunas
+            st.sidebar.write("Todas as colunas:")
+            for i, col in enumerate(df.columns):
+                st.sidebar.write(f"{i+1}. {col}")
 
         # Garantir tipos de dados corretos
         if 'Data_Analise' in df.columns:
@@ -382,11 +542,34 @@ class DataManager:
     def carregar_dados_vip() -> Optional[pd.DataFrame]:
         """Carrega dados VIP do CSV normalizado com cache."""
         try:
-            # Tentar múltiplos caminhos possíveis para o CSV normalizado
+            # Tentar baixar matriz CS do SharePoint
+            arquivo_vip_remoto = "Data Analysis/Churn PCLs/matriz_cs_normalizada.csv"
+            arquivo_sharepoint = baixar_sharepoint(arquivo_remoto=arquivo_vip_remoto, force=False)
+            
+            if arquivo_sharepoint and os.path.exists(arquivo_sharepoint):
+                # Ler arquivo VIP
+                df_vip = pd.read_csv(
+                    arquivo_sharepoint,
+                    encoding='utf-8-sig'
+                )
+                
+                # Verificar se tem coluna CNPJ
+                if 'CNPJ' in df_vip.columns:
+                    # Ler CNPJ como string para preservar zeros à esquerda
+                    df_vip['CNPJ'] = df_vip['CNPJ'].astype(str)
+                    df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
+                    st.success(f"✅ Dados VIP carregados: {len(df_vip)} registros")
+                    return df_vip
+                else:
+                    st.warning("⚠️ Coluna 'CNPJ' não encontrada no arquivo VIP. Colunas disponíveis:")
+                    st.write(df_vip.columns.tolist())
+                    return None
+            
+            # FALLBACK: Tentar múltiplos caminhos locais
             caminhos_possiveis = [
-                VIP_CSV_FILE,  # Diretório atual
-                os.path.join(OUTPUT_DIR, VIP_CSV_FILE),  # Dentro do OUTPUT_DIR
-                os.path.join(os.path.dirname(OUTPUT_DIR), VIP_CSV_FILE),  # Pai do OUTPUT_DIR
+                VIP_CSV_FILE,
+                os.path.join(OUTPUT_DIR, VIP_CSV_FILE),
+                os.path.join(os.path.dirname(OUTPUT_DIR), VIP_CSV_FILE),
             ]
             
             arquivo_csv = None
@@ -680,11 +863,17 @@ class KPIManager:
         metrics.total_labs = len(df)
 
         # Distribuição por status de risco
-        status_counts = df['Status_Risco'].value_counts()
-        metrics.labs_alto_risco = status_counts.get('Alto', 0)
-        metrics.labs_medio_risco = status_counts.get('Médio', 0)
-        metrics.labs_baixo_risco = status_counts.get('Baixo', 0)
-        metrics.labs_inativos = status_counts.get('Inativo', 0)
+        if 'Status_Risco' in df.columns:
+            status_counts = df['Status_Risco'].value_counts()
+            metrics.labs_alto_risco = status_counts.get('Alto', 0)
+            metrics.labs_medio_risco = status_counts.get('Médio', 0)
+            metrics.labs_baixo_risco = status_counts.get('Baixo', 0)
+        else:
+            # Se não tiver Status_Risco, usar valores padrão
+            metrics.labs_alto_risco = 0
+            metrics.labs_medio_risco = 0
+            metrics.labs_baixo_risco = 0
+            metrics.labs_inativos = 0
 
         # Churn Rate (Alto + Médio risco)
         labs_churn = metrics.labs_alto_risco + metrics.labs_medio_risco
@@ -736,6 +925,10 @@ class ChartManager:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
 
+        if 'Status_Risco' not in df.columns:
+            st.warning("⚠️ Coluna 'Status_Risco' não encontrada nos dados.")
+            return
+            
         status_counts = df['Status_Risco'].value_counts()
 
         cores_map = {
@@ -774,7 +967,11 @@ class ChartManager:
             return
 
         # Filtrar apenas labs em risco (Alto, Médio, Inativo)
-        labs_risco = df[df['Status_Risco'].isin(['Alto', 'Médio', 'Inativo'])].copy()
+        if 'Status_Risco' in df.columns:
+            labs_risco = df[df['Status_Risco'].isin(['Alto', 'Médio', 'Inativo'])].copy()
+        else:
+            st.warning("⚠️ Coluna 'Status_Risco' não encontrada nos dados.")
+            return
         
         if labs_risco.empty:
             st.info("✅ Nenhum laboratório em risco encontrado!")
@@ -1888,7 +2085,11 @@ def main():
 
         # Expander com laboratórios em risco
         with st.expander("🔴 Laboratórios em Alto Risco", expanded=False):
-            labs_alto_risco = df_filtrado[df_filtrado['Status_Risco'] == 'Alto']
+            if 'Status_Risco' in df_filtrado.columns:
+                labs_alto_risco = df_filtrado[df_filtrado['Status_Risco'] == 'Alto']
+            else:
+                st.warning("⚠️ Coluna 'Status_Risco' não encontrada nos dados. Verifique o arquivo CSV.")
+                labs_alto_risco = pd.DataFrame()
             if not labs_alto_risco.empty:
                 colunas_resumo = ['Nome_Fantasia_PCL', 'Estado', 'Representante_Nome',
                                  'Dias_Sem_Coleta', 'Motivo_Risco']

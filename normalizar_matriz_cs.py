@@ -68,19 +68,34 @@ class MatrizCSNormalizer:
         
     def normalizar_cnpj(self, cnpj: str) -> str:
         """
-        Normaliza CNPJ removendo pontuação.
+        Normaliza CNPJ removendo pontuação e garantindo 14 dígitos.
         
         Args:
             cnpj: CNPJ com ou sem formatação
             
         Returns:
-            CNPJ apenas com números
+            CNPJ apenas com números (14 dígitos, com zeros à esquerda se necessário)
         """
         if pd.isna(cnpj) or cnpj == '':
             return ''
         
+        # Converter numéricos para string sem decimais (evita sufixo '.0')
+        if isinstance(cnpj, (int, float)):
+            try:
+                cnpj = str(int(cnpj))
+            except Exception:
+                cnpj = str(cnpj)
+
         # Remove tudo exceto dígitos
         cnpj_limpo = ''.join(filter(str.isdigit, str(cnpj)))
+        
+        # Garantir que tenha exatamente 14 dígitos, preenchendo com zeros à esquerda se necessário
+        if len(cnpj_limpo) < 14:
+            cnpj_limpo = cnpj_limpo.zfill(14)
+        elif len(cnpj_limpo) > 14:
+            # Se tiver mais de 14 dígitos, pegar apenas os últimos 14
+            cnpj_limpo = cnpj_limpo[-14:]
+        
         return cnpj_limpo
     
     def normalizar_texto(self, texto: str) -> str:
@@ -193,7 +208,18 @@ class MatrizCSNormalizer:
         """
         try:
             logger.info(f"Carregando arquivo: {self.arquivo_excel}")
-            df = pd.read_excel(self.arquivo_excel, engine='openpyxl')
+            # Usar converters para CNPJ evitar leitura como float e perda de zeros à esquerda
+            df = pd.read_excel(
+                self.arquivo_excel,
+                engine='openpyxl',
+                converters={
+                    'CNPJ': lambda v: (
+                        '' if pd.isna(v) else (
+                            str(int(v)) if isinstance(v, (int, float)) else str(v).strip()
+                        )
+                    )
+                }
+            )
             logger.info(f"Dados carregados: {len(df)} registros, {len(df.columns)} colunas")
             return df
         except Exception as e:
@@ -277,8 +303,21 @@ class MatrizCSNormalizer:
             # Caminho do arquivo CSV
             caminho_csv = os.path.join(self.diretorio_saida, "matriz_cs_normalizada.csv")
             
-            # Salvar CSV
-            df.to_csv(caminho_csv, index=False, encoding='utf-8-sig')
+            # Garantir que CNPJ seja salvo como string para preservar zeros à esquerda
+            df_salvar = df.copy()
+            if 'CNPJ' in df_salvar.columns:
+                # Forçar string e preservar zeros à esquerda
+                df_salvar['CNPJ'] = df_salvar['CNPJ'].astype(str)
+            
+            # Salvar CSV forçando CNPJ como string com aspas
+            import csv
+            with open(caminho_csv, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f, quoting=csv.QUOTE_ALL)
+                # Escrever cabeçalho
+                writer.writerow(df_salvar.columns)
+                # Escrever dados
+                for _, row in df_salvar.iterrows():
+                    writer.writerow(row.values)
             logger.info(f"CSV normalizado salvo: {caminho_csv}")
             
             # Salvar relatório de normalizações

@@ -292,8 +292,20 @@ class DataManager:
         """Remove formatação do CNPJ (pontos, traços, barras)"""
         if pd.isna(cnpj) or cnpj == '':
             return ''
+        # Converter numéricos para string sem decimais (evita sufixo '.0')
+        if isinstance(cnpj, (int, float)):
+            try:
+                cnpj = str(int(cnpj))
+            except Exception:
+                cnpj = str(cnpj)
         # Remove tudo exceto dígitos
-        return ''.join(filter(str.isdigit, str(cnpj)))
+        cnpj_limpo = ''.join(filter(str.isdigit, str(cnpj)))
+        # Garantir 14 dígitos
+        if len(cnpj_limpo) < 14:
+            cnpj_limpo = cnpj_limpo.zfill(14)
+        elif len(cnpj_limpo) > 14:
+            cnpj_limpo = cnpj_limpo[-14:]
+        return cnpj_limpo
 
     @staticmethod
     @st.cache_data(ttl=CACHE_TTL)
@@ -382,8 +394,14 @@ class DataManager:
                     break
             
             if arquivo_csv:
-                df_vip = pd.read_csv(arquivo_csv, encoding='utf-8-sig')
-                # Normalizar CNPJ para match
+                # Ler CNPJ como string para preservar zeros à esquerda
+                df_vip = pd.read_csv(
+                    arquivo_csv,
+                    encoding='utf-8-sig',
+                    dtype={'CNPJ': 'string'}
+                )
+                # Garantir que CNPJ seja string e normalizar
+                df_vip['CNPJ'] = df_vip['CNPJ'].astype(str)
                 df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
                 st.success(f"✅ Dados VIP carregados: {len(df_vip)} registros")
                 return df_vip

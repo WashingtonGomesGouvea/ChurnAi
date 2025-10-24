@@ -63,19 +63,28 @@ def _is_valid_parquet(path: str) -> bool:
     except:
         return False
 
-def should_download_sharepoint(force: bool = False) -> bool:
+def should_download_sharepoint(arquivo_remoto: str = None, force: bool = False) -> bool:
     """Verifica se deve baixar arquivo do SharePoint."""
     if force:
         return True
-    
+
+    # Determinar qual arquivo verificar (baseado no arquivo remoto solicitado)
+    if arquivo_remoto:
+        base_name = os.path.basename(arquivo_remoto)
+        if base_name:
+            arquivo_local = os.path.join(OUTPUT_DIR, base_name)
+        else:
+            arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
+    else:
+        arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
+
     # Verificar se existe arquivo local recente (< 5 minutos)
-    arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
     if os.path.exists(arquivo_local):
         import time
         idade_arquivo = time.time() - os.path.getmtime(arquivo_local)
         if idade_arquivo < CACHE_TTL:  # CACHE_TTL definido em config_churn.py
             return False
-    
+
     return True
 
 def baixar_sharepoint(arquivo_remoto: str = None, force: bool = False) -> Optional[str]:
@@ -99,8 +108,17 @@ def baixar_sharepoint(arquivo_remoto: str = None, force: bool = False) -> Option
         return None
     
     # Verificar se precisa baixar
-    if not should_download_sharepoint(force=force):
-        arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
+    if not should_download_sharepoint(arquivo_remoto=arquivo_remoto, force=force):
+        # Retornar o arquivo local correspondente ao solicitado
+        if arquivo_remoto:
+            base_name = os.path.basename(arquivo_remoto)
+            if base_name:
+                arquivo_local = os.path.join(OUTPUT_DIR, base_name)
+            else:
+                arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
+        else:
+            arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
+
         if os.path.exists(arquivo_local):
             return arquivo_local
     
@@ -538,6 +556,81 @@ class DataManager:
         return df
 
     @staticmethod
+    @st.cache_data(ttl=CACHE_TTL)
+    def carregar_matriz_cs_normalizada() -> Optional[pd.DataFrame]:
+        """Carrega dados da matriz CS normalizada com cache inteligente."""
+        try:
+            # PRIMEIRO: Tentar baixar do SharePoint/OneDrive
+            arquivo_vip_remoto = "Data Analysis/Churn PCLs/matriz_cs_normalizada.csv"
+            arquivo_sharepoint = baixar_sharepoint(arquivo_remoto=arquivo_vip_remoto)
+
+            if arquivo_sharepoint and os.path.exists(arquivo_sharepoint):
+                # Tentar ler como CSV
+                try:
+                    df = pd.read_csv(arquivo_sharepoint, encoding='utf-8-sig', low_memory=False)
+                    # Verificar se tem coluna CNPJ ou CNPJ_PCL
+                    if 'CNPJ' in df.columns:
+                        coluna_cnpj = 'CNPJ'
+                    elif 'CNPJ_PCL' in df.columns:
+                        coluna_cnpj = 'CNPJ_PCL'
+                        # Renomear para CNPJ para compatibilidade
+                        df['CNPJ'] = df['CNPJ_PCL']
+                    else:
+                        st.warning("⚠️ Coluna 'CNPJ' ou 'CNPJ_PCL' não encontrada na matriz CS. Colunas disponíveis:")
+                        st.write(df.columns.tolist())
+                        return None
+
+                    # Ler CNPJ como string para preservar zeros à esquerda
+                    df['CNPJ'] = df['CNPJ'].astype(str)
+                    df['CNPJ_Normalizado'] = df['CNPJ'].apply(DataManager.normalizar_cnpj)
+                    st.success(f"✅ Matriz CS normalizada carregada: {len(df)} registros")
+                    return df
+                except Exception as e:
+                    st.warning(f"⚠️ Erro ao ler arquivo do SharePoint: {e}")
+
+            # FALLBACK: Tentar arquivos locais
+            caminhos_possiveis = [
+                VIP_CSV_FILE,
+                os.path.join(OUTPUT_DIR, VIP_CSV_FILE),
+                os.path.join(os.path.dirname(OUTPUT_DIR), VIP_CSV_FILE),
+            ]
+
+            arquivo_csv = None
+            for caminho in caminhos_possiveis:
+                if os.path.exists(caminho):
+                    arquivo_csv = caminho
+                    break
+
+            if arquivo_csv:
+                # Ler CNPJ como string para preservar zeros à esquerda
+                df = pd.read_csv(
+                    arquivo_csv,
+                    encoding='utf-8-sig',
+                    dtype={'CNPJ': 'string'},
+                    low_memory=False
+                )
+
+                # Verificar se tem coluna CNPJ ou CNPJ_PCL
+                if 'CNPJ' in df.columns:
+                    coluna_cnpj = 'CNPJ'
+                elif 'CNPJ_PCL' in df.columns:
+                    coluna_cnpj = 'CNPJ_PCL'
+                    # Renomear para CNPJ para compatibilidade
+                    df['CNPJ'] = df['CNPJ_PCL']
+
+                # Garantir que CNPJ seja string e normalizar
+                df['CNPJ'] = df['CNPJ'].astype(str)
+                df['CNPJ_Normalizado'] = df['CNPJ'].apply(DataManager.normalizar_cnpj)
+                st.success(f"✅ Matriz CS normalizada carregada (local): {len(df)} registros")
+                return df
+
+            return None
+
+        except Exception as e:
+            st.error(f"❌ Erro ao carregar matriz CS normalizada: {e}")
+            return None
+
+    @staticmethod
     @st.cache_data(ttl=VIP_CACHE_TTL)
     def carregar_dados_vip() -> Optional[pd.DataFrame]:
         """Carrega dados VIP do CSV normalizado com cache."""
@@ -545,14 +638,14 @@ class DataManager:
             # Tentar baixar matriz CS do SharePoint
             arquivo_vip_remoto = "Data Analysis/Churn PCLs/matriz_cs_normalizada.csv"
             arquivo_sharepoint = baixar_sharepoint(arquivo_remoto=arquivo_vip_remoto, force=False)
-            
+
             if arquivo_sharepoint and os.path.exists(arquivo_sharepoint):
                 # Ler arquivo VIP
                 df_vip = pd.read_csv(
                     arquivo_sharepoint,
                     encoding='utf-8-sig'
                 )
-                
+
                 # Verificar se tem coluna CNPJ ou CNPJ_PCL
                 if 'CNPJ' in df_vip.columns:
                     coluna_cnpj = 'CNPJ'
@@ -564,11 +657,11 @@ class DataManager:
                     st.warning("⚠️ Coluna 'CNPJ' ou 'CNPJ_PCL' não encontrada no arquivo VIP. Colunas disponíveis:")
                     st.write(df_vip.columns.tolist())
                     return None
-                
+
                 # Ler CNPJ como string para preservar zeros à esquerda
                 df_vip['CNPJ'] = df_vip['CNPJ'].astype(str)
                 df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
-                st.success(f"✅ Dados VIP carregados: {len(df_vip)} registros")
+                st.success(f"✅ Dados VIP carregados do SharePoint: {len(df_vip)} registros")
                 return df_vip
             
             # FALLBACK: Tentar múltiplos caminhos locais
@@ -577,13 +670,13 @@ class DataManager:
                 os.path.join(OUTPUT_DIR, VIP_CSV_FILE),
                 os.path.join(os.path.dirname(OUTPUT_DIR), VIP_CSV_FILE),
             ]
-            
+
             arquivo_csv = None
             for caminho in caminhos_possiveis:
                 if os.path.exists(caminho):
                     arquivo_csv = caminho
                     break
-            
+
             if arquivo_csv:
                 # Ler CNPJ como string para preservar zeros à esquerda
                 df_vip = pd.read_csv(
@@ -594,7 +687,7 @@ class DataManager:
                 # Garantir que CNPJ seja string e normalizar
                 df_vip['CNPJ'] = df_vip['CNPJ'].astype(str)
                 df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
-                st.success(f"✅ Dados VIP carregados: {len(df_vip)} registros")
+                st.success(f"✅ Dados VIP carregados (local): {len(df_vip)} registros")
                 return df_vip
             else:
                 st.warning(f"Arquivo VIP normalizado não encontrado em nenhum dos caminhos: {caminhos_possiveis}")
@@ -2629,12 +2722,25 @@ def main():
                 lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
             )
 
-            df_tabela = df_tabela.merge(
-                df_vip_tabela[['CNPJ_Normalizado', 'Rede', 'Ranking', 'Ranking Rede']],
-                on='CNPJ_Normalizado',
-                how='left'
-            )
-            mostrar_rede = True
+            # Verificar quais colunas VIP estão disponíveis
+            colunas_vip_disponiveis = ['CNPJ_Normalizado']
+            colunas_vip_opcionais = ['Rede', 'Ranking', 'Ranking Rede']
+
+            for col in colunas_vip_opcionais:
+                if col in df_vip_tabela.columns:
+                    colunas_vip_disponiveis.append(col)
+
+            # Fazer merge apenas com colunas disponíveis
+            if len(colunas_vip_disponiveis) > 1:  # Mais que apenas CNPJ_Normalizado
+                df_tabela = df_tabela.merge(
+                    df_vip_tabela[colunas_vip_disponiveis],
+                    on='CNPJ_Normalizado',
+                    how='left'
+                )
+                mostrar_rede = 'Rede' in colunas_vip_disponiveis
+            else:
+                # Se não há colunas VIP disponíveis, não fazer merge
+                mostrar_rede = False
 
         # Filtro por rede (simplificado)
         if mostrar_rede and 'Rede' in df_tabela.columns:

@@ -1194,14 +1194,31 @@ class ChartManager:
                 colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses]
                 valores_mensais = [lab[col] for col in colunas_meses]
                 
-                # Criar dados simulados para cada dia do mês
-                dias = list(range(1, 32))
+                # Obter data atual para limitar os dias
+                hoje = pd.Timestamp.today()
+                dia_atual = hoje.day
+                mes_atual = hoje.month
+                ano_atual = hoje.year
+                
+                # Mapear nomes dos meses para números
+                meses_ordem = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
                 dados_grafico = []
                 
                 for i, (mes, volume) in enumerate(zip(meses, valores_mensais)):
+                    # Determinar quantos dias considerar para este mês
+                    mes_numero = meses_ordem.index(mes) + 1
+                    
+                    # Se for o mês atual, considerar apenas até o dia atual
+                    if mes_numero == mes_atual and ano_atual == 2025:
+                        dias_limite = dia_atual
+                    else:
+                        # Para meses anteriores, considerar todos os dias
+                        dias_limite = 31
+                    
                     # Simular distribuição uniforme por dia (pode ser melhorado com dados reais)
-                    coletas_por_dia = volume / 30 if volume > 0 else 0
-                    for dia in dias:
+                    coletas_por_dia = volume / dias_limite if volume > 0 and dias_limite > 0 else 0
+                    
+                    for dia in range(1, dias_limite + 1):
                         # Adicionar alguma variação aleatória
                         import random
                         variacao = random.uniform(0.5, 1.5)

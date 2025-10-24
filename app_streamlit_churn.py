@@ -3033,15 +3033,60 @@ def main():
                 )
                 df_rede_filtrado = df_cats_filtro[df_cats_filtro['Categoria_Rede'].isin(categoria_selecionada)]
 
+            # ========================================
+            # CÁLCULO GLOBAL DE ESTATÍSTICAS DE REDES
+            # ========================================
+            # Calcular rede_stats para uso em todas as análises
+            rede_stats = pd.DataFrame()  # Inicializar vazio por segurança
+
+            if not df_rede_filtrado.empty and 'Rede' in df_rede_filtrado.columns:
+                # Remover duplicatas baseado no CNPJ antes da contagem
+                df_sem_duplicatas_rede = df_rede_filtrado.drop_duplicates(subset=['CNPJ_PCL'], keep='first')
+
+                # Estatísticas expandidas por rede
+                rede_stats = df_sem_duplicatas_rede.groupby('Rede').agg({
+                    'Nome_Fantasia_PCL': 'count',
+                    'Volume_Total_2025': ['sum', 'mean', 'std'],
+                    'Score_Risco': 'mean',
+                    'Estado': lambda x: x.mode().iloc[0] if not x.mode().empty else 'N/A',  # Estado mais comum
+                    'Cidade': 'nunique',  # Número de cidades únicas
+                    'Status_Risco': lambda x: (x.isin(['Inativo', 'Alto'])).sum(),  # Número de labs em churn (Inativo + Alto)
+                }).reset_index()
+
+                # Achatar colunas multi-índice
+                rede_stats.columns = ['Rede', 'Qtd_Labs', 'Volume_Total', 'Volume_Medio', 'Volume_Std',
+                                    'Score_Medio_Risco', 'Estado_Principal', 'Cidades_Unicas', 'Labs_Churn']
+
+                # Adicionar mais métricas calculadas
+                rede_stats['Taxa_Churn'] = (rede_stats['Labs_Churn'] / rede_stats['Qtd_Labs'] * 100).round(1)
+                rede_stats['Volume_por_Lab'] = (rede_stats['Volume_Total'] / rede_stats['Qtd_Labs']).round(0)
+
+                # Adicionar categoria da rede se disponível
+                if 'Ranking Rede' in df_sem_duplicatas_rede.columns:
+                    rede_ranking = df_sem_duplicatas_rede.groupby('Rede')['Ranking Rede'].first().reset_index()
+                    rede_stats = rede_stats.merge(rede_ranking, on='Rede', how='left')
+
+                    # Adicionar categoria
+                    rede_stats['Categoria_Rede'] = rede_stats['Ranking Rede'].apply(
+                        lambda x: 'Diamante' if str(x).upper() in ['DIAMANTE', 'DIAMOND'] else
+                                 'Ouro' if str(x).upper() in ['OURO', 'GOLD', 'ORO'] else
+                                 'Prata' if str(x).upper() in ['PRATA', 'SILVER', 'PLATA'] else
+                                 'Bronze' if str(x).upper() in ['BRONZE', 'BRONCE'] else
+                                 'Outros'
+                    )
+                else:
+                    rede_stats['Ranking Rede'] = 'N/A'
+                    rede_stats['Categoria_Rede'] = 'N/A'
+
             if not df_rede_filtrado.empty:
                 # Análise baseada no tipo selecionado
                 if tipo_analise == "Visão Geral":
                     # Cards de métricas gerais
                     col1, col2, col3, col4 = st.columns(4)
 
-                    total_redes = df_rede_filtrado['Rede'].nunique()
-                    total_labs_rede = len(df_rede_filtrado)
-                    volume_total_rede = df_rede_filtrado['Volume_Total_2025'].sum() if 'Volume_Total_2025' in df_rede_filtrado.columns else 0
+                    total_redes = len(rede_stats) if not rede_stats.empty else 0
+                    total_labs_rede = rede_stats['Qtd_Labs'].sum() if not rede_stats.empty else 0
+                    volume_total_rede = rede_stats['Volume_Total'].sum() if not rede_stats.empty else 0
 
                     with col1:
                         st.metric("🏢 Total de Redes", total_redes)
@@ -3155,324 +3200,6 @@ def main():
                             hide_index=True
                         )
 
-                    # Distribuição por rede
-                    st.subheader("📊 Distribuição por Rede")
-                    if 'Rede' in df_rede_filtrado.columns:
-                        # Remover duplicatas baseado no CNPJ antes da contagem
-                        df_sem_duplicatas_rede = df_rede_filtrado.drop_duplicates(subset=['CNPJ_PCL'], keep='first')
-                        
-                        # Estatísticas expandidas por rede
-                        rede_stats = df_sem_duplicatas_rede.groupby('Rede').agg({
-                            'Nome_Fantasia_PCL': 'count',
-                            'Volume_Total_2025': ['sum', 'mean', 'std'],
-                            'Score_Risco': 'mean',
-                            'Estado': lambda x: x.mode().iloc[0] if not x.mode().empty else 'N/A',  # Estado mais comum
-                            'Cidade': 'nunique',  # Número de cidades únicas
-                            'Status_Risco': lambda x: (x.isin(['Inativo', 'Alto'])).sum(),  # Número de labs em churn (Inativo + Alto)
-                        }).reset_index()
-
-                        # Achatar colunas multi-índice
-                        rede_stats.columns = ['Rede', 'Qtd_Labs', 'Volume_Total', 'Volume_Medio', 'Volume_Std',
-                                            'Score_Medio_Risco', 'Estado_Principal', 'Cidades_Unicas', 'Labs_Churn']
-
-                        # Adicionar mais métricas calculadas
-                        rede_stats['Taxa_Churn'] = (rede_stats['Labs_Churn'] / rede_stats['Qtd_Labs'] * 100).round(1)
-                        rede_stats['Volume_por_Lab'] = (rede_stats['Volume_Total'] / rede_stats['Qtd_Labs']).round(0)
-
-                        # Adicionar categoria da rede se disponível
-                        if 'Ranking Rede' in df_sem_duplicatas_rede.columns:
-                            rede_ranking = df_sem_duplicatas_rede.groupby('Rede')['Ranking Rede'].first().reset_index()
-                            rede_stats = rede_stats.merge(rede_ranking, on='Rede', how='left')
-
-                            # Adicionar categoria
-                            rede_stats['Categoria_Rede'] = rede_stats['Ranking Rede'].apply(
-                                lambda x: 'Diamante' if str(x).upper() in ['DIAMANTE', 'DIAMOND'] else
-                                         'Ouro' if str(x).upper() in ['OURO', 'GOLD', 'ORO'] else
-                                         'Prata' if str(x).upper() in ['PRATA', 'SILVER', 'PLATA'] else
-                                         'Bronze' if str(x).upper() in ['BRONZE', 'BRONCE'] else
-                                         'Outros'
-                            )
-                        else:
-                            rede_stats['Ranking Rede'] = 'N/A'
-                            rede_stats['Categoria_Rede'] = 'N/A'
-
-                        col1, col2 = st.columns(2)
-
-                        with col1:
-                            # Gráfico de quantidade de labs por rede
-                            fig_labs = px.bar(
-                                rede_stats.sort_values('Qtd_Labs', ascending=False),
-                                x='Rede',
-                                y='Qtd_Labs',
-                                title="🏥 Quantidade de Laboratórios por Rede",
-                                color='Qtd_Labs',
-                                color_continuous_scale='Blues'
-                            )
-                            fig_labs.update_layout(xaxis_tickangle=-45)
-                            st.plotly_chart(fig_labs, use_container_width=True)
-
-                        with col2:
-                            # Gráfico de volume por rede
-                            fig_volume = px.bar(
-                                rede_stats.sort_values('Volume_Total', ascending=False),
-                                x='Rede',
-                                y='Volume_Total',
-                                title="📦 Volume Total por Rede",
-                                color='Volume_Total',
-                                color_continuous_scale='Greens'
-                            )
-                            fig_volume.update_layout(xaxis_tickangle=-45)
-                            st.plotly_chart(fig_volume, use_container_width=True)
-
-                        # Adicionar indicadores visuais de risco à tabela
-                        rede_stats_display = rede_stats.copy()
-
-                        # Função para adicionar indicadores de risco
-                        def adicionar_indicador_risco_rede(row):
-                            indicadores = []
-
-                            # Indicador de alto churn (vermelho para >30%, laranja para >15%)
-                            if row['Taxa_Churn'] > 30:
-                                indicadores.append("🔴")
-                            elif row['Taxa_Churn'] > 15:
-                                indicadores.append("🟠")
-
-                            # Indicador de alto risco (⚠️ para >70, ⚡ para >40)
-                            if row['Score_Medio_Risco'] > 70:
-                                indicadores.append("⚠️")
-                            elif row['Score_Medio_Risco'] > 40:
-                                indicadores.append("⚡")
-
-                            # Indicador de baixa eficiência (volume por lab abaixo de 70% da média)
-                            media_volume_lab = rede_stats['Volume_por_Lab'].mean()
-                            if row['Volume_por_Lab'] < media_volume_lab * 0.7:
-                                indicadores.append("📉")
-
-                            # Indicador de rede pequena (menos de 3 labs)
-                            if row['Qtd_Labs'] < 3:
-                                indicadores.append("🏠")
-
-                            return ' '.join(indicadores) if indicadores else "✅"
-
-                        rede_stats_display['🚨 Indicadores'] = rede_stats_display.apply(adicionar_indicador_risco_rede, axis=1)
-
-                        # Tabela detalhada expandida com indicadores
-                        st.subheader("📋 Detalhamento Completo por Rede")
-                        st.dataframe(
-                            rede_stats_display.round(2),
-                            use_container_width=True,
-                            column_config={
-                                "🚨 Indicadores": st.column_config.TextColumn("🚨 Alertas", width="small", help="Indicadores visuais de risco e alertas"),
-                                "Rede": st.column_config.TextColumn("🏢 Rede", width="medium"),
-                                "Categoria_Rede": st.column_config.TextColumn("🏆 Categoria", width="small"),
-                                "Ranking Rede": st.column_config.TextColumn("🏅 Ranking", width="small"),
-                                "Qtd_Labs": st.column_config.NumberColumn("🏥 Labs", format="%d"),
-                                "Labs_Churn": st.column_config.NumberColumn("❌ Churn", format="%d"),
-                                "Taxa_Churn": st.column_config.NumberColumn("📉 % Churn", format="%.1f%%"),
-                                "Volume_Total": st.column_config.NumberColumn("📦 Vol. Total", format="%.0f"),
-                                "Volume_Medio": st.column_config.NumberColumn("📊 Vol. Médio", format="%.0f"),
-                                "Volume_por_Lab": st.column_config.NumberColumn("💰 Vol/Lab", format="%.0f"),
-                                "Estado_Principal": st.column_config.TextColumn("🏛️ Estado", width="small"),
-                                "Cidades_Unicas": st.column_config.NumberColumn("🏙️ Cidades", format="%d"),
-                                "Score_Medio_Risco": st.column_config.NumberColumn("⚠️ Score Risco", format="%.1f")
-                            }
-                        )
-
-                        # Legenda dos indicadores
-                        with st.expander("📖 Legenda dos Indicadores", expanded=False):
-                            st.markdown("""
-                            ### 🚨 Indicadores de Risco e Alertas
-
-                            | Indicador | Significado | Ação Sugerida |
-            |-----------|-------------|---------------|
-            | 🔴 | Taxa de Churn > 30% | **Crítico** - Intervenção imediata necessária |
-            | 🟠 | Taxa de Churn > 15% | **Alto Risco** - Monitoramento prioritário |
-            | ⚠️ | Score de Risco > 70 | **Alto Risco** - Atenção especial |
-            | ⚡ | Score de Risco > 40 | **Médio Risco** - Monitoramento regular |
-            | 📉 | Volume/Lab < 70% da média | **Baixa Eficiência** - Análise de performance |
-            | 🏠 | Menos de 3 laboratórios | **Rede Pequena** - Potencial de crescimento |
-            | ✅ | Sem indicadores críticos | **Status OK** - Manutenção regular |
-                            """)
-
-                        # Adicionar botão para exportar dados detalhados
-                        csv_rede_data = rede_stats.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label="📥 Exportar Dados das Redes",
-                            data=csv_rede_data,
-                            file_name="detalhamento_redes.csv",
-                            mime='text/csv',
-                            key="export_rede_detailed"
-                        )
-
-                        # ========================================
-                        # EXPLORADOR DE HIERARQUIA POR REDE
-                        # ========================================
-                        st.markdown("""
-                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                                    color: white; padding: 1rem; border-radius: 8px;
-                                    margin: 2rem 0 1rem 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                            <h4 style="margin: 0;">🔍 Explorador Detalhado por Rede</h4>
-                            <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; opacity: 0.9;">Selecione uma rede específica para análise aprofundada de hierarquia e categorização</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                        # Separador visual
-                        st.markdown("---")
-                        st.markdown("### 📈 Análise Detalhada por Rede Individual")
-
-                        # Seletor de rede para exploração detalhada
-                        redes_para_explorar = sorted(rede_stats['Rede'].unique())
-                        rede_explorada = st.selectbox(
-                            "🔬 Explorar Rede Específica:",
-                            options=["Selecione uma rede para análise detalhada..."] + redes_para_explorar,
-                            help="Análise aprofundada: hierarquia, categorização e distribuição de laboratórios por categoria (complementar aos filtros gerais acima)"
-                        )
-
-                        if rede_explorada and rede_explorada != "Selecione uma rede para análise detalhada...":
-                            # Filtrar dados da rede selecionada
-                            df_rede_selecionada = df_sem_duplicatas_rede[df_sem_duplicatas_rede['Rede'] == rede_explorada].copy()
-
-                            if not df_rede_selecionada.empty:
-                                # Informações básicas da rede
-                                col1, col2, col3, col4 = st.columns(4)
-
-                                info_rede = rede_stats[rede_stats['Rede'] == rede_explorada].iloc[0]
-
-                                with col1:
-                                    st.metric("🏢 Rede", rede_explorada)
-                                with col2:
-                                    st.metric("🏆 Categoria Rede", info_rede['Categoria_Rede'])
-                                with col3:
-                                    st.metric("🏥 Total Labs", int(info_rede['Qtd_Labs']))
-                                with col4:
-                                    st.metric("📦 Volume Total", f"{info_rede['Volume_Total']:,.0f}")
-
-                                # Análise de hierarquia: Nível da rede vs Nível dos laboratórios
-                                st.subheader("🏗️ Hierarquia e Categorização")
-
-                                # Adicionar categoria do laboratório baseada no ranking individual
-                                df_rede_selecionada['Categoria_Lab'] = df_rede_selecionada.get('Ranking', 'N/A').apply(
-                                    lambda x: 'Diamante' if str(x).upper() in ['DIAMANTE', 'DIAMOND'] else
-                                             'Ouro' if str(x).upper() in ['OURO', 'GOLD', 'ORO'] else
-                                             'Prata' if str(x).upper() in ['PRATA', 'SILVER', 'PLATA'] else
-                                             'Bronze' if str(x).upper() in ['BRONZE', 'BRONCE'] else
-                                             'VIP' if str(x).upper() in ['VIP', 'VVIP'] else
-                                             'Outros'
-                                )
-
-                                # Distribuição por categoria do laboratório
-                                cat_dist = df_rede_selecionada['Categoria_Lab'].value_counts().reset_index()
-                                cat_dist.columns = ['Categoria', 'Quantidade']
-
-                                # Gráfico de distribuição hierárquica
-                                col1, col2 = st.columns(2)
-
-                                with col1:
-                                    fig_hierarquia = px.bar(
-                                        cat_dist,
-                                        x='Categoria',
-                                        y='Quantidade',
-                                        title=f"🏆 Distribuição de Laboratórios por Categoria - {rede_explorada}",
-                                        color='Categoria',
-                                        color_discrete_map={
-                                            'Diamante': '#FFD700',
-                                            'Ouro': '#FFD700',
-                                            'Prata': '#C0C0C0',
-                                            'Bronze': '#CD7F32',
-                                            'VIP': '#FF1493',
-                                            'Outros': '#808080'
-                                        }
-                                    )
-                                    fig_hierarquia.update_layout(xaxis_tickangle=-45)
-                                    st.plotly_chart(fig_hierarquia, use_container_width=True)
-
-                                with col2:
-                                    # Tabela detalhada da hierarquia
-                                    st.subheader("📋 Detalhes por Categoria")
-
-                                    # Estatísticas por categoria
-                                    hierarquia_stats = df_rede_selecionada.groupby('Categoria_Lab').agg({
-                                        'Nome_Fantasia_PCL': 'count',
-                                        'Volume_Total_2025': ['sum', 'mean'],
-                                        'Status_Risco': lambda x: (x.isin(['Inativo', 'Alto'])).sum(),  # Labs em churn
-                                        'Score_Risco': 'mean'
-                                    }).round(2)
-
-                                    hierarquia_stats.columns = ['Qtd_Labs', 'Vol_Total', 'Vol_Medio', 'Labs_Churn', 'Score_Risco']
-                                    hierarquia_stats = hierarquia_stats.reset_index()
-                                    hierarquia_stats['Taxa_Churn'] = (hierarquia_stats['Labs_Churn'] / hierarquia_stats['Qtd_Labs'] * 100).round(1)
-
-                                    st.dataframe(
-                                        hierarquia_stats,
-                                        use_container_width=True,
-                                        column_config={
-                                            "Categoria_Lab": st.column_config.TextColumn("🏆 Categoria Lab"),
-                                            "Qtd_Labs": st.column_config.NumberColumn("🏥 Labs"),
-                                            "Vol_Total": st.column_config.NumberColumn("📦 Vol. Total", format="%.0f"),
-                                            "Vol_Medio": st.column_config.NumberColumn("📊 Vol. Médio", format="%.0f"),
-                                            "Labs_Churn": st.column_config.NumberColumn("❌ Churn"),
-                                            "Taxa_Churn": st.column_config.NumberColumn("📉 % Churn", format="%.1f%%"),
-                                            "Score_Risco": st.column_config.NumberColumn("⚠️ Score Risco", format="%.1f")
-                                        },
-                                        hide_index=True
-                                    )
-
-                                # Lista detalhada de laboratórios por categoria
-                                st.subheader("📋 Laboratórios por Categoria")
-
-                                # Filtro por categoria
-                                categorias_disponiveis = sorted(df_rede_selecionada['Categoria_Lab'].unique())
-                                categoria_filtro = st.multiselect(
-                                    "🏆 Filtrar por categoria do laboratório:",
-                                    options=categorias_disponiveis,
-                                    default=categorias_disponiveis,
-                                    key="categoria_lab_filter"
-                                )
-
-                                if categoria_filtro:
-                                    df_categoria_filtrada = df_rede_selecionada[df_rede_selecionada['Categoria_Lab'].isin(categoria_filtro)]
-
-                                    # Tabela de laboratórios
-                                    labs_display = df_categoria_filtrada[[
-                                        'Nome_Fantasia_PCL', 'Categoria_Lab', 'Cidade', 'Estado',
-                                        'Volume_Total_2025', 'Status_Risco', 'Score_Risco'
-                                    ]].copy()
-
-                                    # Criar coluna de status baseado no risco
-                                    labs_display['Status_Churn'] = labs_display['Status_Risco'].apply(
-                                        lambda x: 'Churn' if x in ['Inativo', 'Alto'] else 'Ativo'
-                                    )
-                                    labs_display = labs_display.sort_values(['Categoria_Lab', 'Volume_Total_2025'], ascending=[True, False])
-
-                                    st.dataframe(
-                                        labs_display,
-                                        use_container_width=True,
-                                        column_config={
-                                            "Nome_Fantasia_PCL": st.column_config.TextColumn("🏥 Laboratório"),
-                                            "Categoria_Lab": st.column_config.TextColumn("🏆 Categoria"),
-                                            "Cidade": st.column_config.TextColumn("🏙️ Cidade"),
-                                            "Estado": st.column_config.TextColumn("🏛️ Estado"),
-                                            "Volume_Total_2025": st.column_config.NumberColumn("📦 Volume", format="%.0f"),
-                                            "Status_Risco": st.column_config.TextColumn("⚠️ Risco"),
-                                            "Status_Churn": st.column_config.TextColumn("📊 Status"),
-                                            "Score_Risco": st.column_config.NumberColumn("🎯 Score Risco", format="%.1f")
-                                        },
-                                        hide_index=True
-                                    )
-
-                                    # Exportar dados da rede específica
-                                    csv_rede_especifica = labs_display.to_csv(index=False).encode('utf-8')
-                                    st.download_button(
-                                        label=f"📥 Exportar Dados - {rede_explorada}",
-                                        data=csv_rede_especifica,
-                                        file_name=f"detalhes_rede_{rede_explorada.replace(' ', '_')}.csv",
-                                        mime='text/csv',
-                                        key=f"export_rede_{rede_explorada}"
-                                    )
-                            else:
-                                st.warning("⚠️ Nenhum laboratório encontrado para esta rede.")
-                        else:
-                            st.info("ℹ️ Selecione uma rede acima para explorar sua hierarquia e categorização detalhada.")
 
                 elif tipo_analise == "Por Volume":
                     st.subheader("📦 Análise por Volume de Coletas")

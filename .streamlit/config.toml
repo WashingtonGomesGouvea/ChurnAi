@@ -5,13 +5,17 @@ developmentMode = false
 headless = true
 port = 8501
 enableCORS = false
-enableXsrfProtection = false
+enableXsrfProtection = true  # Habilitado para segurança com autenticação
 
 [browser]
 gatherUsageStats = false
 
 [theme]
-primaryColor = "#1f77b4"
+primaryColor = "#0078d4"  # Cor Microsoft
 backgroundColor = "#ffffff"
 secondaryBackgroundColor = "#f0f2f6"
-textColor = "#262730" 
+textColor = "#262730"
+
+[client]
+showSidebarNavigation = true
+showErrorDetails = false  # Ocultar detalhes de erro em produção 

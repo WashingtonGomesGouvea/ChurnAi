@@ -18,6 +18,9 @@ warnings.filterwarnings('ignore')
 # Importar configurações
 from config_churn import *
 
+# Importar sistema de autenticação Microsoft
+from auth_microsoft import MicrosoftAuth, AuthManager, create_login_page, create_user_header
+
 # ============================================
 # FUNÇÕES DE INTEGRAÇÃO SHAREPOINT/ONEDRIVE
 # ============================================
@@ -2093,7 +2096,32 @@ class ReportManager:
 
 def main():
     """Função principal do dashboard v2.0."""
-    # Renderizar header
+
+    # ============================================
+    # AUTENTICAÇÃO MICROSOFT
+    # ============================================
+    try:
+        # Inicializar autenticador Microsoft
+        auth = MicrosoftAuth()
+
+        # Verificar autenticação
+        if not create_login_page(auth):
+            # Se não conseguiu fazer login, parar execução
+            return
+
+        # Criar cabeçalho com informações do usuário
+        create_user_header()
+
+    except Exception as e:
+        st.error(f"❌ Erro no sistema de autenticação: {str(e)}")
+        st.warning("Verifique as configurações de autenticação no arquivo secrets.toml")
+        return
+
+    # ============================================
+    # DASHBOARD PRINCIPAL (APENAS PARA USUÁRIOS AUTENTICADOS)
+    # ============================================
+
+    # Renderizar header do dashboard
     UIManager.renderizar_header()
 
     # Carregar e preparar dados

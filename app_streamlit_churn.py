@@ -2554,8 +2554,8 @@ def main():
                                         <div style="font-size: 1.1rem; font-weight: bold; color: {risco_color};">{metricas['dias_sem_coleta']}</div>
                                     </div>
                                     <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Média Diária</div>
-                                        <div style="font-size: 1.1rem; font-weight: bold; color: {'#28a745' if metricas['media_diaria'] > 10 else '#ffc107' if metricas['media_diaria'] > 5 else '#dc3545'};">{metricas['media_diaria']:.1f}</div>
+                                        <div style="font-size: 0.8rem; color: #666;">Score Risco</div>
+                                        <div style="font-size: 1.1rem; font-weight: bold; color: {'#28a745' if metricas.get('score_risco', 0) < 30 else '#ffc107' if metricas.get('score_risco', 0) < 70 else '#dc3545'};">{metricas.get('score_risco', 0):.0f}/100</div>
                                     </div>
                                 </div>
                             </div>

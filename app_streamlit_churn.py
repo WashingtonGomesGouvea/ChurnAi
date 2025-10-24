@@ -313,18 +313,19 @@ class DataManager:
     def carregar_dados_churn() -> Optional[pd.DataFrame]:
         """Carrega dados de análise de churn com cache inteligente."""
         try:
+            # Primeiro tenta CSV (mais comum)
+            arquivo_csv = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
+            if os.path.exists(arquivo_csv):
+                df = pd.read_csv(arquivo_csv, encoding=ENCODING, low_memory=False)
+                return df
+            
+            # Fallback para parquet
             arquivo_path = os.path.join(OUTPUT_DIR, CHURN_ANALYSIS_FILE)
             if os.path.exists(arquivo_path):
                 df = pd.read_parquet(arquivo_path, engine='pyarrow')
                 return df
             else:
-                # Fallback para CSV
-                arquivo_csv = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
-                if os.path.exists(arquivo_csv):
-                    df = pd.read_csv(arquivo_csv, encoding=ENCODING, low_memory=False)
-                    return df
-                else:
-                    return None
+                return None
         except Exception as e:
             st.error(f"❌ Erro ao carregar dados: {e}")
             return None

@@ -9,6 +9,15 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
+try:
+    import tomllib  # Python 3.11+
+except Exception:  # pragma: no cover
+    tomllib = None
+
+try:
+    from churn_sp_connector import ChurnSPConnector
+except Exception:
+    ChurnSPConnector = None
 
 # Importar configurações
 from config_churn import *
@@ -118,8 +127,7 @@ def extrair_gatherings_2024():
     # Buscar gatherings de 2024
     gatherings_2024 = list(collections["gatherings"].find({
         "createdAt": {"$gte": inicio_2024, "$lte": fim_2024},
-        "active": True,
-        "test": False
+        "active": True
     }))
     
     logger.info(f"Encontrados {len(gatherings_2024)} gatherings de 2024")
@@ -151,8 +159,7 @@ def extrair_gatherings_2025():
     # Buscar gatherings de 2025
     gatherings_2025 = list(collections["gatherings"].find({
         "createdAt": {"$gte": inicio_2025},
-        "active": True,
-        "test": False
+        "active": True
     }))
     
     logger.info(f"Encontrados {len(gatherings_2025)} gatherings de 2025")
@@ -169,7 +176,7 @@ def extrair_gatherings_2025():
         logger.warning("Nenhum gathering encontrado para 2025")
 
 def extrair_laboratories():
-    """Extrai laboratories ativos com merge incremental."""
+    """Extrai laboratories com merge incremental (sem filtro de active)."""
     logger.info("Iniciando extração de laboratories...")
     
     db = connect_mongodb()
@@ -178,17 +185,10 @@ def extrair_laboratories():
     
     collections = get_collections(db)
     
-    # Buscar laboratories ativos
-    laboratories = list(collections["laboratories"].find({
-        "active": True,
-        "$or": [
-            {"exclusionDate": {"$exists": False}},
-            {"exclusionDate": None},
-            {"exclusionDate": ""}
-        ]
-    }))
+    # Buscar todos laboratories (sem filtro)
+    laboratories = list(collections["laboratories"].find({}))
     
-    logger.info(f"Encontrados {len(laboratories)} laboratories ativos")
+    logger.info(f"Encontrados {len(laboratories)} laboratories")
     
     if laboratories:
         # Converter para DataFrame
@@ -273,252 +273,232 @@ def carregar_dados_csv() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 def calcular_metricas_churn():
-    """Calcula métricas de churn para cada laboratório."""
+    """Calcula métricas de churn com agregações vetorizadas (rápidas)."""
     logger.info("Iniciando cálculo de métricas de churn...")
     
-    # Carregar dados
     df_gatherings_2024, df_gatherings_2025, df_laboratories, df_representatives = carregar_dados_csv()
     
     if df_laboratories.empty:
         logger.warning("Nenhum laboratory encontrado para análise")
         return
     
-    # Criar dicionários para relacionamentos
-    representatives_dict = {row['_id']: row for _, row in df_representatives.iterrows()}
-    
-    # Processar cada laboratório
-    dados_churn = []
-    
-    for _, lab in df_laboratories.iterrows():
-        lab_id = lab['_id']
-        
-        # Buscar gatherings do laboratório
-        gatherings_2024_lab = df_gatherings_2024[df_gatherings_2024['_laboratory'] == lab_id] if not df_gatherings_2024.empty else pd.DataFrame()
-        gatherings_2025_lab = df_gatherings_2025[df_gatherings_2025['_laboratory'] == lab_id] if not df_gatherings_2025.empty else pd.DataFrame()
-        
-        # Calcular métricas básicas
-        total_coletas_2024 = len(gatherings_2024_lab)
-        total_coletas_2025 = len(gatherings_2025_lab)
-        
-        # Calcular coletas por mês 2025
-        coletas_mensais_2025 = {}
-        if not gatherings_2025_lab.empty:
-            # Criar cópia para evitar SettingWithCopyWarning
-            gatherings_2025_lab = gatherings_2025_lab.copy()
-            
-            # Converter createdAt para datetime com tratamento de erros
-            try:
-                gatherings_2025_lab['createdAt'] = pd.to_datetime(gatherings_2025_lab['createdAt'], errors='coerce')
-            except Exception as e:
-                logger.warning(f"Erro ao converter datas: {e}")
-                gatherings_2025_lab['createdAt'] = pd.to_datetime(gatherings_2025_lab['createdAt'], format='mixed', errors='coerce')
-            
-            # Meses dinâmicos até o mês corrente do ano
-            meses_ordem = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
-            mes_limite = min(datetime.now().month, 12)
-            for mes in range(1, mes_limite + 1):
-                mes_key = f'N_Coletas_{meses_ordem[mes-1]}_25'
-                coletas_mes = len(gatherings_2025_lab[gatherings_2025_lab['createdAt'].dt.month == mes])
-                coletas_mensais_2025[mes_key] = coletas_mes
-        
-        # Calcular coletas por mês 2024
-        coletas_mensais_2024 = {}
-        if not gatherings_2024_lab.empty:
-            # Criar cópia para evitar SettingWithCopyWarning
-            gatherings_2024_lab = gatherings_2024_lab.copy()
-            
-            # Converter createdAt para datetime com tratamento de erros
-            try:
-                gatherings_2024_lab['createdAt'] = pd.to_datetime(gatherings_2024_lab['createdAt'], errors='coerce')
-            except Exception as e:
-                logger.warning(f"Erro ao converter datas 2024: {e}")
-                gatherings_2024_lab['createdAt'] = pd.to_datetime(gatherings_2024_lab['createdAt'], format='mixed', errors='coerce')
-            
-            for mes in range(1, 13):  # Jan a Dez (ano completo)
-                mes_key = f'N_Coletas_{["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"][mes-1]}_24'
-                coletas_mes = len(gatherings_2024_lab[gatherings_2024_lab['createdAt'].dt.month == mes])
-                coletas_mensais_2024[mes_key] = coletas_mes
-        
-        # Calcular maior mês histórico (2024)
-        maior_mes_2024 = 0
-        mes_historico = ""
-        if not gatherings_2024_lab.empty:
-            # Criar cópia para evitar SettingWithCopyWarning
-            gatherings_2024_lab = gatherings_2024_lab.copy()
-            
-            # Converter createdAt para datetime com tratamento de erros
-            try:
-                gatherings_2024_lab['createdAt'] = pd.to_datetime(gatherings_2024_lab['createdAt'], errors='coerce')
-            except Exception as e:
-                logger.warning(f"Erro ao converter datas 2024: {e}")
-                gatherings_2024_lab['createdAt'] = pd.to_datetime(gatherings_2024_lab['createdAt'], format='mixed', errors='coerce')
-            
-            coletas_por_mes_2024 = gatherings_2024_lab.groupby(gatherings_2024_lab['createdAt'].dt.month).size()
-            if not coletas_por_mes_2024.empty:
-                maior_mes_2024 = coletas_por_mes_2024.max()
-                mes_idx = coletas_por_mes_2024.idxmax()
-                meses = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
-                mes_historico = f"{meses[mes_idx-1]}/2024"
-        
-        # Calcular maior mês 2025
-        maior_mes_2025 = max(coletas_mensais_2025.values()) if coletas_mensais_2025 else 0
-        
-        # Calcular data da última coleta
-        data_ultima_coleta = None
-        if not gatherings_2025_lab.empty:
-            # Usar a coluna createdAt já convertida
-            data_ultima_coleta = gatherings_2025_lab['createdAt'].max()
-        
-        # Calcular dias sem coleta
-        dias_sem_coleta = 0
-        if data_ultima_coleta is not None and pd.notna(data_ultima_coleta):
-            agora = datetime.now()
-            if isinstance(data_ultima_coleta, str):
-                data_ultima_coleta = pd.to_datetime(data_ultima_coleta, errors='coerce')
-            if pd.notna(data_ultima_coleta):
-                # Garantir que ambos os timestamps tenham o mesmo timezone
-                if data_ultima_coleta.tzinfo is not None and agora.tzinfo is None:
-                    agora = agora.replace(tzinfo=data_ultima_coleta.tzinfo)
-                elif data_ultima_coleta.tzinfo is None and agora.tzinfo is not None:
-                    data_ultima_coleta = data_ultima_coleta.replace(tzinfo=agora.tzinfo)
-                elif data_ultima_coleta.tzinfo is None and agora.tzinfo is None:
-                    # Ambos sem timezone, OK
-                    pass
-                else:
-                    # Ambos com timezone, converter para o mesmo
-                    if data_ultima_coleta.tzinfo != agora.tzinfo:
-                        data_ultima_coleta = data_ultima_coleta.tz_convert(agora.tzinfo)
-                
-                dias_sem_coleta = (agora - data_ultima_coleta).days
-        
-        # Calcular médias mensais
-        media_mensal_2024 = total_coletas_2024 / 12 if total_coletas_2024 > 0 else 0
-        meses_ate_agora_2025 = min(datetime.now().month, 12)
-        media_mensal_2025 = (total_coletas_2025 / meses_ate_agora_2025) if (total_coletas_2025 > 0 and meses_ate_agora_2025 > 0) else 0
-        
-        # Calcular variação percentual
-        variacao_percentual = 0
-        if media_mensal_2024 > 0:
-            variacao_percentual = ((media_mensal_2025 - media_mensal_2024) / media_mensal_2024) * 100
-        
-        # Determinar tendência
-        if variacao_percentual > 10:
-            tendencia = "Crescimento"
-        elif variacao_percentual < -10:
-            tendencia = "Declínio"
-        else:
-            tendencia = "Estável"
-        
-        # Determinar status de risco
-        status_risco = "Baixo"
-        motivo_risco = "Volume estável"
-        
-        if dias_sem_coleta >= DIAS_INATIVO:
-            status_risco = "Inativo"
-            motivo_risco = f"Sem coletas há {dias_sem_coleta} dias"
-        elif dias_sem_coleta >= DIAS_RISCO_ALTO:
-            status_risco = "Alto"
-            motivo_risco = f"Sem coletas há {dias_sem_coleta} dias"
-        elif dias_sem_coleta >= DIAS_RISCO_MEDIO:
-            status_risco = "Médio"
-            motivo_risco = f"Sem coletas há {dias_sem_coleta} dias"
-        elif variacao_percentual <= -REDUCAO_ALTO_RISCO * 100:
-            status_risco = "Alto"
-            motivo_risco = f"Redução de {abs(variacao_percentual):.1f}% vs 2024"
-        elif variacao_percentual <= -REDUCAO_MEDIO_RISCO * 100:
-            status_risco = "Médio"
-            motivo_risco = f"Redução de {abs(variacao_percentual):.1f}% vs 2024"
-        
-        # Obter dados do representante
-        rep_id = lab.get('_representative', '')
-        rep_data = representatives_dict.get(rep_id, {})
-        
-        # Criar registro de churn
-        registro_churn = {
-            'CNPJ_PCL': lab.get('cnpj', ''),
-            'Razao_Social_PCL': lab.get('legalName', ''),
-            'Nome_Fantasia_PCL': lab.get('fantasyName', ''),
-            'Estado': lab.get('address.state.code', ''),
-            'Cidade': lab.get('address.city', ''),
-            'Representante_Nome': rep_data.get('name', ''),
-            'Representante_ID': rep_id,
-            
-            # Métricas históricas
-            'Maior_N_Coletas_Mes_Historico': maior_mes_2024,
-            'Mes_Historico': mes_historico,
-            'Maior_N_Coletas_Mes_2024': maior_mes_2024,
-            'Maior_N_Coletas_Mes_2025': maior_mes_2025,
-            
-            # Coletas mensais 2024
-            'N_Coletas_Jan_24': coletas_mensais_2024.get('N_Coletas_Jan_24', 0),
-            'N_Coletas_Fev_24': coletas_mensais_2024.get('N_Coletas_Fev_24', 0),
-            'N_Coletas_Mar_24': coletas_mensais_2024.get('N_Coletas_Mar_24', 0),
-            'N_Coletas_Abr_24': coletas_mensais_2024.get('N_Coletas_Abr_24', 0),
-            'N_Coletas_Mai_24': coletas_mensais_2024.get('N_Coletas_Mai_24', 0),
-            'N_Coletas_Jun_24': coletas_mensais_2024.get('N_Coletas_Jun_24', 0),
-            'N_Coletas_Jul_24': coletas_mensais_2024.get('N_Coletas_Jul_24', 0),
-            'N_Coletas_Ago_24': coletas_mensais_2024.get('N_Coletas_Ago_24', 0),
-            'N_Coletas_Set_24': coletas_mensais_2024.get('N_Coletas_Set_24', 0),
-            'N_Coletas_Out_24': coletas_mensais_2024.get('N_Coletas_Out_24', 0),
-            'N_Coletas_Nov_24': coletas_mensais_2024.get('N_Coletas_Nov_24', 0),
-            'N_Coletas_Dez_24': coletas_mensais_2024.get('N_Coletas_Dez_24', 0),
-            
-            
-            # Análise de churn
-            'Data_Ultima_Coleta': data_ultima_coleta,
-            'Dias_Sem_Coleta': dias_sem_coleta,
-            'Media_Coletas_Mensal_2024': round(media_mensal_2024, 2),
-            'Media_Coletas_Mensal_2025': round(media_mensal_2025, 2),
-            'Variacao_Percentual': round(variacao_percentual, 2),
-            'Tendencia': tendencia,
-            
-            # Status de risco
-            'Status_Risco': status_risco,
-            'Motivo_Risco': motivo_risco,
+    # Padronizar tipos de IDs
+    def to_str_series(s: pd.Series) -> pd.Series:
+        return s.astype(str).fillna("") if s is not None and len(s) else pd.Series(dtype=str)
+
+    if '_id' in df_laboratories.columns:
+        df_laboratories['_id'] = to_str_series(df_laboratories['_id'])
+    if '_representative' in df_laboratories.columns:
+        df_laboratories['_representative'] = to_str_series(df_laboratories['_representative'])
+
+    if not df_representatives.empty and '_id' in df_representatives.columns:
+        df_representatives['_id'] = to_str_series(df_representatives['_id'])
+
+    # Preparar gatherings 2024
+    meses_nomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+    mes_limite_2025 = min(datetime.now().month, 12)
+
+    if not df_gatherings_2024.empty:
+        df_gatherings_2024 = df_gatherings_2024.copy()
+        if '_laboratory' in df_gatherings_2024.columns:
+            df_gatherings_2024['_laboratory'] = to_str_series(df_gatherings_2024['_laboratory'])
+        df_gatherings_2024['createdAt'] = pd.to_datetime(df_gatherings_2024.get('createdAt'), errors='coerce', utc=True)
+        df_gatherings_2024['mes'] = df_gatherings_2024['createdAt'].dt.month
+
+        total_2024 = df_gatherings_2024.groupby('_laboratory').size().rename('Total_Coletas_2024')
+        m2024 = df_gatherings_2024.groupby(['_laboratory', 'mes']).size().unstack(fill_value=0)
+    else:
+        total_2024 = pd.Series(dtype=int)
+        m2024 = pd.DataFrame()
+
+    # Preparar gatherings 2025
+    if not df_gatherings_2025.empty:
+        df_gatherings_2025 = df_gatherings_2025.copy()
+        if '_laboratory' in df_gatherings_2025.columns:
+            df_gatherings_2025['_laboratory'] = to_str_series(df_gatherings_2025['_laboratory'])
+        df_gatherings_2025['createdAt'] = pd.to_datetime(df_gatherings_2025.get('createdAt'), errors='coerce', utc=True)
+        df_gatherings_2025['mes'] = df_gatherings_2025['createdAt'].dt.month
+
+        total_2025 = df_gatherings_2025.groupby('_laboratory').size().rename('Total_Coletas_2025')
+        ultima_2025 = df_gatherings_2025.groupby('_laboratory')['createdAt'].max().rename('Data_Ultima_Coleta')
+        m2025 = df_gatherings_2025.groupby(['_laboratory', 'mes']).size().unstack(fill_value=0)
+    else:
+        total_2025 = pd.Series(dtype=int)
+        ultima_2025 = pd.Series(dtype='datetime64[ns]')
+        m2025 = pd.DataFrame()
+
+    # Base: um por laboratório
+    base = df_laboratories[['_id', 'cnpj', 'legalName', 'fantasyName']].copy() if all(k in df_laboratories.columns for k in ['_id','cnpj','legalName','fantasyName']) else df_laboratories.copy()
+    base = base.rename(columns={'_id': '_id'})
+    base['_id'] = to_str_series(base['_id'])
+    base = base.drop_duplicates(subset=['_id'])
+    base = base.set_index('_id')
+
+    # Meses 2024 (fixos)
+    for mes in range(1, 13):
+        col = f'N_Coletas_{meses_nomes[mes-1]}_24'
+        base[col] = m2024.get(mes, pd.Series(0, index=base.index)).reindex(base.index).fillna(0).astype(int)
+
+    # Meses 2025 (até mês atual)
+    for mes in range(1, mes_limite_2025 + 1):
+        col = f'N_Coletas_{meses_nomes[mes-1]}_25'
+        base[col] = m2025.get(mes, pd.Series(0, index=base.index)).reindex(base.index).fillna(0).astype(int)
+
+    # Totais e últimas datas
+    base['Total_Coletas_2024'] = total_2024.reindex(base.index).fillna(0).astype(int)
+    base['Total_Coletas_2025'] = total_2025.reindex(base.index).fillna(0).astype(int)
+    base['Data_Ultima_Coleta'] = ultima_2025.reindex(base.index)
+
+    # Maior mês 2024 e 2025
+    if not m2024.empty:
+        m24_vals = m2024.reindex(base.index).fillna(0)
+        base['Maior_N_Coletas_Mes_2024'] = m24_vals.max(axis=1).astype(int)
+        idx_max_24 = m24_vals.idxmax(axis=1)
+        base['Mes_Historico'] = idx_max_24.apply(lambda m: f"{meses_nomes[int(m)-1]}/2024" if pd.notna(m) and m in range(1,13) else "")
+    else:
+        base['Maior_N_Coletas_Mes_2024'] = 0
+        base['Mes_Historico'] = ""
+
+    if not m2025.empty:
+        m25_vals = m2025.reindex(base.index).fillna(0)
+        base['Maior_N_Coletas_Mes_2025'] = m25_vals.max(axis=1).astype(int)
+    else:
+        base['Maior_N_Coletas_Mes_2025'] = 0
+
+    # Dias sem coleta
+    # Normalizar timezone: manter tudo em UTC tz-aware para cálculo
+    base['Data_Ultima_Coleta'] = pd.to_datetime(base['Data_Ultima_Coleta'], errors='coerce', utc=True)
+    now_dt = pd.Timestamp.now(tz='UTC')
+    base['Dias_Sem_Coleta'] = (now_dt - base['Data_Ultima_Coleta']).dt.days
+    base.loc[base['Data_Ultima_Coleta'].isna(), 'Dias_Sem_Coleta'] = 0
+    base['Dias_Sem_Coleta'] = base['Dias_Sem_Coleta'].astype(int)
+
+    # Médias e variação
+    meses_ate_agora_2025 = mes_limite_2025 if mes_limite_2025 > 0 else 1
+    base['Media_Coletas_Mensal_2024'] = (base['Total_Coletas_2024'] / 12).fillna(0)
+    base['Media_Coletas_Mensal_2025'] = (base['Total_Coletas_2025'] / meses_ate_agora_2025).fillna(0)
+    base['Variacao_Percentual'] = np.where(
+        base['Media_Coletas_Mensal_2024'] > 0,
+        (base['Media_Coletas_Mensal_2025'] - base['Media_Coletas_Mensal_2024']) / base['Media_Coletas_Mensal_2024'] * 100,
+        0
+    )
+
+    # Tendência
+    base['Tendencia'] = np.where(base['Variacao_Percentual'] > 10, 'Crescimento',
+                          np.where(base['Variacao_Percentual'] < -10, 'Declínio', 'Estável'))
+
+    # Status de risco e motivo
+    base['Status_Risco'] = 'Baixo'
+    base['Motivo_Risco'] = 'Volume estável'
+
+    base.loc[base['Dias_Sem_Coleta'] >= DIAS_INATIVO, 'Status_Risco'] = 'Inativo'
+    # Aplicar lógica de risco alto apenas para registros que não são inativos
+    mask_risco_alto = (base['Dias_Sem_Coleta'] >= DIAS_RISCO_ALTO) & (base['Dias_Sem_Coleta'] < DIAS_INATIVO)
+    base.loc[mask_risco_alto, 'Status_Risco'] = 'Alto'
+    base.loc[(base['Dias_Sem_Coleta'] >= DIAS_RISCO_MEDIO) & (base['Dias_Sem_Coleta'] < DIAS_RISCO_ALTO), 'Status_Risco'] = 'Médio'
+
+    base.loc[base['Status_Risco'] == 'Inativo', 'Motivo_Risco'] = base['Dias_Sem_Coleta'].apply(lambda d: f"Sem coletas há {int(d)} dias")
+    base.loc[base['Status_Risco'] == 'Alto', 'Motivo_Risco'] = base['Dias_Sem_Coleta'].apply(lambda d: f"Sem coletas há {int(d)} dias")
+    base.loc[(base['Status_Risco'] == 'Médio') & (base['Dias_Sem_Coleta'] > 0), 'Motivo_Risco'] = base['Dias_Sem_Coleta'].apply(lambda d: f"Sem coletas há {int(d)} dias")
+    base.loc[(base['Status_Risco'] == 'Baixo') & (base['Variacao_Percentual'] <= -REDUCAO_ALTO_RISCO * 100), 'Status_Risco'] = 'Alto'
+    base.loc[(base['Status_Risco'] == 'Baixo') & (base['Variacao_Percentual'] <= -REDUCAO_MEDIO_RISCO * 100) & (base['Variacao_Percentual'] > -REDUCAO_ALTO_RISCO * 100), 'Status_Risco'] = 'Médio'
+    base.loc[base['Status_Risco'].isin(['Alto','Médio']) & (base['Dias_Sem_Coleta'] == 0), 'Motivo_Risco'] = base['Variacao_Percentual'].apply(lambda v: f"Redução de {abs(v):.1f}% vs 2024")
+
+    # Representante
+    if not df_representatives.empty and '_id' in df_representatives.columns:
+        reps = df_representatives[['_id','name']].copy() if all(k in df_representatives.columns for k in ['_id','name']) else df_representatives.copy()
+        reps = reps.rename(columns={'_id': '_rep_id', 'name': 'Representante_Nome'})
+        reps['_rep_id'] = to_str_series(reps['_rep_id'])
+        labs_rep = df_laboratories[['_id','_representative']].copy() if all(k in df_laboratories.columns for k in ['_id','_representative']) else df_laboratories.copy()
+        labs_rep = labs_rep.rename(columns={'_id': '_id', '_representative': 'Representante_ID'})
+        labs_rep['_id'] = to_str_series(labs_rep['_id'])
+        labs_rep['Representante_ID'] = to_str_series(labs_rep['Representante_ID'])
+        merged = labs_rep.merge(reps, left_on='Representante_ID', right_on='_rep_id', how='left')
+        merged = merged.set_index('_id')
+        base['Representante_ID'] = merged['Representante_ID']
+        base['Representante_Nome'] = merged['Representante_Nome']
+    else:
+        base['Representante_ID'] = ''
+        base['Representante_Nome'] = ''
+
+    # Campos de identificação/descrição
+    base['CNPJ_PCL'] = df_laboratories.set_index('_id').reindex(base.index).get('cnpj') if 'cnpj' in df_laboratories.columns else ''
+    base['Razao_Social_PCL'] = df_laboratories.set_index('_id').reindex(base.index).get('legalName') if 'legalName' in df_laboratories.columns else ''
+    base['Nome_Fantasia_PCL'] = df_laboratories.set_index('_id').reindex(base.index).get('fantasyName') if 'fantasyName' in df_laboratories.columns else ''
+    base['Estado'] = df_laboratories.set_index('_id').reindex(base.index).get('address.state.code') if 'address.state.code' in df_laboratories.columns else ''
+    base['Cidade'] = df_laboratories.set_index('_id').reindex(base.index).get('address.city') if 'address.city' in df_laboratories.columns else ''
             
             # Metadados
-            'Data_Analise': datetime.now(),
-            'Total_Coletas_2024': total_coletas_2024,
-            'Total_Coletas_2025': total_coletas_2025
-        }
-        
-        # Adicionar dinamicamente as colunas de 2025 até o mês atual
-        for mes_nome in ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"][:meses_ate_agora_2025]:
-            chave = f'N_Coletas_{mes_nome}_25'
-            registro_churn[chave] = coletas_mensais_2025.get(chave, 0)
-        
-        dados_churn.append(registro_churn)
-    
-    # Criar DataFrame final
-    df_churn = pd.DataFrame(dados_churn)
+    base['Data_Analise'] = datetime.now()
+
+    # Reordenar colunas principais
+    cols_inicio = [
+        'CNPJ_PCL','Razao_Social_PCL','Nome_Fantasia_PCL','Estado','Cidade',
+        'Representante_Nome','Representante_ID',
+        'Maior_N_Coletas_Mes_Historico','Mes_Historico','Maior_N_Coletas_Mes_2024','Maior_N_Coletas_Mes_2025'
+    ]
+    cols_2024 = [f'N_Coletas_{m}_24' for m in meses_nomes]
+    cols_2025 = [f'N_Coletas_{m}_25' for m in meses_nomes[:mes_limite_2025]]
+    cols_fim = [
+        'Data_Ultima_Coleta','Dias_Sem_Coleta','Media_Coletas_Mensal_2024','Media_Coletas_Mensal_2025',
+        'Variacao_Percentual','Tendencia','Status_Risco','Motivo_Risco','Data_Analise',
+        'Total_Coletas_2024','Total_Coletas_2025'
+    ]
+
+    # Garantir colunas existentes
+    for c in cols_inicio + cols_2024 + cols_2025 + cols_fim:
+        if c not in base.columns:
+            base[c] = '' if c in ['CNPJ_PCL','Razao_Social_PCL','Nome_Fantasia_PCL','Estado','Cidade','Representante_Nome','Representante_ID','Mes_Historico','Tendencia','Status_Risco','Motivo_Risco'] else 0
+
+    df_churn = base[cols_inicio + cols_2024 + cols_2025 + cols_fim].reset_index(drop=False)
     logger.info(f"Análise de churn concluída: {len(df_churn)} laboratórios processados")
     
-    # Salvar análise
-    if not df_churn.empty:
+    if df_churn.empty:
+        logger.warning("Nenhum dado de churn gerado")
+        return
+
+    # Salvar análise (parquet + CSV) e tentar upload opcional para SharePoint
         timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
-        
-        # Salvar com timestamp
         arquivo_timestamp = os.path.join(OUTPUT_DIR, f"churn_analysis_{timestamp}.parquet")
         df_churn.to_parquet(arquivo_timestamp, engine='pyarrow', compression='snappy', index=False)
         
-        # Salvar latest
         arquivo_latest = os.path.join(OUTPUT_DIR, CHURN_ANALYSIS_FILE)
         df_churn.to_parquet(arquivo_latest, engine='pyarrow', compression='snappy', index=False)
         
-        # Salvar CSV backup
         arquivo_csv = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
         df_churn.to_csv(arquivo_csv, index=False, encoding=ENCODING)
-        
         logger.info(f"Análise de churn salva: {arquivo_latest}")
         
+    # Tentar upload para SharePoint usando secrets locais (se disponível)
+    try:
+        if tomllib is not None and ChurnSPConnector is not None:
+            base_dir = os.path.dirname(__file__)
+            secrets_path = os.path.join(base_dir, '.streamlit', 'secrets.toml')
+            if os.path.exists(secrets_path):
+                with open(secrets_path, 'rb') as f:
+                    secrets_cfg = tomllib.load(f)
+                files_cfg = secrets_cfg.get('files', {})
+                arquivo_remoto = files_cfg.get('arquivo')
+                if arquivo_remoto:
+                    connector = ChurnSPConnector(config={
+                        'graph': secrets_cfg.get('graph', {}),
+                        'onedrive': secrets_cfg.get('onedrive', {}),
+                        'files': secrets_cfg.get('files', {}),
+                        'output_dir': secrets_cfg.get('output_dir', OUTPUT_DIR)
+                    })
+                    connector.write_csv(df_churn, arquivo_remoto, overwrite=True)
+                    logger.info("Arquivo de churn enviado ao SharePoint com sucesso.")
+    except Exception as e:
+        logger.warning(f"Falha ao enviar arquivo ao SharePoint (ignorado): {e}")
+
         # Estatísticas resumidas
+    try:
         status_counts = df_churn['Status_Risco'].value_counts()
         logger.info(f"Distribuição de risco: {dict(status_counts)}")
-        # Enviar alerta se necessário
         if 'Alto' in status_counts and status_counts['Alto'] >= ALERTA_THRESHOLD_ALTO:
             enviar_alerta_email(df_churn)
-    else:
-        logger.warning("Nenhum dado de churn gerado")
+    except Exception:
+        pass
 
 def executar_extracoes():
     """Executa todas as extrações de dados."""

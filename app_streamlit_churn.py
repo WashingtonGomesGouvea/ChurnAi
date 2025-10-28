@@ -21,16 +21,6 @@ from config_churn import *
 # Importar sistema de autenticação Microsoft
 from auth_microsoft import MicrosoftAuth, AuthManager, create_login_page, create_user_header
 
-# Debug de ambiente em produção
-try:
-    hostname = os.getenv("HOSTNAME", "")
-    if "streamlit" in hostname.lower() or hostname.startswith("pod-"):
-        print("=== DEBUG PRODUÇÃO - INICIANDO ===")
-        import debug_env
-        debug_env.debug_environment()
-        print("=== DEBUG PRODUÇÃO - FINALIZADO ===")
-except ImportError:
-    pass
 
 # ============================================
 # FUNÇÕES DE INTEGRAÇÃO SHAREPOINT/ONEDRIVE
@@ -736,56 +726,6 @@ class VIPManager:
                 'email': row.get('Email', '')
             }
         return None
-
-    @staticmethod
-    def renderizar_card_vip(info_vip: dict, lab_nome: str):
-        """Renderiza card visual com informações VIP."""
-        st.subheader(f"🌟 Informações VIP - {lab_nome}")
-        
-        # Badge VIP
-        st.markdown("""
-        <div style="background: linear-gradient(135deg, #FFD700, #FFA500); 
-                    color: white; padding: 1rem; border-radius: 10px; 
-                    text-align: center; margin-bottom: 1rem; box-shadow: 0 4px 8px rgba(0,0,0,0.2);">
-            <h3 style="margin: 0; font-size: 1.5rem;">⭐ CLIENTE VIP ⭐</h3>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Informações VIP em colunas
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown(f"""
-            <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; 
-                        border-left: 4px solid #FFD700; text-align: center;">
-                <h4 style="margin: 0 0 0.5rem 0; color: #333;">🏆 Ranking</h4>
-                <p style="margin: 0; font-size: 1.2rem; font-weight: bold; color: #FFD700;">
-                    {info_vip.get('ranking', 'N/A')}
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown(f"""
-            <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; 
-                        border-left: 4px solid #FFA500; text-align: center;">
-                <h4 style="margin: 0 0 0.5rem 0; color: #333;">🏅 Ranking Rede</h4>
-                <p style="margin: 0; font-size: 1.2rem; font-weight: bold; color: #FFA500;">
-                    {info_vip.get('ranking_rede', 'N/A')}
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col3:
-            st.markdown(f"""
-            <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; 
-                        border-left: 4px solid #007bff; text-align: center;">
-                <h4 style="margin: 0 0 0.5rem 0; color: #333;">🏥 Rede</h4>
-                <p style="margin: 0; font-size: 1.2rem; font-weight: bold; color: #007bff;">
-                    {info_vip.get('rede', 'N/A')}
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
 
 class FilterManager:
     """Gerenciador de filtros da interface."""
@@ -1536,47 +1476,6 @@ class ChartManager:
 
             st.plotly_chart(fig, use_container_width=True)
 
-    @staticmethod
-    def criar_heatmap_coletas(df: pd.DataFrame, top_n: int = 20):
-        """Cria heatmap de coletas por mês para top laboratórios."""
-        if df.empty:
-            st.info("📊 Nenhum dado disponível para o heatmap")
-            return
-
-        # Garantir volume total
-        if 'Volume_Total_2025' not in df.columns:
-            meses_2025 = ChartManager._meses_ate_hoje(df, 2025)
-            colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses_2025]
-            if colunas_meses:
-                df['Volume_Total_2025'] = df[colunas_meses].sum(axis=1, skipna=True)
-            else:
-                df['Volume_Total_2025'] = 0
-
-        top_labs = df.nlargest(top_n, 'Volume_Total_2025')
-        meses = ChartManager._meses_ate_hoje(df, 2025)
-        colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses]
-
-        dados_heatmap = []
-        for _, row in top_labs.iterrows():
-            dados_heatmap.append([row[col] for col in colunas_meses])
-
-        fig = px.imshow(
-            dados_heatmap,
-            labels=dict(x="Mês", y="Laboratório", color="Coletas"),
-            x=meses,
-            y=top_labs['Nome_Fantasia_PCL'].tolist(),
-            title=f"🔥 Heatmap de Coletas - Top {top_n} Laboratórios",
-            color_continuous_scale="Blues",
-            aspect="auto"
-        )
-
-        fig.update_layout(
-            xaxis=dict(side="top"),
-            yaxis=dict(autorange="reversed")
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
 class UIManager:
     """Gerenciador da interface do usuário."""
 
@@ -1629,121 +1528,6 @@ class UIManager:
             </div>
             """, unsafe_allow_html=True)
 
-    @staticmethod
-    def renderizar_status_badge(status: str) -> str:
-        """Renderiza um badge de status."""
-        status_classes = {
-            'Alto': 'status-alto',
-            'Médio': 'status-medio',
-            'Baixo': 'status-baixo',
-            'Inativo': 'status-inativo'
-        }
-        return f'<span class="status-badge {status_classes.get(status, "status-inativo")}">{status}</span>'
-
-    @staticmethod
-    def criar_tabela_detalhada(df: pd.DataFrame, titulo: str = "📋 Dados Detalhados"):
-        """Cria tabela detalhada com formatação moderna."""
-        if df.empty:
-            st.warning("⚠️ Nenhum dado disponível para exibição")
-            return
-
-        st.subheader(titulo)
-
-        # Selecionar colunas principais com análises inteligentes
-        colunas_principais = [
-            'Nome_Fantasia_PCL', 'Estado', 'Cidade', 'Representante_Nome',
-            'Status_Risco', 'Dias_Sem_Coleta', 'Variacao_Percentual',
-            'Volume_Atual_2025', 'Volume_Maximo_2024', 'Tendencia_Volume',
-            'Score_Risco', 'Motivo_Risco', 'Insights_Automaticos'
-        ]
-
-        colunas_existentes = [col for col in colunas_principais if col in df.columns]
-        df_exibicao = df[colunas_existentes].copy()
-
-        # Formatação de colunas
-        if 'Variacao_Percentual' in df_exibicao.columns:
-            df_exibicao['Variacao_Percentual'] = df_exibicao['Variacao_Percentual'].round(2)
-
-        if 'Volume_Atual_2025' in df_exibicao.columns:
-            df_exibicao['Volume_Atual_2025'] = df_exibicao['Volume_Atual_2025'].astype(int)
-            
-        if 'Volume_Maximo_2024' in df_exibicao.columns:
-            df_exibicao['Volume_Maximo_2024'] = df_exibicao['Volume_Maximo_2024'].astype(int)
-            
-        if 'Score_Risco' in df_exibicao.columns:
-            df_exibicao['Score_Risco'] = df_exibicao['Score_Risco'].astype(int)
-
-        # Renderizar tabela com container estilizado
-        st.markdown('<div class="dataframe-container">', unsafe_allow_html=True)
-        st.dataframe(
-            df_exibicao,
-            use_container_width=True,
-            height=400,
-            column_config={
-                "Status_Risco": st.column_config.TextColumn(
-                    "Status de Risco",
-                    help="Classificação de risco do laboratório"
-                ),
-                "Variacao_Percentual": st.column_config.NumberColumn(
-                    "Variação %",
-                    format="%.2f%%",
-                    help="Variação percentual em relação ao ano anterior"
-                ),
-                "Volume_Atual_2025": st.column_config.NumberColumn(
-                    "Volume Atual 2025",
-                    help="Volume atual de coletas em 2025"
-                ),
-                "Volume_Maximo_2024": st.column_config.NumberColumn(
-                    "Volume Máximo 2024",
-                    help="Volume máximo de coletas em 2024"
-                ),
-                "Tendencia_Volume": st.column_config.TextColumn(
-                    "Tendência",
-                    help="Tendência de volume (Crescimento/Declínio/Estável)"
-                ),
-                "Score_Risco": st.column_config.NumberColumn(
-                    "Score Risco",
-                    help="Score de risco de 0-100"
-                ),
-                "Insights_Automaticos": st.column_config.TextColumn(
-                    "Insights",
-                    help="Insights automáticos gerados pelo sistema"
-                )
-            }
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        # Botões de download
-        UIManager.renderizar_botoes_download(df_exibicao)
-
-    @staticmethod
-    def renderizar_botoes_download(df: pd.DataFrame):
-        """Renderiza botões de download para os dados."""
-        col1, col2 = st.columns(2)
-
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-
-        with col1:
-            csv_data = df.to_csv(index=False, encoding=ENCODING)
-            st.download_button(
-                label="📥 Download CSV",
-                data=csv_data,
-                file_name=f"churn_analysis_{timestamp}.csv",
-                mime="text/csv",
-                key=f"download_csv_{timestamp}"
-            )
-
-        with col2:
-            excel_buffer = BytesIO()
-            df.to_excel(excel_buffer, index=False, engine='openpyxl')
-            excel_data = excel_buffer.getvalue()
-            st.download_button(
-                label="📥 Download Excel",
-                data=excel_data,
-                file_name=f"churn_analysis_{timestamp}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"download_excel_{timestamp}"
-            )
 
 class MetricasAvancadas:
     """Classe para métricas avançadas de laboratórios."""
@@ -1962,67 +1746,6 @@ class AnaliseInteligente:
             insights.append("⚠️ ALERTA: Queda superior a 50%")
         
         return " | ".join(insights) if insights else "✅ Estável"
-    
-    @staticmethod
-    def criar_dashboard_inteligente(df: pd.DataFrame):
-        """Cria dashboard com análises inteligentes."""
-        st.subheader("🧠 Análises Inteligentes")
-        
-        # Métricas de alto nível
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            if 'Score_Risco' in df.columns:
-                labs_criticos = len(df[df['Score_Risco'] > 80])
-                st.metric("🚨 Labs Críticos", labs_criticos, 
-                         delta=f"{labs_criticos/len(df)*100:.1f}%" if len(df) > 0 else "0%")
-            else:
-                st.metric("🚨 Labs Críticos", "N/A", delta="Coluna não encontrada")
-        
-        with col2:
-            if 'Tendencia_Volume' in df.columns:
-                labs_crescimento = len(df[df['Tendencia_Volume'] == 'Crescimento'])
-                st.metric("📈 Labs em Crescimento", labs_crescimento,
-                         delta=f"{labs_crescimento/len(df)*100:.1f}%" if len(df) > 0 else "0%")
-            else:
-                st.metric("📈 Labs em Crescimento", "N/A", delta="Coluna não encontrada")
-        
-        with col3:
-            if 'Score_Risco' in df.columns:
-                score_medio = df['Score_Risco'].mean()
-                st.metric("📊 Score Médio", f"{score_medio:.1f}/100")
-            else:
-                st.metric("📊 Score Médio", "N/A", delta="Coluna não encontrada")
-        
-        with col4:
-            if 'Tendencia_Volume' in df.columns:
-                labs_estaveis = len(df[df['Tendencia_Volume'] == 'Estável'])
-                st.metric("⚖️ Labs Estáveis", labs_estaveis,
-                         delta=f"{labs_estaveis/len(df)*100:.1f}%" if len(df) > 0 else "0%")
-            else:
-                st.metric("⚖️ Labs Estáveis", "N/A", delta="Coluna não encontrada")
-        
-        # Gráfico de distribuição de risco
-        if 'Score_Risco' in df.columns:
-            st.subheader("📊 Distribuição de Risco")
-            fig = px.histogram(df, x='Score_Risco', nbins=20, 
-                              title="Distribuição do Score de Risco",
-                              labels={'Score_Risco': 'Score de Risco', 'count': 'Número de Labs'})
-            fig.update_layout(showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
-        
-        # Top insights automáticos
-        st.subheader("💡 Insights Automáticos")
-        if 'Insights_Automaticos' in df.columns and 'Score_Risco' in df.columns:
-            insights_df = df[['Nome_Fantasia_PCL', 'Score_Risco', 'Insights_Automaticos']].copy()
-            insights_df = insights_df[insights_df['Score_Risco'] > 50].sort_values('Score_Risco', ascending=False)
-            
-            if not insights_df.empty:
-                st.dataframe(insights_df, use_container_width=True)
-            else:
-                st.success("✅ Nenhum laboratório com insights críticos!")
-        else:
-            st.info("ℹ️ Colunas 'Score_Risco' ou 'Insights_Automaticos' não encontradas nos dados.")
 
 class ReportManager:
     """Gerenciador de geração de relatórios."""
@@ -2457,11 +2180,13 @@ def main():
                             telefone = info_vip.get('telefone', '') if info_vip else lab_info.get('Telefone', 'N/A')
                             email = info_vip.get('email', '') if info_vip else lab_info.get('Email', 'N/A')
                             contato = info_vip.get('contato', '') if info_vip else 'N/A'
-                            
+                            representante = lab_info.get('Representante_Nome', 'N/A')
+
                             # Limpar dados vazios
                             telefone = telefone if telefone and telefone != 'N/A' else 'N/A'
                             email = email if email and email != 'N/A' else 'N/A'
                             contato = contato if contato else 'N/A'
+                            representante = representante if representante and representante != 'N/A' else 'N/A'
                             
                             st.markdown(f"""
                             <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #6c757d;">
@@ -2486,6 +2211,10 @@ def main():
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">Email</div>
                                         <div style="font-size: 1rem; font-weight: bold; color: #495057;">{email}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">Representante</div>
+                                        <div style="font-size: 1rem; font-weight: bold; color: #495057;">{representante}</div>
                                     </div>
                                 </div>
                             </div>

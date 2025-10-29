@@ -2572,8 +2572,14 @@ def main():
 
         # Adicionar colunas de coletas mensais (2024 e 2025)
         meses_nomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+        # Mapeamento dos códigos dos meses para nomes completos em português
+        meses_nomes_completos = {
+            "Jan": "Janeiro", "Fev": "Fevereiro", "Mar": "Março", "Abr": "Abril",
+            "Mai": "Maio", "Jun": "Junho", "Jul": "Julho", "Ago": "Agosto",
+            "Set": "Setembro", "Out": "Outubro", "Nov": "Novembro", "Dez": "Dezembro"
+        }
         mes_limite_2025 = min(datetime.now().month, 12)
-
+        
         # Colunas de 2024 (todos os meses)
         cols_2024 = [f'N_Coletas_{m}_24' for m in meses_nomes]
         # Colunas de 2025 (até o mês atual)
@@ -2594,80 +2600,131 @@ def main():
                 df_exibicao['Volume_Atual_2025'] = df_exibicao['Volume_Atual_2025'].astype(int)
             if 'Volume_Maximo_2024' in df_exibicao.columns:
                 df_exibicao['Volume_Maximo_2024'] = df_exibicao['Volume_Maximo_2024'].astype(int)
-            # Mostrar tabela com contador
-            st.markdown(f"**Mostrando {len(df_exibicao)} laboratórios**")
-            st.dataframe(
-                df_exibicao,
-                use_container_width=True,
-                height=500,
-                column_config={
-                    "CNPJ_PCL": st.column_config.TextColumn(
-                        "📄 CNPJ",
-                        help="CNPJ do laboratório"
-                    ),
-                    "Nome_Fantasia_PCL": st.column_config.TextColumn(
-                        "🏥 Nome Fantasia",
-                        help="Nome fantasia do laboratório"
-                    ),
-                    "Estado": st.column_config.TextColumn(
-                        "🗺️ Estado",
-                        help="Estado do laboratório"
-                    ),
-                    "Cidade": st.column_config.TextColumn(
-                        "🏙️ Cidade",
-                        help="Cidade do laboratório"
-                    ),
-                    "Status_Risco": st.column_config.TextColumn(
-                        "Status de Risco",
-                        help="Classificação de risco do laboratório"
-                    ),
-                    "Variacao_Percentual": st.column_config.NumberColumn(
-                        "Variação %",
-                        format="%.2f%%",
-                        help="Variação percentual em relação ao ano anterior"
-                    ),
-                    "Volume_Atual_2025": st.column_config.NumberColumn(
-                        "Volume Atual 2025",
-                        help="Volume atual de coletas em 2025"
-                    ),
-                    "Volume_Maximo_2024": st.column_config.NumberColumn(
-                        "Volume Máximo 2024",
-                        help="Volume máximo de coletas em 2024"
-                    ),
-                    "Tendencia_Volume": st.column_config.TextColumn(
-                        "Tendência",
-                        help="Tendência de volume (Crescimento/Declínio/Estável)"
-                    ),
-                    **{
-                        # Configurações para colunas mensais de 2024
-                        col: st.column_config.NumberColumn(
-                            f"{col.split('_')[1]}/24",
-                            help=f"Número de coletas em {col.split('_')[1]} de 2024"
-                        )
-                        for col in cols_2024 if col in df_exibicao.columns
-                    },
-                    **{
-                        # Configurações para colunas mensais de 2025
-                        col: st.column_config.NumberColumn(
-                            f"{col.split('_')[1]}/25",
-                            help=f"Número de coletas em {col.split('_')[1]} de 2025"
-                        )
-                        for col in cols_2025 if col in df_exibicao.columns
-                    },
-                    "Rede": st.column_config.TextColumn(
-                        "🏢 Rede",
-                        help="Rede à qual o laboratório pertence"
-                    ),
-                    "Ranking": st.column_config.TextColumn(
-                        "🏆 Ranking",
-                        help="Ranking individual do laboratório"
-                    ),
-                    "Ranking Rede": st.column_config.TextColumn(
-                        "🏅 Ranking Rede",
-                        help="Ranking da rede do laboratório"
+            # Criar configuração de colunas de forma mais explícita
+            column_config = {
+                "CNPJ_PCL": st.column_config.TextColumn(
+                    "📄 CNPJ",
+                    help="CNPJ do laboratório"
+                ),
+                "Nome_Fantasia_PCL": st.column_config.TextColumn(
+                    "🏥 Nome Fantasia",
+                    help="Nome fantasia do laboratório"
+                ),
+                "Estado": st.column_config.TextColumn(
+                    "🗺️ Estado",
+                    help="Estado do laboratório"
+                ),
+                "Cidade": st.column_config.TextColumn(
+                    "🏙️ Cidade",
+                    help="Cidade do laboratório"
+                ),
+                "Status_Risco": st.column_config.TextColumn(
+                    "Status de Risco",
+                    help="Classificação de risco do laboratório"
+                ),
+                "Dias_Sem_Coleta": st.column_config.NumberColumn(
+                    "Dias Sem Coleta",
+                    help="Número de dias sem coleta"
+                ),
+                "Variacao_Percentual": st.column_config.NumberColumn(
+                    "Variação %",
+                    format="%.2f%%",
+                    help="Variação percentual em relação ao ano anterior"
+                ),
+                "Volume_Atual_2025": st.column_config.NumberColumn(
+                    "Volume Atual 2025",
+                    help="Volume atual de coletas em 2025"
+                ),
+                "Volume_Maximo_2024": st.column_config.NumberColumn(
+                    "Volume Máximo 2024",
+                    help="Volume máximo de coletas em 2024"
+                ),
+                "Tendencia_Volume": st.column_config.TextColumn(
+                    "Tendência",
+                    help="Tendência de volume (Crescimento/Declínio/Estável)"
+                )
+            }
+            
+            # Adicionar configurações para colunas mensais de 2024
+            for col in cols_2024:
+                if col in df_exibicao.columns:
+                    mes_codigo = col.split('_')[2]  # Corrigido: pegar o terceiro elemento (índice 2)
+                    mes_nome = meses_nomes_completos.get(mes_codigo, mes_codigo)
+                    # Usar configuração mais simples
+                    column_config[col] = st.column_config.NumberColumn(
+                        f"{mes_nome}/24",
+                        help=f"Número de coletas em {mes_nome} de 2024"
                     )
-                }
+            
+            # Adicionar configurações para colunas mensais de 2025
+            for col in cols_2025:
+                if col in df_exibicao.columns:
+                    mes_codigo = col.split('_')[2]  # Corrigido: pegar o terceiro elemento (índice 2)
+                    mes_nome = meses_nomes_completos.get(mes_codigo, mes_codigo)
+                    # Usar configuração mais simples
+                    column_config[col] = st.column_config.NumberColumn(
+                        f"{mes_nome}/25",
+                        help=f"Número de coletas em {mes_nome} de 2025"
+                    )
+            
+            # Adicionar colunas de rede se disponível
+            if 'Rede' in df_exibicao.columns:
+                column_config["Rede"] = st.column_config.TextColumn(
+                    "🏢 Rede",
+                    help="Rede à qual o laboratório pertence"
+                )
+            if 'Ranking' in df_exibicao.columns:
+                column_config["Ranking"] = st.column_config.TextColumn(
+                    "🏆 Ranking",
+                    help="Ranking individual do laboratório"
+                )
+            if 'Ranking_Rede' in df_exibicao.columns:
+                column_config["Ranking_Rede"] = st.column_config.TextColumn(
+                    "🏅 Ranking Rede",
+                    help="Ranking da rede do laboratório"
+                )
+            
+            # Renomear as colunas diretamente no dataframe para exibir nomes completos dos meses
+            df_exibicao_renamed = df_exibicao.copy()
+            rename_dict = {}
+            
+            # Renomear colunas principais para nomes mais legíveis
+            rename_dict.update({
+                "CNPJ_PCL": "CNPJ",
+                "Nome_Fantasia_PCL": "Nome Fantasia",
+                "Status_Risco": "Status de Risco",
+                "Dias_Sem_Coleta": "Dias Sem Coleta",
+                "Variacao_Percentual": "Variação %",
+                "Volume_Atual_2025": "Volume Atual 2025",
+                "Volume_Maximo_2024": "Volume Máximo 2024",
+                "Tendencia_Volume": "Tendência",
+                "Ranking_Rede": "Ranking Rede"
+            })
+            
+            # Renomear colunas de 2024
+            for col in cols_2024:
+                if col in df_exibicao_renamed.columns:
+                    mes_codigo = col.split('_')[2]  # Corrigido: pegar o terceiro elemento (índice 2)
+                    mes_nome = meses_nomes_completos.get(mes_codigo, mes_codigo)
+                    rename_dict[col] = f"{mes_nome}/24"
+            
+            # Renomear colunas de 2025
+            for col in cols_2025:
+                if col in df_exibicao_renamed.columns:
+                    mes_codigo = col.split('_')[2]  # Corrigido: pegar o terceiro elemento (índice 2)
+                    mes_nome = meses_nomes_completos.get(mes_codigo, mes_codigo)
+                    rename_dict[col] = f"{mes_nome}/25"
+            
+            df_exibicao_renamed = df_exibicao_renamed.rename(columns=rename_dict)
+            
+            # Mostrar tabela com contador
+            st.markdown(f"**Mostrando {len(df_exibicao_renamed)} laboratórios**")
+            st.dataframe(
+                df_exibicao_renamed,
+                use_container_width=True,
+                height=500
             )
+            
             # Botões de download
             col_download1, col_download2 = st.columns(2)
             with col_download1:

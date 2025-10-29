@@ -210,6 +210,10 @@ CSS_STYLES = """
         transition: var(--transition);
         text-align: center;
         margin-bottom: 1.5rem; /* Aumentado espaçamento */
+        display: flex;               /* Estabilidade de altura */
+        flex-direction: column;      /* Empilha valor, label, delta */
+        justify-content: center;     /* Centraliza verticalmente */
+        min-height: 140px;           /* Altura mínima consistente */
     }
     .metric-card:hover {
         transform: translateY(-4px); /* Mais elevação */
@@ -231,6 +235,7 @@ CSS_STYLES = """
     .metric-delta {
         font-size: 0.9rem;
         margin-top: 0.5rem;
+        min-height: 1rem;            /* Reserva espaço mesmo vazia */
     }
     .metric-delta.positive { color: var(--success-color); }
     .metric-delta.negative { color: var(--danger-color); }
@@ -462,37 +467,7 @@ class DataManager:
         """Prepara e limpa os dados carregados - Atualizado para coerência entre telas."""
         if df is None or df.empty:
             return pd.DataFrame()
-        # Debug: mostrar colunas disponíveis
-        if st.sidebar.checkbox("🔍 Mostrar Debug", help="Exibir informações de debug"):
-            st.sidebar.write(f"Total de colunas: {len(df.columns)}")
-         
-            # Verificar se campos de cidade e estado existem
-            if 'Estado' in df.columns:
-                st.sidebar.write(f"✅ Estado: {df['Estado'].nunique()} valores únicos")
-            else:
-                st.sidebar.write("❌ Campo 'Estado' não encontrado")
-             
-            if 'Cidade' in df.columns:
-                st.sidebar.write(f"✅ Cidade: {df['Cidade'].nunique()} valores únicos")
-            else:
-                st.sidebar.write("❌ Campo 'Cidade' não encontrado")
-         
-            # Verificar Status_Risco
-            if 'Status_Risco' in df.columns:
-                st.sidebar.write(f"✅ Status_Risco: {df['Status_Risco'].nunique()} valores únicos")
-            else:
-                st.sidebar.write("❌ Campo 'Status_Risco' não encontrado")
-                # Mostrar colunas que podem ser Status_Risco
-                colunas_similares = [col for col in df.columns if 'status' in col.lower() or 'risco' in col.lower()]
-                if colunas_similares:
-                    st.sidebar.write(f"Colunas similares encontradas: {colunas_similares}")
-                else:
-                    st.sidebar.write("Nenhuma coluna similar encontrada")
-         
-            # Mostrar todas as colunas
-            st.sidebar.write("Todas as colunas:")
-            for i, col in enumerate(df.columns):
-                st.sidebar.write(f"{i+1}. {col}")
+        # Removido bloco de debug da sidebar para manter interface limpa
         # Garantir tipos de dados corretos
         if 'Data_Analise' in df.columns:
             df['Data_Analise'] = pd.to_datetime(df['Data_Analise'], errors='coerce')
@@ -1556,6 +1531,7 @@ class UIManager:
             <div class="metric-card">
                 <div class="metric-value">{metrics.total_labs:,}</div>
                 <div class="metric-label">Labs com coleta nos últimos 90 dias</div>
+                <div class="metric-delta">&nbsp;</div>
             </div>
             """, unsafe_allow_html=True)
         with col2:
@@ -1563,6 +1539,7 @@ class UIManager:
             <div class="metric-card">
                 <div class="metric-value">{metrics.total_coletas:,}</div>
                 <div class="metric-label">Total de Coletas</div>
+                <div class="metric-delta">&nbsp;</div>
             </div>
             """, unsafe_allow_html=True)
         with col3:
@@ -1570,6 +1547,7 @@ class UIManager:
             <div class="metric-card">
                 <div class="metric-value">{metrics.labs_em_risco:,}</div>
                 <div class="metric-label">Labs em Risco</div>
+                <div class="metric-delta">&nbsp;</div>
             </div>
             """, unsafe_allow_html=True)
         with col4:
@@ -1947,7 +1925,7 @@ def main():
     # ========================================
     # NAVEGAÇÃO (PRIMEIRO - NO TOPO DA SIDEBAR)
     # ========================================
-    st.sidebar.markdown('<div class="sidebar-header"><h3>🧭 Navegação</h3></div>', unsafe_allow_html=True)
+    # Removido cabeçalho "Navegação" da sidebar; botões de páginas mantidos abaixo
    
     pages = ["🏠 Visão Geral", "📋 Análise Detalhada", "🏢 Ranking Rede", "🔧 Manutenção VIPs"]
    

@@ -422,11 +422,79 @@ def calcular_metricas_churn():
         base['Representante_Nome'] = ''
 
     # Campos de identificação/descrição
+    # Campos de identificação/descrição
     base['CNPJ_PCL'] = df_laboratories.set_index('_id').reindex(base.index).get('cnpj') if 'cnpj' in df_laboratories.columns else ''
     base['Razao_Social_PCL'] = df_laboratories.set_index('_id').reindex(base.index).get('legalName') if 'legalName' in df_laboratories.columns else ''
     base['Nome_Fantasia_PCL'] = df_laboratories.set_index('_id').reindex(base.index).get('fantasyName') if 'fantasyName' in df_laboratories.columns else ''
-    base['Estado'] = df_laboratories.set_index('_id').reindex(base.index).get('address.state.code') if 'address.state.code' in df_laboratories.columns else ''
-    base['Cidade'] = df_laboratories.set_index('_id').reindex(base.index).get('address.city') if 'address.city' in df_laboratories.columns else ''
+
+    # Debug: verificar colunas de endereço disponíveis
+    logger.info(f"Colunas disponíveis em df_laboratories: {list(df_laboratories.columns)}")
+
+    # Estado e Cidade - extrair da coluna 'address' que contém dados JSON
+    import re
+    import json
+
+    def extrair_estado_cidade_json(address_str):
+        """Extrai estado e cidade da string JSON de endereço."""
+        if pd.isna(address_str) or address_str == '':
+            return '', ''
+
+        try:
+            # Primeiro, tentar substituir ObjectId por null para facilitar o parse JSON
+            address_clean = re.sub(r'ObjectId\([^)]+\)', 'null', address_str)
+            # Converter aspas simples para duplas para JSON válido
+            address_clean = address_clean.replace("'", '"')
+
+            # Fazer parse do JSON
+            address_dict = json.loads(address_clean)
+
+            # Extrair estado e cidade
+            estado = ''
+            cidade = ''
+
+            if 'state' in address_dict:
+                state_data = address_dict['state']
+                if isinstance(state_data, dict) and 'code' in state_data:
+                    estado = state_data['code']
+                elif isinstance(state_data, str):
+                    estado = state_data
+
+            if 'city' in address_dict:
+                cidade = address_dict['city']
+
+            return str(estado).strip(), str(cidade).strip()
+
+        except Exception as e:
+            # Fallback: tentar extrair com regex se JSON falhar
+            try:
+                # Procurar por '"code": "XX"' no estado
+                state_match = re.search(r'"code":\s*"([^"]+)"', address_str)
+                estado = state_match.group(1) if state_match else ''
+
+                # Procurar por '"city": "Nome"' na cidade
+                city_match = re.search(r'"city":\s*"([^"]+)"', address_str)
+                cidade = city_match.group(1) if city_match else ''
+
+                return str(estado).strip(), str(cidade).strip()
+            except:
+                logger.warning(f"Erro ao extrair endereço: {e}, valor: {address_str}")
+                return '', ''
+
+    # Aplicar extração para todas as linhas
+    labs_address = df_laboratories.set_index('_id').reindex(base.index)['address']
+    enderecos_extraidos = labs_address.apply(extrair_estado_cidade_json)
+
+    base['Estado'] = enderecos_extraidos.apply(lambda x: x[0])
+    base['Cidade'] = enderecos_extraidos.apply(lambda x: x[1])
+
+    # Debug: mostrar alguns exemplos
+    logger.info(f"Exemplos de endereços processados:")
+    for i, (estado, cidade) in enumerate(enderecos_extraidos.head(3)):
+        logger.info(f"  Lab {i+1}: Estado='{estado}', Cidade='{cidade}'")
+
+    # Garantir que não há valores None
+    base['Estado'] = base['Estado'].fillna('')
+    base['Cidade'] = base['Cidade'].fillna('')
             
             # Metadados
     base['Data_Analise'] = datetime.now()

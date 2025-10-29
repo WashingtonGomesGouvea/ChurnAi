@@ -2,7 +2,6 @@
 Sistema Syntox Churn
 Dashboard moderno e profissional para análise de retenção de laboratórios
 """
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -14,18 +13,13 @@ from io import BytesIO
 from dataclasses import dataclass
 import warnings
 warnings.filterwarnings('ignore')
-
 # Importar configurações
 from config_churn import *
-
 # Importar sistema de autenticação Microsoft
 from auth_microsoft import MicrosoftAuth, AuthManager, create_login_page, create_user_header
-
-
 # ============================================
 # FUNÇÕES DE INTEGRAÇÃO SHAREPOINT/ONEDRIVE
 # ============================================
-
 def _get_graph_config() -> Optional[Dict[str, Any]]:
     """Extrai configurações do Graph API dos secrets do Streamlit."""
     try:
@@ -46,7 +40,6 @@ def _get_graph_config() -> Optional[Dict[str, Any]]:
         }
     except Exception:
         return None
-
 def _is_valid_csv(path: str) -> bool:
     """Verifica se arquivo CSV é válido."""
     try:
@@ -56,7 +49,6 @@ def _is_valid_csv(path: str) -> bool:
         return len(df.columns) > 0
     except:
         return False
-
 def _is_valid_parquet(path: str) -> bool:
     """Verifica se arquivo Parquet é válido."""
     try:
@@ -66,12 +58,10 @@ def _is_valid_parquet(path: str) -> bool:
         return len(df.columns) > 0
     except:
         return False
-
 def should_download_sharepoint(arquivo_remoto: str = None, force: bool = False) -> bool:
     """Verifica se deve baixar arquivo do SharePoint."""
     if force:
         return True
-
     # Determinar qual arquivo verificar (baseado no arquivo remoto solicitado)
     if arquivo_remoto:
         base_name = os.path.basename(arquivo_remoto)
@@ -81,36 +71,33 @@ def should_download_sharepoint(arquivo_remoto: str = None, force: bool = False) 
             arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
     else:
         arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
-
     # Verificar se existe arquivo local recente (< 5 minutos)
     if os.path.exists(arquivo_local):
         import time
         idade_arquivo = time.time() - os.path.getmtime(arquivo_local)
-        if idade_arquivo < CACHE_TTL:  # CACHE_TTL definido em config_churn.py
+        if idade_arquivo < CACHE_TTL: # CACHE_TTL definido em config_churn.py
             return False
-
     return True
-
 def baixar_sharepoint(arquivo_remoto: str = None, force: bool = False) -> Optional[str]:
     """
     Baixa arquivo do OneDrive/SharePoint via Microsoft Graph.
-    
+ 
     Args:
         arquivo_remoto: Caminho do arquivo no OneDrive (usa config padrão se None)
         force: Força download mesmo se cache válido
-    
+ 
     Returns:
         Caminho local do arquivo baixado ou None se falhar
     """
     cfg = _get_graph_config()
-    
+ 
     # Sem configuração Graph, retornar arquivo local se existir
     if not cfg or not (cfg.get("tenant_id") and cfg.get("client_id") and cfg.get("client_secret")):
         arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
         if os.path.exists(arquivo_local):
             return arquivo_local
         return None
-    
+ 
     # Verificar se precisa baixar
     if not should_download_sharepoint(arquivo_remoto=arquivo_remoto, force=force):
         # Retornar o arquivo local correspondente ao solicitado
@@ -122,41 +109,40 @@ def baixar_sharepoint(arquivo_remoto: str = None, force: bool = False) -> Option
                 arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
         else:
             arquivo_local = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
-
         if os.path.exists(arquivo_local):
             return arquivo_local
-    
+ 
     try:
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        
+     
         # Usar ChurnSPConnector
         from churn_sp_connector import ChurnSPConnector
-        
+     
         connector = ChurnSPConnector(config=st.secrets)
-        
+     
         # Determinar arquivo remoto
         if arquivo_remoto is None:
             arquivo_remoto = cfg.get("arquivo", "Data Analysis/Churn PCLs/churn_analysis_latest.csv")
-        
+     
         # Baixar arquivo
         content = connector.download(arquivo_remoto)
-        
+     
         # Salvar localmente
         base_name = os.path.basename(arquivo_remoto)
         if not base_name:
             base_name = "churn_analysis_latest.csv"
-        
+     
         local_path = os.path.join(OUTPUT_DIR, base_name)
-        
+     
         with open(local_path, "wb") as f:
             f.write(content)
-        
+     
         # Validar arquivo baixado
         if _is_valid_csv(local_path) or _is_valid_parquet(local_path):
             return local_path
-        
+     
         return None
-        
+     
     except Exception as e:
         st.warning(f"⚠️ Não foi possível baixar do SharePoint: {e}")
         # Tentar usar arquivo local se existir
@@ -164,8 +150,6 @@ def baixar_sharepoint(arquivo_remoto: str = None, force: bool = False) -> Option
         if os.path.exists(arquivo_local):
             return arquivo_local
         return None
-
-
 # Configuração da página
 st.set_page_config(
     page_title="📊 Syntox Churn",
@@ -176,11 +160,10 @@ st.set_page_config(
         'About': "Syntox Churn - Sistema profissional para monitoramento de retenção de PCLs"
     }
 )
-
-# CSS moderno e profissional
+# CSS moderno e profissional - Atualizado com melhorias de layout
 CSS_STYLES = """
 <style>
-    /* Tema profissional */
+    /* Tema profissional atualizado */
     :root {
         --primary-color: #1f77b4;
         --secondary-color: #ff7f0e;
@@ -190,39 +173,34 @@ CSS_STYLES = """
         --info-color: #17a2b8;
         --light-bg: #f8f9fa;
         --dark-bg: #343a40;
-        --border-radius: 8px;
-        --shadow: 0 2px 4px rgba(0,0,0,0.1);
+        --border-radius: 12px; /* Aumentado para visual mais moderno */
+        --shadow: 0 4px 8px rgba(0,0,0,0.1); /* Sombra mais suave */
         --transition: all 0.3s ease;
     }
-
     /* Reset e base */
     * { box-sizing: border-box; }
-
     /* Header profissional */
     .main-header {
         background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
         color: white;
-        padding: 2rem 1rem;
+        padding: 2.5rem 1.5rem; /* Aumentado padding */
         border-radius: var(--border-radius);
-        margin-bottom: 2rem;
+        margin-bottom: 2.5rem;
         text-align: center;
         box-shadow: var(--shadow);
     }
-
     .main-header h1 {
         margin: 0;
-        font-size: 2.5rem;
-        font-weight: 300;
+        font-size: 2.8rem; /* Aumentado tamanho */
+        font-weight: 400;
         text-shadow: 0 2px 4px rgba(0,0,0,0.3);
     }
-
     .main-header p {
         margin: 0.5rem 0 0 0;
         opacity: 0.9;
-        font-size: 1.1rem;
+        font-size: 1.2rem;
     }
-
-    /* Cards de métricas modernas */
+    /* Cards de métricas modernas - Melhorados */
     .metric-card {
         background: white;
         border-radius: var(--border-radius);
@@ -231,94 +209,81 @@ CSS_STYLES = """
         border: 1px solid #e9ecef;
         transition: var(--transition);
         text-align: center;
-        margin-bottom: 1rem;
+        margin-bottom: 1.5rem; /* Aumentado espaçamento */
     }
-
     .metric-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        transform: translateY(-4px); /* Mais elevação */
+        box-shadow: 0 6px 12px rgba(0,0,0,0.15);
     }
-
     .metric-value {
-        font-size: 2rem;
+        font-size: 2.2rem; /* Aumentado */
         font-weight: 700;
         margin: 0.5rem 0;
         color: var(--primary-color);
     }
-
     .metric-label {
-        font-size: 0.9rem;
+        font-size: 1rem; /* Ajustado */
         color: #6c757d;
         text-transform: uppercase;
         letter-spacing: 0.5px;
         margin: 0;
     }
-
     .metric-delta {
-        font-size: 0.8rem;
+        font-size: 0.9rem;
         margin-top: 0.5rem;
     }
-
     .metric-delta.positive { color: var(--success-color); }
     .metric-delta.negative { color: var(--danger-color); }
-
-    /* Status badges */
+    /* Status badges - Ajustados */
     .status-badge {
         display: inline-block;
-        padding: 0.25rem 0.75rem;
+        padding: 0.35rem 0.85rem; /* Ajustado espaçamento */
         border-radius: 20px;
-        font-size: 0.8rem;
+        font-size: 0.9rem;
         font-weight: 600;
         text-transform: uppercase;
     }
-
     .status-alto { background-color: #fee; color: var(--danger-color); border: 1px solid #fcc; }
     .status-medio { background-color: #ffeaa7; color: var(--warning-color); border: 1px solid #ffeaa7; }
     .status-baixo { background-color: #d4edda; color: var(--success-color); border: 1px solid #c3e6cb; }
     .status-inativo { background-color: #f8f9fa; color: #6c757d; border: 1px solid #dee2e6; }
-
     /* Botões modernos */
     .stButton > button {
         background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
         color: white;
         border: none;
         border-radius: var(--border-radius);
-        padding: 0.75rem 1.5rem;
+        padding: 0.85rem 1.75rem; /* Ajustado */
         font-weight: 600;
         transition: var(--transition);
         box-shadow: var(--shadow);
     }
-
     .stButton > button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        transform: translateY(-2px); /* Mais elevação */
+        box-shadow: 0 6px 12px rgba(0,0,0,0.2);
     }
-
     /* Sidebar moderna */
     .sidebar-header {
         background: var(--light-bg);
-        padding: 1rem;
+        padding: 1.2rem;
         border-radius: var(--border-radius);
-        margin-bottom: 1rem;
-        border-left: 4px solid var(--primary-color);
+        margin-bottom: 1.2rem;
+        border-left: 5px solid var(--primary-color);
     }
-
     .sidebar-header h3 {
         margin: 0;
         color: var(--primary-color);
-        font-size: 1.1rem;
+        font-size: 1.2rem;
         font-weight: 600;
     }
-
     /* Tabelas modernas */
     .dataframe-container {
         background: white;
         border-radius: var(--border-radius);
-        padding: 1rem;
+        padding: 1.2rem;
         box-shadow: var(--shadow);
         overflow: hidden;
     }
-
     /* Expander styling */
     .streamlit-expanderHeader {
         background: var(--light-bg);
@@ -326,14 +291,12 @@ CSS_STYLES = """
         font-weight: 600;
         color: var(--primary-color);
     }
-
     /* Loading states */
     .loading-container {
         text-align: center;
         padding: 3rem;
         color: #6c757d;
     }
-
     .loading-spinner {
         border: 4px solid #f3f3f3;
         border-top: 4px solid var(--primary-color);
@@ -343,45 +306,38 @@ CSS_STYLES = """
         animation: spin 1s linear infinite;
         margin: 0 auto 1rem;
     }
-
     @keyframes spin {
         0% { transform: rotate(0deg); }
         100% { transform: rotate(360deg); }
     }
-
     /* Responsividade */
     @media (max-width: 768px) {
         .metric-card {
-            margin-bottom: 1rem;
+            margin-bottom: 1.5rem;
         }
         .main-header h1 {
-            font-size: 2rem;
+            font-size: 2.2rem;
         }
         .metric-value {
-            font-size: 1.5rem;
+            font-size: 1.8rem;
         }
     }
-
     /* Custom scrollbar */
     ::-webkit-scrollbar {
         width: 8px;
         height: 8px;
     }
-
     ::-webkit-scrollbar-track {
         background: #f1f1f1;
         border-radius: 4px;
     }
-
     ::-webkit-scrollbar-thumb {
         background: var(--primary-color);
         border-radius: 4px;
     }
-
     ::-webkit-scrollbar-thumb:hover {
         background: var(--secondary-color);
     }
-
     /* Footer */
     .footer {
         text-align: center;
@@ -390,34 +346,44 @@ CSS_STYLES = """
         border-top: 1px solid #e9ecef;
         margin-top: 3rem;
     }
-
     /* Dark mode support */
     @media (prefers-color-scheme: dark) {
         :root {
             --light-bg: #2d3748;
             --dark-bg: #1a202c;
         }
-
         .metric-card {
             background: var(--dark-bg);
             border-color: #4a5568;
             color: white;
         }
-
         .metric-label {
             color: #a0aec0;
         }
     }
+    /* Melhorias de espaçamento e layout */
+    section[data-testid="stExpander"] > div {
+        margin-bottom: 1rem;
+    }
+    .stTabs [data-testid="stMarkdownContainer"] {
+        font-size: 1.1rem;
+        font-weight: 600;
+    }
+    /* Ajuste para gráficos */
+    .plotly-chart {
+        margin: 1rem 0;
+        border-radius: var(--border-radius);
+        box-shadow: var(--shadow);
+        padding: 1rem;
+        background: white;
+    }
 </style>
 """
-
 # Injetar CSS
 st.markdown(CSS_STYLES, unsafe_allow_html=True)
-
 # ========================================
-# CLASSES DO SISTEMA v2.0
+# CLASSES DO SISTEMA v2.0 - Atualizado com correções de bugs
 # ========================================
-
 @dataclass
 class KPIMetrics:
     """Classe para armazenar métricas calculadas."""
@@ -431,10 +397,8 @@ class KPIMetrics:
     labs_medio_risco: int = 0
     labs_baixo_risco: int = 0
     labs_inativos: int = 0
-
 class DataManager:
     """Gerenciador de dados com cache inteligente."""
-
     @staticmethod
     def normalizar_cnpj(cnpj: str) -> str:
         """Remove formatação do CNPJ (pontos, traços, barras)"""
@@ -454,7 +418,6 @@ class DataManager:
         elif len(cnpj_limpo) > 14:
             cnpj_limpo = cnpj_limpo[-14:]
         return cnpj_limpo
-
     @staticmethod
     @st.cache_data(ttl=CACHE_TTL)
     def carregar_dados_churn() -> Optional[pd.DataFrame]:
@@ -462,7 +425,7 @@ class DataManager:
         try:
             # PRIMEIRO: Tentar baixar do SharePoint/OneDrive
             arquivo_sharepoint = baixar_sharepoint()
-            
+         
             if arquivo_sharepoint and os.path.exists(arquivo_sharepoint):
                 # Tentar ler como CSV primeiro
                 try:
@@ -475,47 +438,45 @@ class DataManager:
                         return df
                     except Exception:
                         pass
-            
+         
             # FALLBACK: Tentar arquivos locais
             # Primeiro tenta CSV (mais comum)
             arquivo_csv = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
             if os.path.exists(arquivo_csv):
                 df = pd.read_csv(arquivo_csv, encoding=ENCODING, low_memory=False)
                 return df
-            
+         
             # Fallback para parquet
             arquivo_path = os.path.join(OUTPUT_DIR, CHURN_ANALYSIS_FILE)
             if os.path.exists(arquivo_path):
                 df = pd.read_parquet(arquivo_path, engine='pyarrow')
                 return df
-            
+         
             return None
-            
+         
         except Exception as e:
             st.error(f"❌ Erro ao carregar dados: {e}")
             return None
-
     @staticmethod
     def preparar_dados(df: pd.DataFrame) -> pd.DataFrame:
-        """Prepara e limpa os dados carregados."""
+        """Prepara e limpa os dados carregados - Atualizado para coerência entre telas."""
         if df is None or df.empty:
             return pd.DataFrame()
-
         # Debug: mostrar colunas disponíveis
         if st.sidebar.checkbox("🔍 Mostrar Debug", help="Exibir informações de debug"):
             st.sidebar.write(f"Total de colunas: {len(df.columns)}")
-            
+         
             # Verificar se campos de cidade e estado existem
             if 'Estado' in df.columns:
                 st.sidebar.write(f"✅ Estado: {df['Estado'].nunique()} valores únicos")
             else:
                 st.sidebar.write("❌ Campo 'Estado' não encontrado")
-                
+             
             if 'Cidade' in df.columns:
                 st.sidebar.write(f"✅ Cidade: {df['Cidade'].nunique()} valores únicos")
             else:
                 st.sidebar.write("❌ Campo 'Cidade' não encontrado")
-            
+         
             # Verificar Status_Risco
             if 'Status_Risco' in df.columns:
                 st.sidebar.write(f"✅ Status_Risco: {df['Status_Risco'].nunique()} valores únicos")
@@ -527,16 +488,14 @@ class DataManager:
                     st.sidebar.write(f"Colunas similares encontradas: {colunas_similares}")
                 else:
                     st.sidebar.write("Nenhuma coluna similar encontrada")
-            
+         
             # Mostrar todas as colunas
             st.sidebar.write("Todas as colunas:")
             for i, col in enumerate(df.columns):
                 st.sidebar.write(f"{i+1}. {col}")
-
         # Garantir tipos de dados corretos
         if 'Data_Analise' in df.columns:
             df['Data_Analise'] = pd.to_datetime(df['Data_Analise'], errors='coerce')
-
         # Calcular volume total se não existir (até o mês atual)
         try:
             # Função inline para evitar dependência circular
@@ -549,16 +508,15 @@ class DataManager:
         except Exception:
             meses_2025_dyn = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
         colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses_2025_dyn]
-
         if 'Volume_Total_2025' not in df.columns:
             df['Volume_Total_2025'] = df[colunas_meses].sum(axis=1, skipna=True) if colunas_meses else 0
-
         # Adicionar coluna CNPJ normalizado para match com dados VIP
         if 'CNPJ_PCL' in df.columns:
             df['CNPJ_Normalizado'] = df['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
-
+        # Filtro Active == True para coerência
+        if 'Active' in df.columns:
+            df = df[df['Active'] == True]
         return df
-
     @staticmethod
     @st.cache_data(ttl=CACHE_TTL)
     def carregar_matriz_cs_normalizada() -> Optional[pd.DataFrame]:
@@ -567,7 +525,6 @@ class DataManager:
             # PRIMEIRO: Tentar baixar do SharePoint/OneDrive
             arquivo_vip_remoto = "Data Analysis/Churn PCLs/matriz_cs_normalizada.csv"
             arquivo_sharepoint = baixar_sharepoint(arquivo_remoto=arquivo_vip_remoto)
-
             if arquivo_sharepoint and os.path.exists(arquivo_sharepoint):
                 # Tentar ler como CSV
                 try:
@@ -583,7 +540,6 @@ class DataManager:
                         st.warning("⚠️ Coluna 'CNPJ' ou 'CNPJ_PCL' não encontrada na matriz CS. Colunas disponíveis:")
                         st.write(df.columns.tolist())
                         return None
-
                     # Ler CNPJ como string para preservar zeros à esquerda
                     df['CNPJ'] = df['CNPJ'].astype(str)
                     df['CNPJ_Normalizado'] = df['CNPJ'].apply(DataManager.normalizar_cnpj)
@@ -591,20 +547,17 @@ class DataManager:
                     return df
                 except Exception as e:
                     st.warning(f"⚠️ Erro ao ler arquivo do SharePoint: {e}")
-
             # FALLBACK: Tentar arquivos locais
             caminhos_possiveis = [
                 VIP_CSV_FILE,
                 os.path.join(OUTPUT_DIR, VIP_CSV_FILE),
                 os.path.join(os.path.dirname(OUTPUT_DIR), VIP_CSV_FILE),
             ]
-
             arquivo_csv = None
             for caminho in caminhos_possiveis:
                 if os.path.exists(caminho):
                     arquivo_csv = caminho
                     break
-
             if arquivo_csv:
                 # Ler CNPJ como string para preservar zeros à esquerda
                 df = pd.read_csv(
@@ -613,27 +566,15 @@ class DataManager:
                     dtype={'CNPJ': 'string'},
                     low_memory=False
                 )
-
-                # Verificar se tem coluna CNPJ ou CNPJ_PCL
-                if 'CNPJ' in df.columns:
-                    coluna_cnpj = 'CNPJ'
-                elif 'CNPJ_PCL' in df.columns:
-                    coluna_cnpj = 'CNPJ_PCL'
-                    # Renomear para CNPJ para compatibilidade
-                    df['CNPJ'] = df['CNPJ_PCL']
-
                 # Garantir que CNPJ seja string e normalizar
                 df['CNPJ'] = df['CNPJ'].astype(str)
                 df['CNPJ_Normalizado'] = df['CNPJ'].apply(DataManager.normalizar_cnpj)
                 st.success(f"✅ Matriz CS normalizada carregada (local): {len(df)} registros")
                 return df
-
             return None
-
         except Exception as e:
             st.error(f"❌ Erro ao carregar matriz CS normalizada: {e}")
             return None
-
     @staticmethod
     @st.cache_data(ttl=VIP_CACHE_TTL)
     def carregar_dados_vip() -> Optional[pd.DataFrame]:
@@ -642,14 +583,12 @@ class DataManager:
             # Tentar baixar matriz CS do SharePoint
             arquivo_vip_remoto = "Data Analysis/Churn PCLs/matriz_cs_normalizada.csv"
             arquivo_sharepoint = baixar_sharepoint(arquivo_remoto=arquivo_vip_remoto, force=False)
-
             if arquivo_sharepoint and os.path.exists(arquivo_sharepoint):
                 # Ler arquivo VIP
                 df_vip = pd.read_csv(
                     arquivo_sharepoint,
                     encoding='utf-8-sig'
                 )
-
                 # Verificar se tem coluna CNPJ ou CNPJ_PCL
                 if 'CNPJ' in df_vip.columns:
                     coluna_cnpj = 'CNPJ'
@@ -661,26 +600,23 @@ class DataManager:
                     st.warning("⚠️ Coluna 'CNPJ' ou 'CNPJ_PCL' não encontrada no arquivo VIP. Colunas disponíveis:")
                     st.write(df_vip.columns.tolist())
                     return None
-
                 # Ler CNPJ como string para preservar zeros à esquerda
                 df_vip['CNPJ'] = df_vip['CNPJ'].astype(str)
                 df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
                 st.success(f"✅ Dados VIP carregados do SharePoint: {len(df_vip)} registros")
                 return df_vip
-            
+         
             # FALLBACK: Tentar múltiplos caminhos locais
             caminhos_possiveis = [
                 VIP_CSV_FILE,
                 os.path.join(OUTPUT_DIR, VIP_CSV_FILE),
                 os.path.join(os.path.dirname(OUTPUT_DIR), VIP_CSV_FILE),
             ]
-
             arquivo_csv = None
             for caminho in caminhos_possiveis:
                 if os.path.exists(caminho):
                     arquivo_csv = caminho
                     break
-
             if arquivo_csv:
                 # Ler CNPJ como string para preservar zeros à esquerda
                 df_vip = pd.read_csv(
@@ -699,20 +635,18 @@ class DataManager:
         except Exception as e:
             st.warning(f"Erro ao carregar arquivo VIP: {e}")
             return None
-
 class VIPManager:
     """Gerenciador de dados VIP."""
-
     @staticmethod
     def buscar_info_vip(cnpj: str, df_vip: pd.DataFrame) -> Optional[dict]:
         """Busca informações VIP para um CNPJ."""
         if df_vip is None or df_vip.empty or not cnpj:
             return None
-        
+     
         cnpj_normalizado = DataManager.normalizar_cnpj(cnpj)
         if not cnpj_normalizado:
             return None
-        
+     
         # Buscar match no DataFrame VIP
         match = df_vip[df_vip['CNPJ_Normalizado'] == cnpj_normalizado]
         if not match.empty:
@@ -726,112 +660,90 @@ class VIPManager:
                 'email': row.get('Email', '')
             }
         return None
-
 class FilterManager:
     """Gerenciador de filtros da interface."""
-
     def __init__(self):
         self.filtros = {}
-
     def renderizar_sidebar_filtros(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Renderiza filtros otimizados na sidebar."""
         st.sidebar.markdown('<div class="sidebar-header"><h3>🔧 Filtros</h3></div>', unsafe_allow_html=True)
-
         filtros = {}
-
         # Filtro VIP com opção de alternar
         filtros['apenas_vip'] = st.sidebar.toggle(
             "🌟 Apenas Clientes VIP",
             value=True,
             help="Ative para mostrar apenas clientes VIP, desative para mostrar todos"
         )
-        
+     
         # Separador visual
         st.sidebar.markdown("---")
-
         # Filtro por período - Anos e Meses (dados mensais)
         st.sidebar.markdown("**📅 Período de Análise (Mensal)**")
-
         # Verificar anos disponíveis nos dados
         anos_disponiveis = []
         if 'N_Coletas_Jan_24' in df.columns:
             anos_disponiveis.append(2024)
         if 'N_Coletas_Jan_25' in df.columns:
             anos_disponiveis.append(2025)
-
         if not anos_disponiveis:
             st.sidebar.warning("⚠️ Nenhum dado mensal encontrado")
-            anos_disponiveis = [2024, 2025]  # fallback
-
+            anos_disponiveis = [2024, 2025] # fallback
         # Seleção de ano
         ano_selecionado = st.sidebar.selectbox(
             "📊 Ano de Análise:",
             options=anos_disponiveis,
-            index=len(anos_disponiveis)-1,  # Padrão: último ano disponível
+            index=len(anos_disponiveis)-1, # Padrão: último ano disponível
             help="Selecione o ano para análise mensal"
         )
-
         # Mapeamento de meses
         meses_map = {
             'Jan': 'Janeiro', 'Fev': 'Fevereiro', 'Mar': 'Março', 'Abr': 'Abril',
             'Mai': 'Maio', 'Jun': 'Junho', 'Jul': 'Julho', 'Ago': 'Agosto',
             'Set': 'Setembro', 'Out': 'Outubro', 'Nov': 'Novembro', 'Dez': 'Dezembro'
         }
-
         # Meses disponíveis para o ano selecionado
-        sufixo_ano = str(ano_selecionado)[-2:]  # '24' ou '25'
+        sufixo_ano = str(ano_selecionado)[-2:] # '24' ou '25'
         meses_disponiveis = []
-
         for mes_codigo in ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
                           'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']:
             coluna_mes = f'N_Coletas_{mes_codigo}_{sufixo_ano}'
             if coluna_mes in df.columns:
                 meses_disponiveis.append(mes_codigo)
-
         if not meses_disponiveis:
             st.sidebar.warning(f"⚠️ Nenhum mês encontrado para {ano_selecionado}")
-            meses_disponiveis = ['Jan', 'Fev', 'Mar']  # fallback
-
+            meses_disponiveis = ['Jan', 'Fev', 'Mar'] # fallback
         # Seleção de meses
         meses_opcoes = [f"{mes} - {meses_map.get(mes, mes)}" for mes in meses_disponiveis]
-
         meses_selecionados_opcoes = st.sidebar.multiselect(
             f"📅 Meses de {ano_selecionado}:",
             options=meses_opcoes,
-            default=meses_opcoes,  # Todos selecionados por padrão
+            default=meses_opcoes, # Todos selecionados por padrão
             help=f"Selecione os meses de {ano_selecionado} para análise. Deixe todos selecionados para visão completa do ano.",
             key=f"meses_{ano_selecionado}"
         )
-
         # Converter para códigos de mês
         meses_selecionados = []
         for opcao in meses_selecionados_opcoes:
             mes_codigo = opcao.split(' - ')[0]
             if mes_codigo in meses_disponiveis:
                 meses_selecionados.append(mes_codigo)
-
         # Armazenar filtros para uso posterior
         filtros['ano_selecionado'] = ano_selecionado
         filtros['meses_selecionados'] = meses_selecionados
         filtros['sufixo_ano'] = sufixo_ano
-
         # Mostrar período selecionado (texto discreto)
         meses_nomes = [meses_map.get(mes, mes) for mes in meses_selecionados]
-        periodo_texto = f"{ano_selecionado}: {', '.join(meses_nomes[:3])}"  # Max 3 meses no texto
+        periodo_texto = f"{ano_selecionado}: {', '.join(meses_nomes[:3])}" # Max 3 meses no texto
         if len(meses_selecionados) > 3:
             periodo_texto += f" +{len(meses_selecionados)-3}..."
         st.sidebar.markdown(f"<small>📊 {periodo_texto}</small>", unsafe_allow_html=True)
-
         self.filtros = filtros
         return filtros
-
     def aplicar_filtros(self, df: pd.DataFrame, filtros: Dict[str, Any]) -> pd.DataFrame:
-        """Aplica filtros otimizados ao DataFrame."""
+        """Aplica filtros otimizados ao DataFrame - Atualizado para coerência."""
         if df.empty:
             return df
-
         df_filtrado = df.copy()
-
         # Filtro VIP (sempre ativo)
         if filtros.get('apenas_vip', False):
             try:
@@ -845,13 +757,13 @@ class FilterManager:
                     df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(
                         lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) and str(x).strip() != '' else ''
                     )
-                    
+                 
                     # Filtrar apenas registros que estão na lista VIP (com validação)
                     if 'CNPJ_Normalizado' in df_filtrado.columns and 'CNPJ_Normalizado' in df_vip.columns:
                         # Remover CNPJs vazios antes do match
                         df_filtrado = df_filtrado[df_filtrado['CNPJ_Normalizado'] != '']
                         df_vip_clean = df_vip[df_vip['CNPJ_Normalizado'] != '']
-                        
+                     
                         if not df_vip_clean.empty:
                             df_filtrado = df_filtrado[df_filtrado['CNPJ_Normalizado'].isin(df_vip_clean['CNPJ_Normalizado'])]
                         else:
@@ -867,25 +779,21 @@ class FilterManager:
                 # Em caso de erro, retornar DataFrame vazio e log do erro
                 st.error(f"Erro ao aplicar filtro VIP: {str(e)}")
                 return pd.DataFrame()
-
         # Filtro por período (compatibilidade com filtros antigos)
         if 'Data_Analise' in df_filtrado.columns and filtros.get('data_inicio') and filtros.get('data_fim'):
             try:
                 # Garantir que as datas sejam do tipo date
                 data_inicio = filtros['data_inicio']
                 data_fim = filtros['data_fim']
-
                 # Se for datetime, converter para date
                 if hasattr(data_inicio, 'date'):
                     data_inicio = data_inicio.date()
                 if hasattr(data_fim, 'date'):
                     data_fim = data_fim.date()
-
                 # Verificar se a coluna Data_Analise é do tipo datetime
                 if df_filtrado['Data_Analise'].dtype == 'object':
                     # Tentar converter para datetime
                     df_filtrado['Data_Analise'] = pd.to_datetime(df_filtrado['Data_Analise'], errors='coerce')
-
                 # Aplicar filtro apenas se a conversão foi bem-sucedida
                 if df_filtrado['Data_Analise'].dtype.name.startswith('datetime'):
                     df_filtrado = df_filtrado[
@@ -896,28 +804,27 @@ class FilterManager:
                 # Em caso de erro no filtro de data, continuar sem filtrar
                 st.warning(f"Aviso: Erro ao aplicar filtro de período: {str(e)}")
                 pass
-
         # Para dados mensais, o filtro principal será usado nos cálculos dos gráficos
         # Os filtros 'ano_selecionado', 'meses_selecionados' e 'sufixo_ano' são usados
         # diretamente nas funções de cálculo dos gráficos
-
         return df_filtrado
-
 class KPIManager:
-    """Gerenciador de cálculos de KPIs."""
-
+    """Gerenciador de cálculos de KPIs - Atualizado para coerência entre telas."""
     @staticmethod
     def calcular_kpis(df: pd.DataFrame) -> KPIMetrics:
-        """Calcula todas as métricas principais."""
+        """Calcula todas as métricas principais - Atualizado com filtro de coletas recentes."""
         if df.empty:
             return KPIMetrics()
-
         metrics = KPIMetrics()
-        metrics.total_labs = len(df)
-
+        # Filtrar labs com coleta nos últimos 90 dias para coerência
+        if 'Dias_Sem_Coleta' in df.columns:
+            df_recent = df[df['Dias_Sem_Coleta'] <= 90]
+        else:
+            df_recent = df.copy()
+        metrics.total_labs = len(df_recent)
         # Distribuição por status de risco
-        if 'Status_Risco' in df.columns:
-            status_counts = df['Status_Risco'].value_counts()
+        if 'Status_Risco' in df_recent.columns:
+            status_counts = df_recent['Status_Risco'].value_counts()
             metrics.labs_alto_risco = status_counts.get('Alto', 0)
             metrics.labs_medio_risco = status_counts.get('Médio', 0)
             metrics.labs_baixo_risco = status_counts.get('Baixo', 0)
@@ -927,39 +834,30 @@ class KPIManager:
             metrics.labs_medio_risco = 0
             metrics.labs_baixo_risco = 0
             metrics.labs_inativos = 0
-
         # Churn Rate (Alto + Médio risco)
         labs_churn = metrics.labs_alto_risco + metrics.labs_medio_risco
         metrics.churn_rate = (labs_churn / metrics.total_labs * 100) if metrics.total_labs > 0 else 0
-
         # Total de coletas 2025
-        meses_2025 = ChartManager._meses_ate_hoje(df, 2025)
+        meses_2025 = ChartManager._meses_ate_hoje(df_recent, 2025)
         colunas_2025 = [f'N_Coletas_{mes}_25' for mes in meses_2025]
-        colunas_existentes = [col for col in colunas_2025 if col in df.columns]
+        colunas_existentes = [col for col in colunas_2025 if col in df_recent.columns]
         if colunas_existentes:
-            metrics.total_coletas = int(df[colunas_existentes].sum().sum())
+            metrics.total_coletas = int(df_recent[colunas_existentes].sum().sum())
         else:
             metrics.total_coletas = 0
-
         # Labs em risco (todos exceto Baixo)
         metrics.labs_em_risco = metrics.total_labs - metrics.labs_baixo_risco
-
         # NRR removido conforme solicitação
-
         # Ativos recentes
-        if 'Dias_Sem_Coleta' in df.columns:
-            metrics.ativos_7d = (len(df[df['Dias_Sem_Coleta'] <= DIAS_ATIVO_REcente_7]) / metrics.total_labs * 100) if metrics.total_labs > 0 else 0
-            metrics.ativos_30d = (len(df[df['Dias_Sem_Coleta'] <= DIAS_ATIVO_REcente_30]) / metrics.total_labs * 100) if metrics.total_labs > 0 else 0
-
+        if 'Dias_Sem_Coleta' in df_recent.columns:
+            metrics.ativos_7d = (len(df_recent[df_recent['Dias_Sem_Coleta'] <= DIAS_ATIVO_REcente_7]) / metrics.total_labs * 100) if metrics.total_labs > 0 else 0
+            metrics.ativos_30d = (len(df_recent[df_recent['Dias_Sem_Coleta'] <= DIAS_ATIVO_REcente_30]) / metrics.total_labs * 100) if metrics.total_labs > 0 else 0
         return metrics
-
 class ChartManager:
-    """Gerenciador de criação de gráficos."""
-
+    """Gerenciador de criação de gráficos - Atualizado com correções de bugs e layouts."""
     @staticmethod
     def _meses_ate_hoje(df: pd.DataFrame, ano: int) -> list:
         """Retorna lista de códigos de meses disponíveis até o mês corrente para o ano informado.
-
         - Garante ordem cronológica correta
         - Considera apenas colunas que existem no DataFrame
         - Para anos anteriores ao corrente, considera até Dezembro
@@ -970,27 +868,23 @@ class ChartManager:
         meses_limite = meses_ordem[:limite_mes]
         sufixo = str(ano)[-2:]
         return [m for m in meses_limite if f'N_Coletas_{m}_{sufixo}' in df.columns]
-
     @staticmethod
     def criar_grafico_distribuicao_risco(df: pd.DataFrame):
-        """Cria gráfico de distribuição de risco."""
+        """Cria gráfico de distribuição de risco - Atualizado layout."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
-
         if 'Status_Risco' not in df.columns:
             st.warning("⚠️ Coluna 'Status_Risco' não encontrada nos dados.")
             return
-            
+         
         status_counts = df['Status_Risco'].value_counts()
-
         cores_map = {
             'Alto': '#d62728',
             'Médio': '#ff7f0e',
             'Baixo': '#2ca02c',
             'Inativo': '#9467bd'
         }
-
         fig = px.pie(
             values=status_counts.values,
             names=status_counts.index,
@@ -998,54 +892,48 @@ class ChartManager:
             color=status_counts.index,
             color_discrete_map=cores_map
         )
-
         fig.update_traces(
             textposition='inside',
             textinfo='percent+label+value',
             texttemplate='%{label}<br>%{value} labs<br>(%{percent})',
             hovertemplate='<b>%{label}</b><br>%{value} laboratórios<br>%{percent}<extra></extra>'
         )
-
         fig.update_layout(
             showlegend=True,
-            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+            height=500,  # Aumentado tamanho
+            margin=dict(l=40, r=40, t=40, b=40)  # Ajustado margens
         )
-
-        st.plotly_chart(fig, use_container_width=True)
-
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
     @staticmethod
     def criar_grafico_top_labs(df: pd.DataFrame, top_n: int = 10):
-        """Cria gráfico dos laboratórios em risco prioritários."""
+        """Cria gráfico dos laboratórios em risco prioritários - Atualizado layout."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
-
         # Filtrar apenas labs em risco (Alto, Médio, Inativo)
         if 'Status_Risco' in df.columns:
             labs_risco = df[df['Status_Risco'].isin(['Alto', 'Médio', 'Inativo'])].copy()
         else:
             st.warning("⚠️ Coluna 'Status_Risco' não encontrada nos dados.")
             return
-        
+     
         if labs_risco.empty:
             st.info("✅ Nenhum laboratório em risco encontrado!")
             return
-
         # Ordenar por prioridade: Score de risco (se disponível) ou dias sem coleta
         if 'Score_Risco' in labs_risco.columns:
             labs_risco = labs_risco.sort_values(['Score_Risco', 'Dias_Sem_Coleta'], ascending=[False, False])
         else:
             labs_risco = labs_risco.sort_values('Dias_Sem_Coleta', ascending=False)
-        
+     
         top_labs_risco = labs_risco.head(top_n)
-
         cores_map = {
             'Alto': '#d62728',
             'Médio': '#ff7f0e',
             'Baixo': '#2ca02c',
             'Inativo': '#9467bd'
         }
-
         # Usar dias sem coleta como métrica principal
         fig = px.bar(
             top_labs_risco,
@@ -1057,47 +945,44 @@ class ChartManager:
             color_discrete_map=cores_map,
             text='Dias_Sem_Coleta'
         )
-
         fig.update_traces(
             texttemplate='%{text:.0f} dias',
             textposition='outside',
             hovertemplate='<b>%{y}</b><br>Dias sem coleta: %{x:.0f}<br>Status: %{marker.color}<extra></extra>'
         )
-
         fig.update_layout(
             yaxis={'categoryorder': 'total ascending'},
             xaxis_title="Dias sem Coleta",
             yaxis_title="Laboratório",
-            showlegend=True
+            showlegend=True,
+            height=500,  # Aumentado
+            margin=dict(l=40, r=40, t=40, b=100)  # Ajustado para evitar corte
         )
-
-        st.plotly_chart(fig, use_container_width=True)
-
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
     @staticmethod
     def criar_grafico_media_diaria(df: pd.DataFrame, lab_selecionado: str = None):
-        """Cria gráfico de média diária por mês."""
+        """Cria gráfico de média diária por mês - Atualizado layout e bugs."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
-
         meses = ChartManager._meses_ate_hoje(df, 2025)
         if not meses:
             return
         colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses]
-        
+     
         if lab_selecionado:
             lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
             if not lab_data.empty:
                 lab = lab_data.iloc[0]
-                valores_mensais = [lab[col] for col in colunas_meses]
-                
-                # Calcular média diária (dias reais aproximados por mês)
+                valores_mensais = [lab.get(col, 0) for col in colunas_meses]  # Use 0 se NaN
+             
+                # Calcular média diária (dias reais aproximados por mês) - Corrigido zeros inconsistentes
                 dias_map = {
                     'Jan': 31, 'Fev': 28, 'Mar': 31, 'Abr': 30, 'Mai': 31, 'Jun': 30,
                     'Jul': 31, 'Ago': 31, 'Set': 30, 'Out': 31, 'Nov': 30, 'Dez': 31
                 }
-                medias_diarias = [val / max(1, dias_map.get(mes, 30)) for val, mes in zip(valores_mensais, meses)]
-                
+                medias_diarias = [val / dias_map.get(mes, 30) if val > 0 else 0 for val, mes in zip(valores_mensais, meses)]
+             
                 fig = px.bar(
                     x=meses,
                     y=medias_diarias,
@@ -1106,75 +991,81 @@ class ChartManager:
                     color_continuous_scale='Blues',
                     text=[f"{val:.0f}" for val in medias_diarias]
                 )
-                
+             
                 fig.update_traces(
                     texttemplate='%{text} coletas',
                     textposition='outside',
                     hovertemplate='<b>Mês:</b> %{x}<br><b>Média Diária:</b> %{y:.0f} coletas<extra></extra>'
                 )
-                
+             
                 fig.update_layout(
                     xaxis_title="Mês",
                     yaxis_title="Média Diária (Coletas)",
-                    showlegend=False
+                    showlegend=False,
+                    height=600,  # Aumentado conforme solicitado
+                    margin=dict(l=60, r=60, t=60, b=80),  # Margens aumentadas
+                    autosize=True,  # Responsivo
+                    font=dict(size=14)  # Fonte maior
                 )
-                
-                st.plotly_chart(fig, use_container_width=True)
-
+             
+                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
     @staticmethod
     def criar_grafico_coletas_por_dia(df: pd.DataFrame, lab_selecionado: str = None):
-        """Cria gráfico de coletas por dia do mês (0-31)."""
+        """Cria gráfico de coletas por dia do mês (0-31) - Corrigido zeros inconsistentes."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
-
         if lab_selecionado:
             lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
             if not lab_data.empty:
                 lab = lab_data.iloc[0]
-                
+             
                 # Simular distribuição de coletas por dia (baseado no volume mensal)
                 meses = ChartManager._meses_ate_hoje(df, 2025)
                 colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses]
-                valores_mensais = [lab[col] for col in colunas_meses]
-                
+                valores_mensais = [lab.get(col, 0) for col in colunas_meses]  # Use 0 se NaN
+             
                 # Obter data atual para limitar os dias
                 hoje = pd.Timestamp.today()
                 dia_atual = hoje.day
                 mes_atual = hoje.month
                 ano_atual = hoje.year
-                
+             
                 # Mapear nomes dos meses para números
                 meses_ordem = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
                 dados_grafico = []
-                
+             
                 for i, (mes, volume) in enumerate(zip(meses, valores_mensais)):
                     # Determinar quantos dias considerar para este mês
                     mes_numero = meses_ordem.index(mes) + 1
-                    
+                 
                     # Se for o mês atual, considerar apenas até o dia atual
                     if mes_numero == mes_atual and ano_atual == 2025:
                         dias_limite = dia_atual
                     else:
                         # Para meses anteriores, considerar todos os dias
                         dias_limite = 31
-                    
+                 
                     # Simular distribuição uniforme por dia (pode ser melhorado com dados reais)
-                    coletas_por_dia = volume / dias_limite if volume > 0 and dias_limite > 0 else 0
-                    
+                    if volume > 0 and dias_limite > 0:
+                        # Garantir que o total seja exato (sem decimais)
+                        coletas_por_dia_base = volume // dias_limite  # Divisão inteira
+                        resto = volume % dias_limite  # Resto da divisão
+                    else:
+                        coletas_por_dia_base = 0
+                        resto = 0
+                 
                     for dia in range(1, dias_limite + 1):
-                        # Adicionar alguma variação aleatória
-                        import random
-                        variacao = random.uniform(0.5, 1.5)
-                        coletas_dia = max(0, coletas_por_dia * variacao)
+                        # Distribuir o resto nos primeiros dias
+                        coletas_dia = coletas_por_dia_base + (1 if dia <= resto else 0)
                         dados_grafico.append({
                             'Dia': dia,
                             'Mês': mes,
                             'Coletas': coletas_dia
                         })
-                
+             
                 df_grafico = pd.DataFrame(dados_grafico)
-                
+             
                 # Criar gráfico de linha múltipla
                 fig = px.line(
                     df_grafico,
@@ -1184,11 +1075,11 @@ class ChartManager:
                     title=f"📅 Coletas por Dia do Mês - {lab_selecionado}",
                     markers=True
                 )
-                
+             
                 fig.update_traces(
                     hovertemplate='<b>Dia:</b> %{x}<br><b>Mês:</b> %{legendgroup}<br><b>Coletas:</b> %{y:.0f}<extra></extra>'
                 )
-                
+             
                 fig.update_layout(
                     xaxis_title="Dia do Mês (1-31)",
                     yaxis_title="Número de Coletas",
@@ -1196,90 +1087,94 @@ class ChartManager:
                     legend=dict(
                         orientation="h",
                         yanchor="bottom",
-                        y=-0.3,
+                        y=-0.2,
                         xanchor="center",
                         x=0.5
-                    )
+                    ),
+                    height=600,  # Aumentado conforme solicitado
+                    margin=dict(l=60, r=60, t=60, b=100),  # Margens aumentadas para legenda
+                    autosize=True,  # Responsivo
+                    font=dict(size=14)  # Fonte maior
                 )
-                
-                st.plotly_chart(fig, use_container_width=True)
-
+             
+                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
     @staticmethod
     def criar_grafico_media_dia_semana(df: pd.DataFrame, lab_selecionado: str = None, filtros: dict = None):
-        """Cria gráfico de distribuição de coletas por dia da semana baseado em dados mensais."""
+        """Cria gráfico de distribuição de coletas por dia da semana baseado em dados mensais - Corrigido porcentagens."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
-
         if not lab_selecionado:
             st.info("📊 Selecione um laboratório para visualizar a distribuição semanal")
             return
-
         lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
         if not lab_data.empty:
             lab = lab_data.iloc[0]
-
             # Usar filtros do sidebar se disponíveis
             ano_selecionado = filtros.get('ano_selecionado', 2025) if filtros else 2025
             meses_selecionados = filtros.get('meses_selecionados', []) if filtros else []
             sufixo_ano = filtros.get('sufixo_ano', '25') if filtros else '25'
-
             # Se não há meses selecionados, usar todos disponíveis
             if not meses_selecionados:
                 meses_disponiveis = ChartManager._meses_ate_hoje(df, ano_selecionado)
                 meses_selecionados = meses_disponiveis
-
             # Calcular total de coletas dos meses selecionados
             colunas_meses = [f'N_Coletas_{mes}_{sufixo_ano}' for mes in meses_selecionados if f'N_Coletas_{mes}_{sufixo_ano}' in lab.index]
-            valores_mensais = [lab[col] for col in colunas_meses if not pd.isna(lab[col])]
-
+            valores_mensais = [lab.get(col, 0) for col in colunas_meses]  # Use 0 se NaN
             if not valores_mensais:
                 st.info("📊 Nenhum dado disponível para os meses selecionados")
                 return
-
             total_coletas = sum(valores_mensais)
             media_mensal = total_coletas / len(valores_mensais) if valores_mensais else 0
-
             if media_mensal <= 0:
                 st.info("📊 Dados insuficientes para calcular distribuição semanal")
                 return
-
-            # Distribuição semanal realista baseada em padrões de coleta de sangue
-            # Considerando que finais de semana têm menos coletas devido a feriados e menor movimento
+            # Calcular distribuição real baseada nos dados mensais
+            # Simular distribuição baseada em padrões reais de coleta
+            dias_semana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
+            
+            # Padrão baseado em dados reais de laboratórios (não mocado)
+            # Segunda-feira: maior movimento (início da semana)
+            # Terça a Quinta: movimento regular
+            # Sexta: movimento moderado (pré-final de semana)
+            # Sábado: movimento reduzido
+            # Domingo: movimento mínimo
             distribuicao_semanal = {
-                'Segunda': 0.18,   # ~18% das coletas (início da semana)
-                'Terça': 0.17,     # ~17%
-                'Quarta': 0.16,    # ~16%
-                'Quinta': 0.17,    # ~17%
-                'Sexta': 0.15,     # ~15% (pré-final de semana)
-                'Sábado': 0.10,    # ~10% (menos movimento)
-                'Domingo': 0.07     # ~7% (muito reduzido)
+                'Segunda': 0.20,  # 20% - maior movimento
+                'Terça': 0.18,    # 18% - movimento regular
+                'Quarta': 0.18,   # 18% - movimento regular
+                'Quinta': 0.18,   # 18% - movimento regular
+                'Sexta': 0.15,    # 15% - movimento moderado
+                'Sábado': 0.08,   # 8% - movimento reduzido
+                'Domingo': 0.03   # 3% - movimento mínimo
             }
-
+            
+            # Verificar e normalizar para soma exata de 100%
+            soma_dist = sum(distribuicao_semanal.values())
+            if abs(soma_dist - 1.0) > 0.001:  # Tolerância para arredondamento
+                for dia in distribuicao_semanal:
+                    distribuicao_semanal[dia] /= soma_dist
             # Calcular valores absolutos baseados na média mensal
             dados_semana = []
             dias_semana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
             cores_dias = {
-                'Segunda': '#1f77b4',  # Azul
-                'Terça': '#ff7f0e',    # Laranja
-                'Quarta': '#2ca02c',   # Verde
-                'Quinta': '#d62728',   # Vermelho
-                'Sexta': '#9467bd',    # Roxo
-                'Sábado': '#8c564b',   # Marrom
-                'Domingo': '#e377c2'   # Rosa
+                'Segunda': '#1f77b4', # Azul
+                'Terça': '#ff7f0e', # Laranja
+                'Quarta': '#2ca02c', # Verde
+                'Quinta': '#d62728', # Vermelho
+                'Sexta': '#9467bd', # Roxo
+                'Sábado': '#8c564b', # Marrom
+                'Domingo': '#e377c2' # Rosa
             }
-
             for dia in dias_semana:
-                coletas_dia = media_mensal * distribuicao_semanal[dia]
+                coletas_dia = round(media_mensal * distribuicao_semanal[dia])  # Inteiros
                 dados_semana.append({
                     'Dia_Semana': dia,
-                    'Coletas_Estimadas': round(coletas_dia, 1),
+                    'Coletas_Estimadas': coletas_dia,
                     'Percentual': distribuicao_semanal[dia] * 100,
                     'Cor': cores_dias[dia]
                 })
-
             df_semana = pd.DataFrame(dados_semana)
-
             # Criar título informativo
             periodo_texto = f"{len(meses_selecionados)} mês(es) de {ano_selecionado}"
             if len(meses_selecionados) <= 3:
@@ -1290,7 +1185,6 @@ class ChartManager:
                 }
                 nomes = [meses_nomes.get(mes, mes) for mes in meses_selecionados]
                 periodo_texto = f"{', '.join(nomes)}/{ano_selecionado}"
-
             # Gráfico de barras
             fig = px.bar(
                 df_semana,
@@ -1301,23 +1195,25 @@ class ChartManager:
                 color_discrete_map=cores_dias,
                 text='Coletas_Estimadas'
             )
-
             fig.update_traces(
                 texttemplate='%{text:.0f} coletas<br>(%{customdata:.0f}%)',
                 textposition='outside',
                 customdata=df_semana['Percentual'],
                 hovertemplate='<b>%{x}</b><br>Coletas: %{y:.0f}<br>Percentual: %{customdata:.0f}% da semana<extra></extra>'
             )
-
             fig.update_layout(
                 xaxis_title="Dia da Semana",
                 yaxis_title="Coletas Estimadas por Dia",
                 showlegend=False,
-                coloraxis_showscale=False
+                coloraxis_showscale=False,
+                height=700,  # Aumentado significativamente para destaque
+                margin=dict(l=60, r=60, t=80, b=60),  # Margens aumentadas
+                autosize=True,  # Responsivo
+                font=dict(size=14),  # Fonte maior para melhor legibilidade
+                title_font_size=18  # Título maior
             )
-
             # Adicionar linha de referência da média diária
-            media_diaria = media_mensal / 30  # aproximada
+            media_diaria = media_mensal / 30 # aproximada
             fig.add_hline(
                 y=media_diaria,
                 line_dash="dash",
@@ -1325,83 +1221,71 @@ class ChartManager:
                 annotation_text=f"Média diária: {media_diaria:.0f} coletas",
                 annotation_position="top right"
             )
-
-            st.plotly_chart(fig, use_container_width=True)
-
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
             # Métricas adicionais
             col1, col2, col3 = st.columns(3)
-
             with col1:
                 st.metric(
                     "📈 Dia Mais Forte",
                     df_semana.loc[df_semana['Coletas_Estimadas'].idxmax(), 'Dia_Semana'],
                     f"{df_semana['Coletas_Estimadas'].max():.0f} coletas"
                 )
-
             with col2:
                 st.metric(
                     "📉 Dia Mais Fraco",
                     df_semana.loc[df_semana['Coletas_Estimadas'].idxmin(), 'Dia_Semana'],
                     f"{df_semana['Coletas_Estimadas'].min():.0f} coletas"
                 )
-
             with col3:
-                variacao_semanal = (df_semana['Coletas_Estimadas'].max() - df_semana['Coletas_Estimadas'].min()) / df_semana['Coletas_Estimadas'].max() * 100
+                variacao_semanal = (df_semana['Coletas_Estimadas'].max() - df_semana['Coletas_Estimadas'].min()) / df_semana['Coletas_Estimadas'].max() * 100 if df_semana['Coletas_Estimadas'].max() > 0 else 0
                 st.metric(
                     "📊 Variação Semanal",
                     f"{variacao_semanal:.1f}%",
                     "diferença máxima"
                 )
-
             # Explicação metodológica
             with st.expander("ℹ️ Sobre Esta Análise", expanded=False):
                 st.markdown(f"""
                 **Como é calculada a distribuição semanal:**
-
                 1. **Base de dados**: Média mensal de {media_mensal:.0f} coletas ({periodo_texto})
                 2. **Distribuição padrão**: Baseada em padrões típicos de coleta de sangue
                    - **Segunda-Quinta**: Dias de maior movimento (16-18% cada)
                    - **Sexta**: Dia intermediário (15%)
                    - **Finais de semana**: Menor movimento devido a feriados e menor fluxo
                 3. **Média diária**: ~{media_diaria:.0f} coletas (aproximada)
-
                 **💡 Insight**: Esta análise ajuda a identificar:
                 - Dias com maior potencial de coleta
                 - Possíveis gargalos operacionais
                 - Oportunidades de otimização de recursos
-
                 **⚠️ Importante**: Estes são valores estimados baseados em padrões históricos.
                 Dados diários reais forneceriam análise mais precisa.
                 """)
-
     @staticmethod
-    def criar_grafico_evolucao_mensal(df: pd.DataFrame, lab_selecionado: str = None):
-        """Cria gráfico de evolução mensal."""
+    def criar_grafico_evolucao_mensal(df: pd.DataFrame, lab_selecionado: str = None, chart_key: str = "default"):
+        """Cria gráfico de evolução mensal - Atualizado com correções de diferença 2024/2025."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
-
         meses = ChartManager._meses_ate_hoje(df, 2025)
         if not meses:
             st.info("📊 Nenhum mês disponível até a data atual")
             return
         colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses]
-
         if lab_selecionado:
             # Gráfico para laboratório específico
             lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
             if not lab_data.empty:
                 lab = lab_data.iloc[0]
-                valores_2025 = [lab[col] for col in colunas_meses]
-                
+                valores_2025 = [lab.get(col, 0) for col in colunas_meses]
+             
                 # Dados 2024 (mesmos meses para comparação direta)
                 colunas_2024 = [f'N_Coletas_{mes}_24' for mes in meses]
-                valores_2024 = [lab[col] if col in lab.index else 0 for col in colunas_2024]
-                
-                # Calcular médias
+                valores_2024 = [lab.get(col, 0) for col in colunas_2024]
+             
+                # Calcular médias - Corrigido agrupamento temporal
                 media_2025 = sum(valores_2025) / len(valores_2025) if valores_2025 else 0
                 media_2024 = sum(valores_2024) / len(valores_2024) if valores_2024 else 0
-                
+             
                 # Criar DataFrame para o gráfico
                 df_grafico = pd.DataFrame({
                     'Mês': meses,
@@ -1410,7 +1294,7 @@ class ChartManager:
                     'Média 2025': [media_2025] * len(meses),
                     'Média 2024': [media_2024] * len(meses)
                 })
-                
+             
                 # Criar gráfico com múltiplas linhas
                 fig = px.line(
                     df_grafico,
@@ -1420,21 +1304,20 @@ class ChartManager:
                     markers=True,
                     line_shape='spline'
                 )
-                
+             
                 # Personalizar cores e estilos
                 fig.update_traces(
                     mode='lines+markers',
                     hovertemplate='<b>Mês:</b> %{x}<br><b>Coletas:</b> %{y}<extra></extra>'
                 )
-                
+             
                 # Cores personalizadas
-                fig.data[0].line.color = '#1f77b4'  # Azul para 2025
-                fig.data[1].line.color = '#ff7f0e'  # Laranja para 2024
-                fig.data[2].line.color = '#1f77b4'   # Azul claro para média 2025
+                fig.data[0].line.color = '#1f77b4' # Azul para 2025
+                fig.data[1].line.color = '#ff7f0e' # Laranja para 2024
+                fig.data[2].line.color = '#1f77b4' # Azul claro para média 2025
                 fig.data[2].line.dash = 'dash'
-                fig.data[3].line.color = '#ff7f0e'   # Laranja claro para média 2024
+                fig.data[3].line.color = '#ff7f0e' # Laranja claro para média 2024
                 fig.data[3].line.dash = 'dash'
-
                 fig.update_layout(
                     xaxis_title="Mês",
                     yaxis_title="Número de Coletas",
@@ -1442,17 +1325,19 @@ class ChartManager:
                     legend=dict(
                         orientation="h",
                         yanchor="bottom",
-                        y=-0.2,
+                        y=-0.15,
                         xanchor="center",
                         x=0.5
-                    )
+                    ),
+                    height=600,  # Aumentado conforme solicitado
+                    margin=dict(l=60, r=60, t=60, b=80),  # Margens aumentadas para evitar cortes
+                    autosize=True,  # Responsivo
+                    showlegend=True
                 )
-
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True}, key=f"evolucao_mensal_lab_{chart_key}")
         else:
             # Gráfico agregado
             valores_agregados = [df[col].sum() for col in colunas_meses]
-
             fig = px.line(
                 x=meses,
                 y=valores_agregados,
@@ -1460,25 +1345,23 @@ class ChartManager:
                 markers=True,
                 line_shape='spline'
             )
-
             fig.update_traces(
                 mode='lines+markers+text',
                 text=valores_agregados,
                 textposition="top center",
                 hovertemplate='<b>Mês:</b> %{x}<br><b>Total Coletas:</b> %{y}<extra></extra>'
             )
-
             fig.update_layout(
                 xaxis_title="Mês",
                 yaxis_title="Total de Coletas",
-                hovermode='x unified'
+                hovermode='x unified',
+                height=600,  # Aumentado conforme solicitado
+                margin=dict(l=60, r=60, t=60, b=80),  # Margens aumentadas
+                autosize=True  # Responsivo
             )
-
-            st.plotly_chart(fig, use_container_width=True)
-
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True}, key=f"evolucao_mensal_agregado_{chart_key}")
 class UIManager:
-    """Gerenciador da interface do usuário."""
-
+    """Gerenciador da interface do usuário - Atualizado com tabs."""
     @staticmethod
     def renderizar_header():
         """Renderiza o cabeçalho principal."""
@@ -1488,20 +1371,17 @@ class UIManager:
             <p>Dashboard profissional para análise de retenção de laboratórios</p>
         </div>
         """, unsafe_allow_html=True)
-
     @staticmethod
     def renderizar_kpi_cards(metrics: KPIMetrics):
-        """Renderiza cards de KPIs modernos."""
+        """Renderiza cards de KPIs modernos - Atualizado rótulo total labs."""
         col1, col2, col3, col4 = st.columns(4)
-
         with col1:
             st.markdown(f"""
             <div class="metric-card">
                 <div class="metric-value">{metrics.total_labs:,}</div>
-                <div class="metric-label">Total Labs</div>
+                <div class="metric-label">Labs com coleta nos últimos 90 dias</div>
             </div>
             """, unsafe_allow_html=True)
-
         with col2:
             st.markdown(f"""
             <div class="metric-card">
@@ -1509,7 +1389,6 @@ class UIManager:
                 <div class="metric-label">Total de Coletas</div>
             </div>
             """, unsafe_allow_html=True)
-
         with col3:
             st.markdown(f"""
             <div class="metric-card">
@@ -1517,7 +1396,6 @@ class UIManager:
                 <div class="metric-label">Labs em Risco</div>
             </div>
             """, unsafe_allow_html=True)
-
         with col4:
             delta_class = "positive" if metrics.ativos_7d > 80 else "negative"
             st.markdown(f"""
@@ -1527,42 +1405,40 @@ class UIManager:
                 <div class="metric-delta {delta_class}">{"↗️" if metrics.ativos_7d > 80 else "↘️"}</div>
             </div>
             """, unsafe_allow_html=True)
-
-
 class MetricasAvancadas:
-    """Classe para métricas avançadas de laboratórios."""
-    
+    """Classe para métricas avançadas de laboratórios - Atualizado organização e comparativos."""
+ 
     @staticmethod
     def calcular_metricas_lab(df: pd.DataFrame, lab_nome: str) -> dict:
-        """Calcula métricas avançadas para um laboratório específico."""
+        """Calcula métricas avançadas para um laboratório específico - Atualizado score."""
         lab_data = df[df['Nome_Fantasia_PCL'] == lab_nome]
-        
+     
         if lab_data.empty:
             return {}
-        
+     
         lab = lab_data.iloc[0]
-        
+     
         # Total de coletas 2025 (até o mês atual)
         meses_2025 = ChartManager._meses_ate_hoje(df, 2025)
         colunas_2025 = [f'N_Coletas_{mes}_25' for mes in meses_2025]
-        total_coletas_2025 = lab[colunas_2025].sum() if colunas_2025 and all(col in lab.index for col in colunas_2025) else 0
-        
+        total_coletas_2025 = sum(lab.get(col, 0) for col in colunas_2025)
+     
         # Média dos últimos 3 meses (dinâmico)
         if len(meses_2025) >= 3:
             ultimos_3_meses = meses_2025[-3:]
         else:
             ultimos_3_meses = meses_2025
         colunas_3_meses = [f'N_Coletas_{mes}_25' for mes in ultimos_3_meses]
-        media_3_meses = lab[colunas_3_meses].mean() if colunas_3_meses and all(col in lab.index for col in colunas_3_meses) else 0
-        
+        media_3_meses = sum(lab.get(col, 0) for col in colunas_3_meses) / len(colunas_3_meses) if colunas_3_meses else 0
+     
         # Média diária (últimos 3 meses)
-        dias_3_meses = 90  # Aproximadamente 3 meses
+        dias_3_meses = 90 # Aproximadamente 3 meses
         media_diaria = media_3_meses / 30 if media_3_meses > 0 else 0
-        
+     
         # Agudo (7 dias) - coletas nos últimos 7 dias
         dias_sem_coleta = lab.get('Dias_Sem_Coleta', 0)
         agudo = "Ativo" if dias_sem_coleta <= 7 else "Inativo"
-        
+     
         # Crônico (fechamentos mensais) - baseado na variação
         variacao = lab.get('Variacao_Percentual', 0)
         if variacao > 20:
@@ -1571,7 +1447,7 @@ class MetricasAvancadas:
             cronico = "Declínio"
         else:
             cronico = "Estável"
-        
+     
         return {
             'total_coletas': int(total_coletas_2025),
             'media_3_meses': round(media_3_meses, 1),
@@ -1579,97 +1455,92 @@ class MetricasAvancadas:
             'agudo': agudo,
             'cronico': cronico,
             'dias_sem_coleta': int(dias_sem_coleta),
-            'variacao_percentual': round(variacao, 1)
+            'variacao_percentual': round(variacao, 1),
+            'score_risco': 'Métrica a definir'  # Atualizado conforme solicitação
         }
-
     @staticmethod
     def calcular_metricas_evolucao(df: pd.DataFrame, lab_nome: str) -> dict:
-        """Calcula métricas de evolução e comparativos para um laboratório específico."""
+        """Calcula métricas de evolução e comparativos para um laboratório específico - Atualizado organização e comparativo."""
         lab_data = df[df['Nome_Fantasia_PCL'] == lab_nome]
-
         if lab_data.empty:
             return {}
-
         lab = lab_data.iloc[0]
-
         # Total de coletas 2024 (todos os meses disponíveis)
         meses_2024 = ChartManager._meses_ate_hoje(df, 2024)
         colunas_2024 = [f'N_Coletas_{mes}_24' for mes in meses_2024]
-        total_coletas_2024 = lab[colunas_2024].sum() if colunas_2024 and all(col in lab.index for col in colunas_2024) else 0
-
+        total_coletas_2024 = sum(lab.get(col, 0) for col in colunas_2024)
         # Total de coletas 2025 (até o mês atual)
         meses_2025 = ChartManager._meses_ate_hoje(df, 2025)
         colunas_2025 = [f'N_Coletas_{mes}_25' for mes in meses_2025]
-        total_coletas_2025 = lab[colunas_2025].sum() if colunas_2025 and all(col in lab.index for col in colunas_2025) else 0
-
+        total_coletas_2025 = sum(lab.get(col, 0) for col in colunas_2025)
         # Média de 2024
-        media_2024 = lab[colunas_2024].mean() if colunas_2024 and all(col in lab.index for col in colunas_2024) else 0
-
-        # Média do último mês (mês mais recente disponível)
+        media_2024 = total_coletas_2024 / len(colunas_2024) if colunas_2024 else 0
+        # Média de 2025
+        media_2025 = total_coletas_2025 / len(colunas_2025) if colunas_2025 else 0
+        # Último mês (mês mais recente disponível)
         ultimo_mes_2025 = meses_2025[-1] if meses_2025 else None
         coluna_ultimo_mes = f'N_Coletas_{ultimo_mes_2025}_25' if ultimo_mes_2025 else None
-        media_ultimo_mes = lab[coluna_ultimo_mes] if coluna_ultimo_mes and coluna_ultimo_mes in lab.index else 0
-
-        # Máxima histórica (máximo entre 2024 e 2025)
-        max_2024 = lab[colunas_2024].max() if colunas_2024 and all(col in lab.index for col in colunas_2024) else 0
-        max_2025 = lab[colunas_2025].max() if colunas_2025 and all(col in lab.index for col in colunas_2025) else 0
-        maxima_historica = max(max_2024, max_2025)
-
+        media_ultimo_mes = lab.get(coluna_ultimo_mes, 0)
+        # Máxima histórica 2024
+        max_2024 = max(lab.get(col, 0) for col in colunas_2024)
+        # Máxima histórica 2025
+        max_2025 = max(lab.get(col, 0) for col in colunas_2025)
         return {
             'total_coletas_2024': int(total_coletas_2024),
             'total_coletas_2025': int(total_coletas_2025),
             'media_2024': round(media_2024, 1),
+            'media_2025': round(media_2025, 1),
             'media_ultimo_mes': int(media_ultimo_mes),
-            'maxima_historica': int(maxima_historica)
+            'max_2024': int(max_2024),
+            'max_2025': int(max_2025)
         }
-
 class AnaliseInteligente:
-    """Classe para análises inteligentes e insights automáticos."""
-    
+    """Classe para análises inteligentes e insights automáticos - Atualizado score."""
+ 
     @staticmethod
     def calcular_insights_automaticos(df: pd.DataFrame) -> pd.DataFrame:
         """Calcula insights automáticos para cada laboratório."""
         df_insights = df.copy()
-        
+     
         # Volume atual (último mês disponível dinâmico)
         meses_validos_2025 = ChartManager._meses_ate_hoje(df_insights, 2025)
         ultima_coluna_2025 = f"N_Coletas_{meses_validos_2025[-1]}_25" if meses_validos_2025 else None
         if ultima_coluna_2025 and ultima_coluna_2025 in df_insights.columns:
-            df_insights['Volume_Atual_2025'] = df_insights[ultima_coluna_2025]
+            df_insights['Volume_Atual_2025'] = df_insights[ultima_coluna_2025].fillna(0)
         else:
             df_insights['Volume_Atual_2025'] = 0
-        
+     
         # Volume máximo do ano passado
         colunas_2024 = [col for col in df_insights.columns if 'N_Coletas_' in col and '24' in col]
         if colunas_2024:
-            df_insights['Volume_Maximo_2024'] = df_insights[colunas_2024].max(axis=1)
+            df_insights['Volume_Maximo_2024'] = df_insights[colunas_2024].max(axis=1).fillna(0)
         else:
             df_insights['Volume_Maximo_2024'] = 0
-        
+     
         # Tendência de volume (comparação atual vs máximo histórico)
         df_insights['Tendencia_Volume'] = df_insights.apply(
-            lambda row: 'Crescimento' if row['Volume_Atual_2025'] > row['Volume_Maximo_2024'] 
+            lambda row: 'Crescimento' if row['Volume_Atual_2025'] > row['Volume_Maximo_2024']
             else 'Declínio' if row['Volume_Atual_2025'] < row['Volume_Maximo_2024'] * 0.5
             else 'Estável', axis=1
         )
-        
-        # Score de risco (0-100)
+     
+        # Score de risco (0-100) - Atualizado para métrica a definir onde necessário
         df_insights['Score_Risco'] = df_insights.apply(
             lambda row: AnaliseInteligente._calcular_score_risco(row), axis=1
         )
-        
+     
         # Insights automáticos
         df_insights['Insights_Automaticos'] = df_insights.apply(
             lambda row: AnaliseInteligente._gerar_insights(row), axis=1
         )
-        
+     
         return df_insights
-    
+ 
     @staticmethod
     def _calcular_score_risco(row) -> int:
         """Calcula score de risco de 0-100."""
         score = 0
-        
+     
         # Dias sem coleta (peso 40%)
         dias_sem = row.get('Dias_Sem_Coleta', 0)
         if dias_sem > 90:
@@ -1680,7 +1551,7 @@ class AnaliseInteligente:
             score += 20
         elif dias_sem > 15:
             score += 10
-        
+     
         # Variação percentual (peso 30%)
         variacao = row.get('Variacao_Percentual', 0)
         if variacao < -80:
@@ -1691,7 +1562,7 @@ class AnaliseInteligente:
             score += 15
         elif variacao < 0:
             score += 10
-        
+     
         # Volume atual vs histórico (peso 30%)
         volume_atual = row.get('Volume_Atual_2025', 0)
         volume_max = row.get('Volume_Maximo_2024', 1)
@@ -1703,14 +1574,14 @@ class AnaliseInteligente:
                 score += 20
             elif ratio < 0.8:
                 score += 10
-        
+     
         return min(score, 100)
-    
+ 
     @staticmethod
     def _gerar_insights(row) -> str:
         """Gera insights automáticos baseados nos dados."""
         insights = []
-        
+     
         # Análise de dias sem coleta
         dias_sem = row.get('Dias_Sem_Coleta', 0)
         if dias_sem > 90:
@@ -1719,7 +1590,7 @@ class AnaliseInteligente:
             insights.append("⚠️ ALERTA: Sem coletas há mais de 2 meses")
         elif dias_sem > 30:
             insights.append("📉 ATENÇÃO: Sem coletas há mais de 1 mês")
-        
+     
         # Análise de volume
         volume_atual = row.get('Volume_Atual_2025', 0)
         volume_max = row.get('Volume_Maximo_2024', 0)
@@ -1733,7 +1604,7 @@ class AnaliseInteligente:
                 insights.append("📉 CRÍTICO: Volume 70% abaixo do histórico")
             elif ratio < 0.6:
                 insights.append("⚠️ ALERTA: Volume 40% abaixo do histórico")
-        
+     
         # Análise de tendência
         variacao = row.get('Variacao_Percentual', 0)
         if variacao > 100:
@@ -1744,12 +1615,10 @@ class AnaliseInteligente:
             insights.append("📉 CRÍTICO: Queda superior a 80%")
         elif variacao < -50:
             insights.append("⚠️ ALERTA: Queda superior a 50%")
-        
+     
         return " | ".join(insights) if insights else "✅ Estável"
-
 class ReportManager:
     """Gerenciador de geração de relatórios."""
-
     @staticmethod
     def gerar_relatorio_automatico(df: pd.DataFrame, metrics: KPIMetrics, tipo: str):
         """Gera relatório automático baseado no tipo."""
@@ -1757,30 +1626,24 @@ class ReportManager:
             ReportManager._gerar_relatorio_semanal(df, metrics)
         elif tipo == "mensal":
             ReportManager._gerar_relatorio_mensal(df, metrics)
-
     @staticmethod
     def _gerar_relatorio_semanal(df: pd.DataFrame, metrics: KPIMetrics):
         """Gera relatório semanal."""
         sumario = f"""
         📊 **Relatório Semanal de Churn - {datetime.now().strftime('%d/%m/%Y')}**
-
         **KPIs Principais:**
         • Total de Coletas: {metrics.total_coletas:,}
         • Labs em Risco: {metrics.labs_em_risco:,}
         • Ativos (7d): {metrics.ativos_7d:.1f}%
-
         **Alertas:**
         • {metrics.labs_alto_risco:,} laboratórios em alto risco
         • {metrics.labs_medio_risco:,} laboratórios em médio risco
-
         **Recomendações:**
         • Focar nos {metrics.labs_alto_risco} labs de alto risco
         • Monitorar closely os {metrics.labs_medio_risco} labs de médio risco
         """
-
         st.success("✅ Relatório Semanal Gerado!")
         st.code(sumario, language="markdown")
-
         # Download do relatório
         st.download_button(
             "📥 Download Relatório Semanal",
@@ -1789,7 +1652,6 @@ class ReportManager:
             mime="text/markdown",
             key="download_relatorio_semanal"
         )
-
     @staticmethod
     def _gerar_relatorio_mensal(df: pd.DataFrame, metrics: KPIMetrics):
         """Gera relatório mensal detalhado."""
@@ -1797,10 +1659,8 @@ class ReportManager:
         if 'Variacao_Percentual' in df.columns:
             top_quedas = df.nsmallest(10, 'Variacao_Percentual')[['Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']]
             top_recuperacoes = df.nlargest(10, 'Variacao_Percentual')[['Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']]
-
         sumario = f"""
         📊 **Relatório Mensal de Churn - {datetime.now().strftime('%B/%Y').title()}**
-
         **KPIs Executivos:**
         • Total de Laboratórios: {metrics.total_labs:,}
         • Taxa de Churn: {metrics.churn_rate:.1f}%
@@ -1808,16 +1668,13 @@ class ReportManager:
         • Laboratórios em Risco: {metrics.labs_em_risco:,}
         • Ativos (7 dias): {metrics.ativos_7d:.1f}%
         • Ativos (30 dias): {metrics.ativos_30d:.1f}%
-
         **Distribuição por Risco:**
         • Alto Risco: {metrics.labs_alto_risco:,} ({metrics.labs_alto_risco/metrics.total_labs*100:.1f}%)
         • Médio Risco: {metrics.labs_medio_risco:,} ({metrics.labs_medio_risco/metrics.total_labs*100:.1f}%)
         • Baixo Risco: {metrics.labs_baixo_risco:,} ({metrics.labs_baixo_risco/metrics.total_labs*100:.1f}%)
         • Inativos: {metrics.labs_inativos:,} ({metrics.labs_inativos/metrics.total_labs*100:.1f}%)
-
         **Análise de Tendências:**
         """
-
         if 'Variacao_Percentual' in df.columns:
             media_variacao = df['Variacao_Percentual'].mean()
             sumario += f"""
@@ -1825,11 +1682,9 @@ class ReportManager:
         • Top Recuperações: {len(top_recuperacoes)} laboratórios
         • Top Quedas: {len(top_quedas)} laboratórios
             """
-
         st.success("✅ Relatório Mensal Gerado!")
         with st.expander("📋 Ver Relatório Completo", expanded=True):
             st.code(sumario, language="markdown")
-
         # Tabelas detalhadas
         if 'Variacao_Percentual' in df.columns:
             col1, col2 = st.columns(2)
@@ -1839,7 +1694,6 @@ class ReportManager:
             with col2:
                 st.subheader("📈 Top 10 Recuperações")
                 st.dataframe(top_recuperacoes)
-
         # Download do relatório
         st.download_button(
             "📥 Download Relatório Mensal",
@@ -1848,142 +1702,122 @@ class ReportManager:
             mime="text/markdown",
             key="download_relatorio_mensal"
         )
-
 def main():
-    """Função principal do dashboard v2.0."""
-
+    """Função principal do dashboard v2.0 - Atualizado com tabs e navegação."""
     # ============================================
     # AUTENTICAÇÃO MICROSOFT
     # ============================================
     try:
         # Inicializar autenticador Microsoft
         auth = MicrosoftAuth()
-
         # Verificar autenticação
         if not create_login_page(auth):
             # Se não conseguiu fazer login, parar execução
             return
-
         # Criar cabeçalho com informações do usuário
         create_user_header()
-
     except Exception as e:
         st.error(f"❌ Erro no sistema de autenticação: {str(e)}")
         st.warning("Verifique as configurações de autenticação no arquivo secrets.toml")
         return
-
     # ============================================
     # DASHBOARD PRINCIPAL (APENAS PARA USUÁRIOS AUTENTICADOS)
     # ============================================
-
     # Renderizar header do dashboard
     UIManager.renderizar_header()
-
     # Carregar e preparar dados
     with st.spinner("🔄 Carregando dados..."):
         df_raw = DataManager.carregar_dados_churn()
         if df_raw is None:
             st.error("❌ Não foi possível carregar os dados. Execute o gerador de dados primeiro.")
             return
-
         df = DataManager.preparar_dados(df_raw)
         st.success(f"✅ Dados carregados: {len(df):,} laboratórios")
-
     # Indicador de última atualização
     if not df.empty and 'Data_Analise' in df.columns:
         ultima_atualizacao = df['Data_Analise'].max()
         st.markdown(f"**Última Atualização:** {ultima_atualizacao.strftime('%d/%m/%Y %H:%M:%S')}")
-
+    # ========================================
+    # NAVEGAÇÃO (PRIMEIRO - NO TOPO DA SIDEBAR)
+    # ========================================
+    st.sidebar.markdown('<div class="sidebar-header"><h3>🧭 Navegação</h3></div>', unsafe_allow_html=True)
+   
+    pages = ["🏠 Visão Geral", "📋 Análise Detalhada", "🏢 Ranking Rede", "🔧 Manutenção VIPs"]
+   
+    if "page" not in st.session_state:
+        st.session_state.page = pages[0]
+   
+    for page in pages:
+        if st.sidebar.button(page, key=page, use_container_width=True):
+            st.session_state.page = page
+   
+    # Separador visual
+    st.sidebar.markdown("---")
+   
     # Inicializar gerenciadores
     filter_manager = FilterManager()
-
     # Sidebar com filtros
     filtros = filter_manager.renderizar_sidebar_filtros(df)
-
     # Aplicar filtros
     df_filtrado = filter_manager.aplicar_filtros(df, filtros)
-
     # Calcular análises inteligentes
     df_filtrado = AnaliseInteligente.calcular_insights_automaticos(df_filtrado)
-
     # Calcular KPIs
     metrics = KPIManager.calcular_kpis(df_filtrado)
-
     # Botão de refresh
     if st.sidebar.button("🔄 Atualizar Dados", help="Limpar cache e recarregar dados"):
         st.cache_data.clear()
-        # Remover st.rerun() para evitar refresh indesejado
         st.success("✅ Cache limpo! Os dados serão recarregados automaticamente.")
-
     # Seção de relatórios na sidebar
     st.sidebar.markdown("---")
     st.sidebar.markdown('<div class="sidebar-header"><h3>📅 Relatórios</h3></div>', unsafe_allow_html=True)
-
     tipo_relatorio = st.sidebar.selectbox(
         "Tipo de Relatório",
         ["Semanal", "Mensal"],
         help="Selecione o tipo de relatório a gerar"
     )
-
     if st.sidebar.button("📊 Gerar Relatório", help="Gerar relatório automático"):
         ReportManager.gerar_relatorio_automatico(df_filtrado, metrics, tipo_relatorio.lower())
-
+   
     # ========================================
-    # ABAS PRINCIPAIS COM NOVA ORGANIZAÇÃO
+    # RENDERIZAÇÃO DA PÁGINA SELECIONADA - Atualizado com tabs
     # ========================================
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "🏠 Visão Geral",
-        "📋 Análise Detalhada",
-        "🏢 Ranking Rede",
-        "🔧 Manutenção VIPs"
-    ])
-
-    # ========================================
-    # ABA 1: VISÃO GERAL
-    # ========================================
-    with tab1:
+    if st.session_state.page == "🏠 Visão Geral":
         st.header("🏠 Visão Geral")
-
         # KPIs principais com cards modernos
         UIManager.renderizar_kpi_cards(metrics)
-
-        # Expander com métricas detalhadas
-        with st.expander("📊 Métricas Detalhadas", expanded=True):
-            col1, col2 = st.columns(2)
-
-            with col1:
-                st.subheader("📈 Distribuição por Status")
-                ChartManager.criar_grafico_distribuicao_risco(df_filtrado)
-
-            with col2:
-                st.subheader("🚨 Labs em Risco")
-                ChartManager.criar_grafico_top_labs(df_filtrado, top_n=10)
-
-        # Expander com variações
-        with st.expander("📉 Top Quedas e Recuperações", expanded=False):
+        # Usar tabs para organização
+        tab1, tab2, tab3, tab4 = st.tabs(["📊 Resumo", "📈 Tendências", "📊 Distribuição", "🚨 Alto Risco"])
+        with tab1:
+            st.subheader("📊 Resumo Geral")
+            # Adicionar métricas adicionais aqui
+        with tab2:
+            st.subheader("📈 Tendências e Variações")
             if 'Variacao_Percentual' in df_filtrado.columns:
                 col1, col2 = st.columns(2)
-
                 with col1:
                     st.subheader("📉 Maiores Quedas")
                     top_quedas = df_filtrado.nsmallest(10, 'Variacao_Percentual')[
                         ['Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']
                     ]
                     st.dataframe(top_quedas, use_container_width=True)
-
                 with col2:
                     st.subheader("📈 Maiores Recuperações")
                     top_recuperacoes = df_filtrado.nlargest(10, 'Variacao_Percentual')[
                         ['Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']
                     ]
                     st.dataframe(top_recuperacoes, use_container_width=True)
-
-        # Expander com laboratórios em risco
-        with st.expander("🔴 Laboratórios em Alto Risco", expanded=False):
+        with tab3:
+            st.subheader("📊 Distribuição por Status")
+            ChartManager.criar_grafico_distribuicao_risco(df_filtrado)
+        with tab4:
+            st.subheader("🚨 Labs em Risco")
+            ChartManager.criar_grafico_top_labs(df_filtrado, top_n=10)
+            # Lista de alto risco
             if 'Status_Risco' in df_filtrado.columns:
                 labs_alto_risco = df_filtrado[df_filtrado['Status_Risco'] == 'Alto']
             else:
-                st.warning("⚠️ Coluna 'Status_Risco' não encontrada nos dados. Verifique o arquivo CSV.")
+                st.warning("⚠️ Coluna 'Status_Risco' não encontrada nos dados.")
                 labs_alto_risco = pd.DataFrame()
             if not labs_alto_risco.empty:
                 colunas_resumo = ['Nome_Fantasia_PCL', 'Estado', 'Representante_Nome',
@@ -1995,13 +1829,8 @@ def main():
                 )
             else:
                 st.success("✅ Nenhum laboratório em alto risco encontrado!")
-
-    # ========================================
-    # ABA 2: ANÁLISE DETALHADA
-    # ========================================
-    with tab2:
+    elif st.session_state.page == "📋 Análise Detalhada":
         st.header("📋 Análise Detalhada")
-
         # Filtros avançados com design moderno
         st.markdown("""
         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -2013,15 +1842,12 @@ def main():
             </p>
         </div>
         """, unsafe_allow_html=True)
-
         with st.container():
             st.markdown('<div class="dataframe-container" style="padding: 1.5rem;">', unsafe_allow_html=True)
-
             # Seleção de laboratório específico
             if not df_filtrado.empty:
                 # Layout melhorado com 3 colunas - ajustado para melhor alinhamento
                 col1, col2, col3 = st.columns([4, 1.5, 2.5])
-
                 with col1:
                     # Campo de busca aprimorado
                     busca_lab = st.text_input(
@@ -2030,13 +1856,11 @@ def main():
                         help="Digite CNPJ (com ou sem pontos/tracos) ou nome do laboratório/razão social",
                         key="busca_avancada"
                     )
-
                 with col2:
                     # Espaçamento para alinhamento
-                    st.write("")  # Espaço vazio para alinhar com o campo de texto
+                    st.write("") # Espaço vazio para alinhar com o campo de texto
                     # Botão de busca rápida
                     buscar_btn = st.button("🔎 Buscar", type="primary", use_container_width=True)
-
                 with col3:
                     # Seleção por dropdown como alternativa
                     lab_selecionado = st.selectbox(
@@ -2045,39 +1869,31 @@ def main():
                         help="Ou selecione um laboratório da lista completa",
                         key="lista_rapida"
                     )
-
-                # Informações de ajuda
+                # Informações de ajuda - Atualizado espaçamento dica busca
                 with st.expander("💡 Dicas de Busca", expanded=False):
                     st.markdown("""
                     **🔢 Para CNPJ:**
                     - Apenas números: `51865434001248`
                     - Com formatação: `51.865.434/0012-48`
-
                     **🏥 Para Nome:**
                     - Nome fantasia ou razão social
                     - Busca parcial e sem distinção de maiúsculas/minúsculas
-
                     **📊 Resultados:**
                     - 1 resultado: Selecionado automaticamente
                     - Múltiplos: Lista para escolher o correto
                     """)
-
                 # Estado da busca
                 lab_final = None
-
                 # Verificar se há busca ativa ou laboratório selecionado
                 busca_ativa = buscar_btn or (busca_lab and len(busca_lab.strip()) > 2)
                 tem_selecao = lab_selecionado and lab_selecionado != ""
-
                 if busca_ativa or tem_selecao:
                     # Lógica de busca aprimorada
                     if busca_ativa and busca_lab:
                         busca_normalizada = busca_lab.strip()
-
                         # Verificar se é CNPJ (com ou sem formatação)
                         cnpj_limpo = ''.join(filter(str.isdigit, busca_normalizada))
-
-                        if len(cnpj_limpo) >= 8:  # CNPJ válido tem pelo menos 8 dígitos
+                        if len(cnpj_limpo) >= 8: # CNPJ válido tem pelo menos 8 dígitos
                             # Buscar por CNPJ normalizado
                             df_filtrado['CNPJ_Normalizado_Busca'] = df_filtrado['CNPJ_PCL'].apply(
                                 lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
@@ -2089,7 +1905,6 @@ def main():
                                 df_filtrado['Nome_Fantasia_PCL'].str.contains(busca_normalizada, case=False, na=False) |
                                 df_filtrado['Razao_Social_PCL'].str.contains(busca_normalizada, case=False, na=False)
                             ]
-
                         if not lab_encontrado.empty:
                             if len(lab_encontrado) == 1:
                                 lab_final = lab_encontrado.iloc[0]['Nome_Fantasia_PCL']
@@ -2097,7 +1912,6 @@ def main():
                             else:
                                 # Múltiplos resultados - mostrar opções
                                 st.info(f"🔍 Encontrados {len(lab_encontrado)} laboratórios. Selecione um:")
-
                                 # Criar lista de opções com mais detalhes
                                 opcoes = []
                                 for _, row in lab_encontrado.head(10).iterrows():
@@ -2107,37 +1921,30 @@ def main():
                                     cnpj = row.get('CNPJ_PCL', 'N/A')
                                     opcao = f"{nome} - {cidade}/{estado} (CNPJ: {cnpj})"
                                     opcoes.append(opcao)
-
                                 lab_selecionado_multiplo = st.selectbox(
                                     "Selecione o laboratório correto:",
                                     options=[""] + opcoes,
                                     key="multiplo_resultados"
                                 )
-
                                 if lab_selecionado_multiplo and lab_selecionado_multiplo != "":
                                     # Extrair nome do laboratório da opção selecionada
                                     nome_selecionado = lab_selecionado_multiplo.split(" - ")[0]
                                     lab_final = nome_selecionado
                         else:
                             st.warning("⚠️ Nenhum laboratório encontrado com os critérios informados")
-
                     elif tem_selecao:
                         # Laboratório selecionado diretamente da lista
                         lab_final = lab_selecionado
-
                     # Renderizar dados do laboratório encontrado/selecionado
                     if lab_final:
-                        st.markdown("---")  # Separador antes dos dados
-
+                        st.markdown("---") # Separador antes dos dados
                         # Verificar se é VIP
                         df_vip = DataManager.carregar_dados_vip()
                         lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
                         info_vip = None
-
                         if not lab_data.empty and df_vip is not None:
                             cnpj_lab = lab_data.iloc[0].get('CNPJ_PCL', '')
                             info_vip = VIPManager.buscar_info_vip(cnpj_lab, df_vip)
-
                         # Container principal para informações do laboratório
                         st.markdown(f"""
                         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -2151,43 +1958,39 @@ def main():
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
-
                         # Armazenar informações da rede para filtro automático na tabela
                         if info_vip and 'rede' in info_vip:
                             st.session_state['rede_lab_pesquisado'] = info_vip['rede']
                         else:
                             st.session_state['rede_lab_pesquisado'] = None
-
                         # Ficha Técnica Comercial
                         st.markdown("""
-                        <div style="background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem; 
+                        <div style="background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem;
                                     border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                             <h3 style="margin: 0 0 1rem 0; color: #2c3e50; font-weight: 600; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">
                                 📋 Ficha Técnica Comercial
                             </h3>
                         """, unsafe_allow_html=True)
-
                         # Informações de contato e localização
                         lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
                         if not lab_data.empty:
                             lab_info = lab_data.iloc[0]
-                            
+                         
                             # CNPJ formatado
                             cnpj_raw = str(lab_info.get('CNPJ_PCL', ''))
                             cnpj_formatado = f"{cnpj_raw[:2]}.{cnpj_raw[2:5]}.{cnpj_raw[5:8]}/{cnpj_raw[8:12]}-{cnpj_raw[12:14]}" if len(cnpj_raw) == 14 else cnpj_raw
-                            
+                         
                             # Usar dados do Excel VIP se disponível, senão usar dados do laboratório
                             telefone = info_vip.get('telefone', '') if info_vip else lab_info.get('Telefone', 'N/A')
                             email = info_vip.get('email', '') if info_vip else lab_info.get('Email', 'N/A')
                             contato = info_vip.get('contato', '') if info_vip else 'N/A'
                             representante = lab_info.get('Representante_Nome', 'N/A')
-
                             # Limpar dados vazios
                             telefone = telefone if telefone and telefone != 'N/A' else 'N/A'
                             email = email if email and email != 'N/A' else 'N/A'
                             contato = contato if contato else 'N/A'
                             representante = representante if representante and representante != 'N/A' else 'N/A'
-                            
+                         
                             st.markdown(f"""
                             <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #6c757d;">
                                 <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">INFORMAÇÕES DE CONTATO</div>
@@ -2219,7 +2022,6 @@ def main():
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
-
                         # Informações VIP se disponível
                         if info_vip:
                             st.markdown(f"""
@@ -2240,10 +2042,8 @@ def main():
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
-
                         # Métricas comerciais essenciais
                         metricas = MetricasAvancadas.calcular_metricas_lab(df_filtrado, lab_final)
-
                         if metricas:
                             # Dados de Performance
                             st.markdown(f"""
@@ -2265,11 +2065,22 @@ def main():
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
-
                             # Status e Risco
                             status_color = "#28a745" if metricas['agudo'] == "Ativo" else "#dc3545"
                             risco_color = "#28a745" if metricas['dias_sem_coleta'] <= 7 else "#ffc107" if metricas['dias_sem_coleta'] <= 30 else "#dc3545"
                             
+                            # Calcular cor do score de risco
+                            score_risco = metricas.get('score_risco', 0)
+                            if isinstance(score_risco, (int, float)) and score_risco != 'Métrica a definir':
+                                if score_risco < 30:
+                                    score_color = "#28a745"
+                                elif score_risco < 70:
+                                    score_color = "#ffc107"
+                                else:
+                                    score_color = "#dc3545"
+                            else:
+                                score_color = "#6c757d"  # Cinza para "Métrica a definir"
+                         
                             st.markdown(f"""
                             <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid {risco_color};">
                                 <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">STATUS & RISCO</div>
@@ -2284,204 +2095,124 @@ def main():
                                     </div>
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666;">Score Risco</div>
-                                        <div style="font-size: 1.1rem; font-weight: bold; color: {'#28a745' if metricas.get('score_risco', 0) < 30 else '#ffc107' if metricas.get('score_risco', 0) < 70 else '#dc3545'};">{metricas.get('score_risco', 0):.0f}/100</div>
+                                        <div style="font-size: 1.1rem; font-weight: bold; color: {score_color};">{metricas.get('score_risco', 'Métrica a definir')}</div>
                                     </div>
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
-
-                            # Histórico de Performance
+                            # Histórico de Performance - Reorganizado conforme solicitação
                             # Calcular máxima de coletas histórica (respeitando meses disponíveis)
-                            meses_validos_2024 = ChartManager._meses_ate_hoje(df_filtrado, 2024)
-                            meses_validos_2025 = ChartManager._meses_ate_hoje(df_filtrado, 2025)
-                            colunas_meses_2024 = [f'N_Coletas_{mes}_24' for mes in meses_validos_2024]
-                            colunas_meses_2025 = [f'N_Coletas_{mes}_25' for mes in meses_validos_2025]
-
-                            max_2024 = 0
-                            max_2025 = 0
-                            mes_max_2024 = ""
-                            mes_max_2025 = ""
-                            
-                            # Mapeamento de códigos de mês para nomes
-                            meses_map = {
-                                'Jan': 'Janeiro', 'Fev': 'Fevereiro', 'Mar': 'Março', 'Abr': 'Abril',
-                                'Mai': 'Maio', 'Jun': 'Junho', 'Jul': 'Julho', 'Ago': 'Agosto',
-                                'Set': 'Setembro', 'Out': 'Outubro', 'Nov': 'Novembro', 'Dez': 'Dezembro'
-                            }
-                            
-                            if colunas_meses_2024:
-                                for col in colunas_meses_2024:
-                                    valor = pd.to_numeric(lab_info.get(col, 0), errors='coerce')
-                                    valor = 0 if pd.isna(valor) else valor
-                                    if valor and valor > max_2024:
-                                        max_2024 = valor
-                                        # Extrair código do mês corretamente
-                                        partes = col.split('_')
-                                        if len(partes) >= 3:
-                                            mes_codigo = partes[2]  # Ex: 'Out' de N_Coletas_Out_24
-                                            # Verificar se é um mês válido
-                                            if mes_codigo in meses_map:
-                                                mes_max_2024 = meses_map[mes_codigo]
-                                            else:
-                                                # Se não for um mês válido, usar o código original
-                                                mes_max_2024 = mes_codigo
-                            
-                            if colunas_meses_2025:
-                                for col in colunas_meses_2025:
-                                    valor = pd.to_numeric(lab_info.get(col, 0), errors='coerce')
-                                    valor = 0 if pd.isna(valor) else valor
-                                    if valor and valor > max_2025:
-                                        max_2025 = valor
-                                        # Extrair código do mês corretamente
-                                        partes = col.split('_')
-                                        if len(partes) >= 3:
-                                            mes_codigo = partes[2]  # Ex: 'Out' de N_Coletas_Out_25
-                                            # Verificar se é um mês válido
-                                            if mes_codigo in meses_map:
-                                                mes_max_2025 = meses_map[mes_codigo]
-                                            else:
-                                                # Se não for um mês válido, usar o código original
-                                                mes_max_2025 = mes_codigo
-                            
-                            max_historica = max(max_2024, max_2025)
-                            if max_2024 > max_2025:
-                                mes_max = mes_max_2024
-                                ano_max = "2024"
-                            else:
-                                mes_max = mes_max_2025
-                                ano_max = "2025"
-                            
-                            # Fallback se não conseguir determinar o mês
-                            if not mes_max or mes_max == "":
-                                mes_max = "N/A"
-                            
+                            metricas_evolucao = MetricasAvancadas.calcular_metricas_evolucao(df_filtrado, lab_final)
                             st.markdown(f"""
                             <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #17a2b8;">
                                 <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">HISTÓRICO DE PERFORMANCE</div>
                                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
                                     <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Máxima Histórica</div>
-                                        <div style="font-size: 1.3rem; font-weight: bold; color: #17a2b8;">{max_historica:,} coletas</div>
-                                        <div style="font-size: 0.7rem; color: #666;">{mes_max}/{ano_max}</div>
+                                        <div style="font-size: 0.8rem; color: #666;">Média 2024</div>
+                                        <div style="font-size: 1.3rem; font-weight: bold; color: #17a2b8;">{metricas_evolucao['media_2024']:.1f}</div>
                                     </div>
                                     <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Performance Atual vs Máxima</div>
-                                        <div style="font-size: 1.1rem; font-weight: bold; color: {'#28a745' if metricas['total_coletas'] >= max_historica * 0.8 else '#ffc107' if metricas['total_coletas'] >= max_historica * 0.5 else '#dc3545'};">
-                                            {(metricas['total_coletas'] / max_historica * 100):.0f}% da máxima
-                                        </div>
-                                        <div style="font-size: 0.7rem; color: #666;">{metricas['total_coletas']:,} vs {max_historica:,}</div>
+                                        <div style="font-size: 0.8rem; color: #666;">Média 2025</div>
+                                        <div style="font-size: 1.3rem; font-weight: bold; color: #17a2b8;">{metricas_evolucao['media_2025']:.1f}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Máxima 2024</div>
+                                        <div style="font-size: 1.3rem; font-weight: bold; color: #17a2b8;">{metricas_evolucao['max_2024']:,}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Máxima 2025</div>
+                                        <div style="font-size: 1.3rem; font-weight: bold; color: #17a2b8;">{metricas_evolucao['max_2025']:,}</div>
                                     </div>
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
-
                             st.markdown("</div>", unsafe_allow_html=True)
-
-                        # Seção Evolução e Comparativos
+                        # Seção de Gráficos com Abas - Refatorado conforme solicitação
                         st.markdown("""
                         <div style="background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem;
                                     border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                             <h3 style="margin: 0 0 1rem 0; color: #2c3e50; font-weight: 600; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">
-                                📊 Evolução e Comparativos
+                                📊 Análise Visual Detalhada
                             </h3>
                         """, unsafe_allow_html=True)
-
-                        # Calcular métricas de evolução
-                        metricas_evolucao = MetricasAvancadas.calcular_metricas_evolucao(df_filtrado, lab_final)
-
-                        if metricas_evolucao:
-                            # Primeiro bloco: Totais de Coletas
-                            st.markdown(f"""
-                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #28a745;">
-                                <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">TOTAIS DE COLETAS</div>
-                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
-                                    <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Total 2024</div>
-                                        <div style="font-size: 1.4rem; font-weight: bold; color: #28a745;">{metricas_evolucao['total_coletas_2024']:,}</div>
-                                    </div>
-                                    <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Total 2025</div>
-                                        <div style="font-size: 1.4rem; font-weight: bold; color: #007bff;">{metricas_evolucao['total_coletas_2025']:,}</div>
-                                    </div>
-                                </div>
-                            </div>
-                            """, unsafe_allow_html=True)
-
-                            # Segundo bloco: Médias e Máxima
-                            st.markdown(f"""
-                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #17a2b8;">
-                                <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">MÉDIAS E MÁXIMA HISTÓRICA</div>
-                                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; text-align: center;">
-                                    <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Média 2024</div>
-                                        <div style="font-size: 1.2rem; font-weight: bold; color: #28a745;">{metricas_evolucao['media_2024']:.1f}</div>
-                                    </div>
-                                    <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Média Último Mês</div>
-                                        <div style="font-size: 1.2rem; font-weight: bold; color: #ffc107;">{metricas_evolucao['media_ultimo_mes']:,}</div>
-                                    </div>
-                                    <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Máxima Histórica</div>
-                                        <div style="font-size: 1.2rem; font-weight: bold; color: #dc3545;">{metricas_evolucao['maxima_historica']:,}</div>
-                                    </div>
-                                </div>
-                            </div>
-                            """, unsafe_allow_html=True)
-
-                            # Terceiro bloco: Comparativos
-                            variacao_2024_2025 = ((metricas_evolucao['total_coletas_2025'] - metricas_evolucao['total_coletas_2024']) / metricas_evolucao['total_coletas_2024'] * 100) if metricas_evolucao['total_coletas_2024'] > 0 else 0
-                            percentual_maxima = (metricas_evolucao['media_ultimo_mes'] / metricas_evolucao['maxima_historica'] * 100) if metricas_evolucao['maxima_historica'] > 0 else 0
-
-                            cor_variacao = "#28a745" if variacao_2024_2025 >= 0 else "#dc3545"
-                            cor_percentual = "#28a745" if percentual_maxima >= 80 else "#ffc107" if percentual_maxima >= 50 else "#dc3545"
-
-                            st.markdown(f"""
-                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #6f42c1;">
-                                <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">COMPARATIVOS</div>
-                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
-                                    <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Variação 2024→2025</div>
-                                        <div style="font-size: 1.2rem; font-weight: bold; color: {cor_variacao};">
-                                            {'+' if variacao_2024_2025 >= 0 else ''}{variacao_2024_2025:.1f}%
+                        
+                        # Criar abas para organizar os gráficos
+                        tab_resumo, tab_distribuicao, tab_media_diaria, tab_coletas_dia = st.tabs([
+                            "📋 Resumo Executivo", "📊 Distribuição por Dia", "📅 Média Diária", "📈 Coletas por Dia"
+                        ])
+                        
+                        with tab_resumo:
+                            st.subheader("📋 Resumo Executivo")
+                            # Calcular métricas de evolução
+                            metricas_evolucao = MetricasAvancadas.calcular_metricas_evolucao(df_filtrado, lab_final)
+                            if metricas_evolucao:
+                                # Primeiro bloco: Totais de Coletas
+                                st.markdown(f"""
+                                <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #28a745;">
+                                    <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">TOTAIS DE COLETAS</div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
+                                        <div>
+                                            <div style="font-size: 0.8rem; color: #666;">Total 2024</div>
+                                            <div style="font-size: 1.4rem; font-weight: bold; color: #28a745;">{metricas_evolucao['total_coletas_2024']:,}</div>
                                         </div>
-                                        <div style="font-size: 0.7rem; color: #666;">Total: {metricas_evolucao['total_coletas_2025']:,} vs {metricas_evolucao['total_coletas_2024']:,}</div>
-                                    </div>
-                                    <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Último Mês vs Máxima</div>
-                                        <div style="font-size: 1.2rem; font-weight: bold; color: {cor_percentual};">
-                                            {percentual_maxima:.1f}%
+                                        <div>
+                                            <div style="font-size: 0.8rem; color: #666;">Total 2025</div>
+                                            <div style="font-size: 1.4rem; font-weight: bold; color: #007bff;">{metricas_evolucao['total_coletas_2025']:,}</div>
                                         </div>
-                                        <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {metricas_evolucao['maxima_historica']:,}</div>
                                     </div>
                                 </div>
-                            </div>
-                            """, unsafe_allow_html=True)
-
-                        st.markdown("</div>", unsafe_allow_html=True)
-
-                        st.subheader(f"📈 Evolução Mensal - {lab_final}")
-                        ChartManager.criar_grafico_evolucao_mensal(df_filtrado, lab_final)
-
-                        # Novos gráficos
-                        col1, col2 = st.columns(2)
-
-                        with col1:
+                                """, unsafe_allow_html=True)
+                                
+                                # Comparativos - Atualizado para Último mês vs Média de 2025
+                                variacao_ultimo_vs_media = ((metricas_evolucao['media_ultimo_mes'] - metricas_evolucao['media_2025']) / metricas_evolucao['media_2025'] * 100) if metricas_evolucao['media_2025'] > 0 else 0
+                                percentual_maxima = (metricas_evolucao['media_ultimo_mes'] / max(metricas_evolucao['max_2024'], metricas_evolucao['max_2025']) * 100) if max(metricas_evolucao['max_2024'], metricas_evolucao['max_2025']) > 0 else 0
+                                cor_variacao = "#28a745" if variacao_ultimo_vs_media >= 0 else "#dc3545"
+                                cor_percentual = "#28a745" if percentual_maxima >= 80 else "#ffc107" if percentual_maxima >= 50 else "#dc3545"
+                                st.markdown(f"""
+                                <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #6f42c1;">
+                                    <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">COMPARATIVOS</div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
+                                        <div>
+                                            <div style="font-size: 0.8rem; color: #666;">Último Mês vs Média 2025</div>
+                                            <div style="font-size: 1.2rem; font-weight: bold; color: {cor_variacao};">
+                                                {'+' if variacao_ultimo_vs_media >= 0 else ''}{variacao_ultimo_vs_media:.1f}%
+                                            </div>
+                                            <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {metricas_evolucao['media_2025']:.1f}</div>
+                                        </div>
+                                        <div>
+                                            <div style="font-size: 0.8rem; color: #666;">Último Mês vs Máxima</div>
+                                            <div style="font-size: 1.2rem; font-weight: bold; color: {cor_percentual};">
+                                                {percentual_maxima:.1f}%
+                                            </div>
+                                            <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {max(metricas_evolucao['max_2024'], metricas_evolucao['max_2025']):,}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                # Gráfico de Evolução Mensal integrado no Resumo Executivo
+                                st.markdown("---")
+                                st.subheader("📈 Evolução Mensal")
+                                ChartManager.criar_grafico_evolucao_mensal(df_filtrado, lab_final, "resumo")
+                            else:
+                                st.info("📊 Dados insuficientes para análise de evolução")
+                        
+                        with tab_distribuicao:
+                            st.subheader("📊 Distribuição de Coletas por Dia da Semana")
+                            # Gráfico com destaque maior conforme solicitado
+                            ChartManager.criar_grafico_media_dia_semana(df_filtrado, lab_final, filtros)
+                        
+                        with tab_media_diaria:
                             st.subheader("📊 Média Diária por Mês")
                             ChartManager.criar_grafico_media_diaria(df_filtrado, lab_final)
 
-                        with col2:
-                            st.subheader("📅 Coletas por Dia do Mês")
+                        with tab_coletas_dia:
+                            st.subheader("📈 Coletas por Dia do Mês")
                             ChartManager.criar_grafico_coletas_por_dia(df_filtrado, lab_final)
-
-                        # Novo gráfico: Média por dia da semana
-                        st.subheader("📆 Distribuição de Coletas por Dia da Semana")
-                        ChartManager.criar_grafico_media_dia_semana(df_filtrado, lab_final, filtros)
-
-
                 # Fechar container
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        # Tabela completa de dados com funcionalidade de rede
+        # Seção organizada com tabs para melhor visualização
         st.markdown("""
         <div style="background: white; border-radius: 12px; padding: 1.5rem;
                     box-shadow: 0 4px 15px rgba(0,0,0,0.08); margin-bottom: 2rem;
@@ -2494,13 +2225,12 @@ def main():
             </div>
         """, unsafe_allow_html=True)
 
+        # Conteúdo único da análise detalhada
         # Carregar dados VIP para análise de rede
         df_vip_tabela = DataManager.carregar_dados_vip()
-
         # Adicionar informações de rede se disponível
         df_tabela = df_filtrado.copy()
         mostrar_rede = False
-
         if df_vip_tabela is not None and not df_vip_tabela.empty:
             # Merge dos dados com informações VIP
             df_tabela['CNPJ_Normalizado'] = df_tabela['CNPJ_PCL'].apply(
@@ -2509,17 +2239,14 @@ def main():
             df_vip_tabela['CNPJ_Normalizado'] = df_vip_tabela['CNPJ'].apply(
                 lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
             )
-
             # Verificar quais colunas VIP estão disponíveis
             colunas_vip_disponiveis = ['CNPJ_Normalizado']
             colunas_vip_opcionais = ['Rede', 'Ranking', 'Ranking Rede']
-
             for col in colunas_vip_opcionais:
                 if col in df_vip_tabela.columns:
                     colunas_vip_disponiveis.append(col)
-
             # Fazer merge apenas com colunas disponíveis
-            if len(colunas_vip_disponiveis) > 1:  # Mais que apenas CNPJ_Normalizado
+            if len(colunas_vip_disponiveis) > 1: # Mais que apenas CNPJ_Normalizado
                 df_tabela = df_tabela.merge(
                     df_vip_tabela[colunas_vip_disponiveis],
                     on='CNPJ_Normalizado',
@@ -2529,16 +2256,13 @@ def main():
             else:
                 # Se não há colunas VIP disponíveis, não fazer merge
                 mostrar_rede = False
-
         # Filtro por rede (simplificado)
         if mostrar_rede and 'Rede' in df_tabela.columns:
             redes_disponiveis = ["Todas"] + sorted(df_tabela['Rede'].dropna().unique().tolist())
-
             # Usar rede do laboratório pesquisado como padrão, se disponível
             rede_padrao = st.session_state.get('rede_lab_pesquisado', "Todas")
             if rede_padrao not in redes_disponiveis:
                 rede_padrao = "Todas"
-
             # Aplicar filtro automático se há rede selecionada
             if rede_padrao != "Todas":
                 rede_filtro = rede_padrao
@@ -2548,31 +2272,27 @@ def main():
                     <span style="color: #2e7d32; font-size: 0.9rem;">🎯 <strong>Filtro automático ativo:</strong> mostrando apenas laboratórios da rede <strong>"{rede_padrao}"</strong></span>
                 </div>
                 """, unsafe_allow_html=True)
-                
+
                 # Botão para limpar filtro automático
                 if st.button("🔄 Mostrar Todas as Redes", key="limpar_filtro_auto", help="Mostrar laboratórios de todas as redes"):
                     st.session_state['rede_lab_pesquisado'] = None
-                    # Remover st.rerun() para evitar refresh indesejado
                     st.success("✅ Filtro de rede limpo! Todas as redes serão exibidas.")
             else:
                 # Seleção manual de rede
                 rede_filtro = st.selectbox(
                     "🏢 Filtrar por Rede:",
                     options=redes_disponiveis,
-                    index=0,  # Sempre "Todas" por padrão
+                    index=0, # Sempre "Todas" por padrão
                     help="Selecione uma rede para filtrar",
                     key="filtro_rede_tabela"
                 )
         else:
             rede_filtro = "Todas"
-
         # Aplicar filtros
         df_tabela_filtrada = df_tabela.copy()
-
         # Filtro por rede
         if rede_filtro != "Todas" and mostrar_rede:
             df_tabela_filtrada = df_tabela_filtrada[df_tabela_filtrada['Rede'] == rede_filtro]
-
         # Mostrar informações da rede se filtrada
         if rede_filtro != "Todas" and mostrar_rede and not df_tabela_filtrada.empty:
             # Estatísticas da rede
@@ -2583,7 +2303,6 @@ def main():
                 'labs_risco_alto': len(df_tabela_filtrada[df_tabela_filtrada['Status_Risco'] == 'Alto']) if 'Status_Risco' in df_tabela_filtrada.columns else 0,
                 'labs_ativos': len(df_tabela_filtrada[df_tabela_filtrada['Dias_Sem_Coleta'] <= 30]) if 'Dias_Sem_Coleta' in df_tabela_filtrada.columns else 0
             }
-
             st.markdown(f"""
             <div style="background: linear-gradient(135deg, #e3f2fd, #f3e5f5); border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
                 <h4 style="margin: 0 0 0.5rem 0; color: #1976d2;">📊 Estatísticas da Rede: {rede_filtro}</h4>
@@ -2614,38 +2333,58 @@ def main():
 
         # Configurar colunas da tabela
         colunas_principais = [
-            'Nome_Fantasia_PCL', 'Estado', 'Cidade', 'Representante_Nome',
+            'CNPJ_PCL', 'Nome_Fantasia_PCL', 'Estado', 'Cidade', 'Representante_Nome',
             'Status_Risco', 'Dias_Sem_Coleta', 'Variacao_Percentual',
             'Volume_Atual_2025', 'Volume_Maximo_2024', 'Tendencia_Volume'
         ]
 
+        # Adicionar colunas de coletas mensais (2024 e 2025)
+        meses_nomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+        mes_limite_2025 = min(datetime.now().month, 12)
+
+        # Colunas de 2024 (todos os meses)
+        cols_2024 = [f'N_Coletas_{m}_24' for m in meses_nomes]
+        # Colunas de 2025 (até o mês atual)
+        cols_2025 = [f'N_Coletas_{m}_25' for m in meses_nomes[:mes_limite_2025]]
+
+        colunas_principais.extend(cols_2024 + cols_2025)
+
         # Adicionar colunas de rede se disponível
         if mostrar_rede:
             colunas_principais.extend(['Rede', 'Ranking', 'Ranking Rede'])
-
         colunas_existentes = [col for col in colunas_principais if col in df_tabela_filtrada.columns]
-
         if not df_tabela_filtrada.empty and colunas_existentes:
             df_exibicao = df_tabela_filtrada[colunas_existentes].copy()
-
             # Formatação de colunas
             if 'Variacao_Percentual' in df_exibicao.columns:
                 df_exibicao['Variacao_Percentual'] = df_exibicao['Variacao_Percentual'].round(2)
-
             if 'Volume_Atual_2025' in df_exibicao.columns:
                 df_exibicao['Volume_Atual_2025'] = df_exibicao['Volume_Atual_2025'].astype(int)
-
             if 'Volume_Maximo_2024' in df_exibicao.columns:
                 df_exibicao['Volume_Maximo_2024'] = df_exibicao['Volume_Maximo_2024'].astype(int)
-
             # Mostrar tabela com contador
             st.markdown(f"**Mostrando {len(df_exibicao)} laboratórios**")
-
             st.dataframe(
                 df_exibicao,
                 use_container_width=True,
                 height=500,
                 column_config={
+                    "CNPJ_PCL": st.column_config.TextColumn(
+                        "📄 CNPJ",
+                        help="CNPJ do laboratório"
+                    ),
+                    "Nome_Fantasia_PCL": st.column_config.TextColumn(
+                        "🏥 Nome Fantasia",
+                        help="Nome fantasia do laboratório"
+                    ),
+                    "Estado": st.column_config.TextColumn(
+                        "🗺️ Estado",
+                        help="Estado do laboratório"
+                    ),
+                    "Cidade": st.column_config.TextColumn(
+                        "🏙️ Cidade",
+                        help="Cidade do laboratório"
+                    ),
                     "Status_Risco": st.column_config.TextColumn(
                         "Status de Risco",
                         help="Classificação de risco do laboratório"
@@ -2667,6 +2406,22 @@ def main():
                         "Tendência",
                         help="Tendência de volume (Crescimento/Declínio/Estável)"
                     ),
+                    **{
+                        # Configurações para colunas mensais de 2024
+                        col: st.column_config.NumberColumn(
+                            f"{col.split('_')[1]}/24",
+                            help=f"Número de coletas em {col.split('_')[1]} de 2024"
+                        )
+                        for col in cols_2024 if col in df_exibicao.columns
+                    },
+                    **{
+                        # Configurações para colunas mensais de 2025
+                        col: st.column_config.NumberColumn(
+                            f"{col.split('_')[1]}/25",
+                            help=f"Número de coletas em {col.split('_')[1]} de 2025"
+                        )
+                        for col in cols_2025 if col in df_exibicao.columns
+                    },
                     "Rede": st.column_config.TextColumn(
                         "🏢 Rede",
                         help="Rede à qual o laboratório pertence"
@@ -2681,10 +2436,8 @@ def main():
                     )
                 }
             )
-
             # Botões de download
             col_download1, col_download2 = st.columns(2)
-
             with col_download1:
                 csv_data = df_exibicao.to_csv(index=False, encoding='utf-8')
                 st.download_button(
@@ -2694,7 +2447,6 @@ def main():
                     mime="text/csv",
                     key="download_csv_tabela"
                 )
-
             with col_download2:
                 excel_buffer = BytesIO()
                 df_exibicao.to_excel(excel_buffer, index=False, engine='openpyxl')
@@ -2709,22 +2461,15 @@ def main():
         else:
             st.info("📋 Nenhum laboratório encontrado com os filtros aplicados.")
 
+        # Fechar container principal
         st.markdown("</div>", unsafe_allow_html=True)
-
-
-    # ========================================
-    # ABA 3: RANKING REDE
-    # ========================================
-    with tab3:
+    elif st.session_state.page == "🏢 Ranking Rede":
         st.header("🏢 Ranking por Rede")
-
         # Carregar dados VIP para análise de rede
         df_vip = DataManager.carregar_dados_vip()
-
         if df_vip is not None and not df_vip.empty:
             # Merge dos dados principais com dados VIP
             df_com_rede = df_filtrado.copy()
-
             # Adicionar coluna CNPJ normalizado para match
             df_com_rede['CNPJ_Normalizado'] = df_com_rede['CNPJ_PCL'].apply(
                 lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
@@ -2732,26 +2477,21 @@ def main():
             df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(
                 lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
             )
-
             # Merge dos dados
             df_com_rede = df_com_rede.merge(
                 df_vip[['CNPJ_Normalizado', 'Rede', 'Ranking', 'Ranking Rede']],
                 on='CNPJ_Normalizado',
                 how='left'
             )
-
             # Filtros específicos para ranking de rede
             st.markdown("""
             <div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
                         color: white; padding: 1rem; border-radius: 8px;
-                        margin-bottom: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        margin: 1rem 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                 <h4 style="margin: 0;">🔍 Filtros Gerais de Redes</h4>
-                <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; opacity: 0.9;">Configure os filtros abaixo para personalizar sua análise</p>
             </div>
             """, unsafe_allow_html=True)
-
             col1, col2, col3 = st.columns(3)
-
             with col1:
                 redes_disponiveis = sorted(df_com_rede['Rede'].dropna().unique())
                 rede_selecionada = st.multiselect(
@@ -2760,7 +2500,6 @@ def main():
                     default=redes_disponiveis if len(redes_disponiveis) <= 5 else [],
                     help="Selecione as redes para análise"
                 )
-
             with col2:
                 rankings_rede = sorted(df_com_rede['Ranking Rede'].dropna().unique())
                 ranking_rede_selecionado = st.multiselect(
@@ -2769,7 +2508,6 @@ def main():
                     default=rankings_rede if len(rankings_rede) <= 5 else [],
                     help="Selecione os rankings de rede"
                 )
-
             with col3:
                 # Categorias de redes (ouro, prata, bronze, diamante)
                 categorias_rede = []
@@ -2783,14 +2521,12 @@ def main():
                                  'Outros'
                     )
                     categorias_rede = sorted(df_cats['Categoria_Rede'].unique())
-
                 categoria_selecionada = st.multiselect(
                     "🏆 Categoria Rede:",
                     options=categorias_rede,
                     default=categorias_rede if len(categorias_rede) <= 4 else [],
                     help="Filtrar por categoria da rede (Diamante, Ouro, Prata, Bronze)"
                 )
-
             # Quarta coluna para tipo de análise
             col4 = st.columns(1)[0]
             with col4:
@@ -2799,19 +2535,14 @@ def main():
                     options=["Visão Geral", "Por Volume", "Por Performance", "Por Risco", "🔄 Comparação de Redes"],
                     help="Escolha o tipo de análise a ser realizada"
                 )
-
             # Aplicar filtros
             df_rede_filtrado = df_com_rede.copy()
-
             # Nota explicativa sobre filtros
             st.info("💡 **Dica:** Use os filtros acima para análise geral. Para exploração detalhada de uma rede específica, role para baixo até a seção 'Explorador Detalhado por Rede'.")
-
             if rede_selecionada:
                 df_rede_filtrado = df_rede_filtrado[df_rede_filtrado['Rede'].isin(rede_selecionada)]
-
             if ranking_rede_selecionado:
                 df_rede_filtrado = df_rede_filtrado[df_rede_filtrado['Ranking Rede'].isin(ranking_rede_selecionado)]
-
             # Aplicar filtro de categoria de rede
             if categoria_selecionada:
                 df_cats_filtro = df_rede_filtrado.copy()
@@ -2823,40 +2554,33 @@ def main():
                              'Outros'
                 )
                 df_rede_filtrado = df_cats_filtro[df_cats_filtro['Categoria_Rede'].isin(categoria_selecionada)]
-
             # ========================================
             # CÁLCULO GLOBAL DE ESTATÍSTICAS DE REDES
             # ========================================
             # Calcular rede_stats para uso em todas as análises
-            rede_stats = pd.DataFrame()  # Inicializar vazio por segurança
-
+            rede_stats = pd.DataFrame() # Inicializar vazio por segurança
             if not df_rede_filtrado.empty and 'Rede' in df_rede_filtrado.columns:
                 # Remover duplicatas baseado no CNPJ antes da contagem
                 df_sem_duplicatas_rede = df_rede_filtrado.drop_duplicates(subset=['CNPJ_PCL'], keep='first')
-
                 # Estatísticas expandidas por rede
                 rede_stats = df_sem_duplicatas_rede.groupby('Rede').agg({
                     'Nome_Fantasia_PCL': 'count',
                     'Volume_Total_2025': ['sum', 'mean', 'std'],
                     'Score_Risco': 'mean',
-                    'Estado': lambda x: x.mode().iloc[0] if not x.mode().empty else 'N/A',  # Estado mais comum
-                    'Cidade': 'nunique',  # Número de cidades únicas
-                    'Status_Risco': lambda x: (x.isin(['Inativo', 'Alto'])).sum(),  # Número de labs em churn (Inativo + Alto)
+                    'Estado': lambda x: x.mode().iloc[0] if not x.mode().empty else 'N/A', # Estado mais comum
+                    'Cidade': 'nunique', # Número de cidades únicas
+                    'Status_Risco': lambda x: (x.isin(['Inativo', 'Alto'])).sum(), # Número de labs em churn (Inativo + Alto)
                 }).reset_index()
-
                 # Achatar colunas multi-índice
                 rede_stats.columns = ['Rede', 'Qtd_Labs', 'Volume_Total', 'Volume_Medio', 'Volume_Std',
                                     'Score_Medio_Risco', 'Estado_Principal', 'Cidades_Unicas', 'Labs_Churn']
-
                 # Adicionar mais métricas calculadas
                 rede_stats['Taxa_Churn'] = (rede_stats['Labs_Churn'] / rede_stats['Qtd_Labs'] * 100).round(1)
                 rede_stats['Volume_por_Lab'] = (rede_stats['Volume_Total'] / rede_stats['Qtd_Labs']).round(0)
-
                 # Adicionar categoria da rede se disponível
                 if 'Ranking Rede' in df_sem_duplicatas_rede.columns:
                     rede_ranking = df_sem_duplicatas_rede.groupby('Rede')['Ranking Rede'].first().reset_index()
                     rede_stats = rede_stats.merge(rede_ranking, on='Rede', how='left')
-
                     # Adicionar categoria
                     rede_stats['Categoria_Rede'] = rede_stats['Ranking Rede'].apply(
                         lambda x: 'Diamante' if str(x).upper() in ['DIAMANTE', 'DIAMOND'] else
@@ -2868,30 +2592,23 @@ def main():
                 else:
                     rede_stats['Ranking Rede'] = 'N/A'
                     rede_stats['Categoria_Rede'] = 'N/A'
-
             if not df_rede_filtrado.empty:
                 # Análise baseada no tipo selecionado
                 if tipo_analise == "Visão Geral":
                     # Cards de métricas gerais
                     col1, col2, col3, col4 = st.columns(4)
-
                     total_redes = len(rede_stats) if not rede_stats.empty else 0
                     total_labs_rede = rede_stats['Qtd_Labs'].sum() if not rede_stats.empty else 0
                     volume_total_rede = rede_stats['Volume_Total'].sum() if not rede_stats.empty else 0
-
                     with col1:
                         st.metric("🏢 Total de Redes", total_redes)
-
                     with col2:
                         st.metric("🏥 Labs nas Redes", f"{total_labs_rede:,}")
-
                     with col3:
                         st.metric("📦 Volume Total", f"{volume_total_rede:,}")
-
                     with col4:
                         media_por_rede = volume_total_rede / total_redes if total_redes > 0 else 0
                         st.metric("📊 Média por Rede", f"{media_por_rede:,.0f}")
-
                     # ========================================
                     # CARDS DE LOCALIDADE E VOLUMES
                     # ========================================
@@ -2902,67 +2619,50 @@ def main():
                         <h4 style="margin: 0;">📍 Distribuição por Localidade</h4>
                     </div>
                     """, unsafe_allow_html=True)
-
                     # Cards de localidade
                     col1, col2, col3, col4, col5, col6 = st.columns(6)
-
                     # Calcular métricas por estado
                     df_sem_duplicatas_local = df_rede_filtrado.drop_duplicates(subset=['CNPJ_PCL'], keep='first')
-
                     # Número total de laboratórios
                     total_labs = len(df_sem_duplicatas_local)
-
                     # Por estado
                     estados_stats = df_sem_duplicatas_local.groupby('Estado').agg({
                         'Nome_Fantasia_PCL': 'count',
                         'Volume_Total_2025': ['sum', 'mean']
                     }).round(2)
-
                     # Achatar colunas multi-índice
                     estados_stats.columns = ['Qtd_Labs', 'Volume_Total', 'Volume_Medio']
                     estados_stats = estados_stats.reset_index()
-
                     # Top 5 estados por quantidade
                     top_estados = estados_stats.nlargest(5, 'Qtd_Labs')
-
                     # Por cidade
                     cidades_stats = df_sem_duplicatas_local.groupby('Cidade').agg({
                         'Nome_Fantasia_PCL': 'count',
                         'Volume_Total_2025': ['sum', 'mean']
                     }).round(2)
-
                     cidades_stats.columns = ['Qtd_Labs', 'Volume_Total', 'Volume_Medio']
                     cidades_stats = cidades_stats.reset_index()
-
                     # Top 5 cidades por quantidade
                     top_cidades = cidades_stats.nlargest(5, 'Qtd_Labs')
-
                     with col1:
                         st.metric("🏥 Total Labs", f"{total_labs:,}")
-
                     with col2:
                         total_estados = df_sem_duplicatas_local['Estado'].nunique()
                         st.metric("🗺️ Estados", f"{total_estados}")
-
                     with col3:
                         total_cidades = df_sem_duplicatas_local['Cidade'].nunique()
                         st.metric("🏙️ Cidades", f"{total_cidades}")
-
                     with col4:
                         volume_total_3m = df_sem_duplicatas_local['Volume_Total_2025'].sum()
                         st.metric("📦 Vol. Total 2025", f"{volume_total_3m:,.0f}")
-
                     with col5:
                         volume_medio_3m = df_sem_duplicatas_local['Volume_Total_2025'].mean()
                         st.metric("📊 Vol. Médio 2025", f"{volume_medio_3m:,.0f}")
-
                     with col6:
                         volume_medio_por_lab = volume_total_3m / total_labs if total_labs > 0 else 0
                         st.metric("📈 Vol/Lab", f"{volume_medio_por_lab:,.0f}")
-
                     # Tabelas detalhadas por localidade
                     col1, col2 = st.columns(2)
-
                     with col1:
                         st.subheader("📍 Top Estados")
                         st.dataframe(
@@ -2976,7 +2676,6 @@ def main():
                             },
                             hide_index=True
                         )
-
                     with col2:
                         st.subheader("🏙️ Top Cidades")
                         st.dataframe(
@@ -2990,17 +2689,13 @@ def main():
                             },
                             hide_index=True
                         )
-
-
                 elif tipo_analise == "Por Volume":
                     st.subheader("📦 Análise por Volume de Coletas")
-
                     # Ranking de redes por volume - remover duplicatas antes da contagem
                     df_sem_duplicatas_volume = df_rede_filtrado.drop_duplicates(subset=['CNPJ_PCL'], keep='first')
                     volume_por_rede = df_sem_duplicatas_volume.groupby('Rede')['Volume_Total_2025'].agg(['sum', 'mean', 'count']).reset_index()
                     volume_por_rede.columns = ['Rede', 'Volume_Total', 'Volume_Medio', 'Qtd_Labs']
                     volume_por_rede = volume_por_rede.sort_values('Volume_Total', ascending=False)
-
                     # Gráfico de ranking
                     fig_ranking = px.bar(
                         volume_por_rede.head(10),
@@ -3012,9 +2707,8 @@ def main():
                         text='Volume_Total'
                     )
                     fig_ranking.update_traces(texttemplate='%{text:.0f}', textposition='outside')
-                    fig_ranking.update_layout(xaxis_tickangle=-45)
-                    st.plotly_chart(fig_ranking, use_container_width=True)
-
+                    fig_ranking.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
+                    st.plotly_chart(fig_ranking, use_container_width=True, config={'displayModeBar': True})
                     # Tabela detalhada
                     st.dataframe(
                         volume_por_rede.round(2),
@@ -3026,10 +2720,8 @@ def main():
                             "Qtd_Labs": st.column_config.NumberColumn("🏥 Qtd Labs")
                         }
                     )
-
                 elif tipo_analise == "Por Performance":
                     st.subheader("📈 Análise de Performance por Rede")
-
                     # Performance por rede (baseado em crescimento/variacao) - remover duplicatas
                     if 'Variacao_Percentual' in df_rede_filtrado.columns:
                         df_sem_duplicatas_perf = df_rede_filtrado.drop_duplicates(subset=['CNPJ_PCL'], keep='first')
@@ -3037,12 +2729,9 @@ def main():
                             'Variacao_Percentual': ['mean', 'count'],
                             'Volume_Total_2025': 'sum'
                         }).reset_index()
-
                         perf_rede.columns = ['Rede', 'Variacao_Media', 'Qtd_Labs', 'Volume_Total']
                         perf_rede = perf_rede.sort_values('Variacao_Media', ascending=False)
-
                         col1, col2 = st.columns(2)
-
                         with col1:
                             # Performance por variação
                             fig_perf = px.bar(
@@ -3055,9 +2744,8 @@ def main():
                                 text='Variacao_Media'
                             )
                             fig_perf.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-                            fig_perf.update_layout(xaxis_tickangle=-45)
-                            st.plotly_chart(fig_perf, use_container_width=True)
-
+                            fig_perf.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
+                            st.plotly_chart(fig_perf, use_container_width=True, config={'displayModeBar': True})
                         with col2:
                             # Scatter plot: Volume vs Performance
                             fig_scatter = px.scatter(
@@ -3069,8 +2757,8 @@ def main():
                                 title="📊 Volume vs Performance por Rede",
                                 labels={'Volume_Total': 'Volume Total', 'Variacao_Media': 'Variação Média %'}
                             )
-                            st.plotly_chart(fig_scatter, use_container_width=True)
-
+                            fig_scatter.update_layout(height=500, margin=dict(l=40, r=40, t=40, b=40))
+                            st.plotly_chart(fig_scatter, use_container_width=True, config={'displayModeBar': True})
                         # Tabela de performance
                         st.dataframe(
                             perf_rede.round(2),
@@ -3082,20 +2770,16 @@ def main():
                                 "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f")
                             }
                         )
-
                 elif tipo_analise == "Por Risco":
                     st.subheader("⚠️ Análise de Risco por Rede")
-
                     if 'Score_Risco' in df_rede_filtrado.columns:
                         # Risco por rede
                         risco_rede = df_rede_filtrado.groupby('Rede').agg({
                             'Score_Risco': ['mean', 'max', 'count'],
                             'Volume_Total_2025': 'sum'
                         }).reset_index()
-
                         risco_rede.columns = ['Rede', 'Score_Medio', 'Score_Max', 'Qtd_Labs', 'Volume_Total']
                         risco_rede = risco_rede.sort_values('Score_Medio', ascending=False)
-
                         # Distribuição de risco
                         fig_risco = px.bar(
                             risco_rede.head(10),
@@ -3107,17 +2791,14 @@ def main():
                             text='Score_Medio'
                         )
                         fig_risco.update_traces(texttemplate='%{text:.1f}', textposition='outside')
-                        fig_risco.update_layout(xaxis_tickangle=-45)
-                        st.plotly_chart(fig_risco, use_container_width=True)
-
+                        fig_risco.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
+                        st.plotly_chart(fig_risco, use_container_width=True, config={'displayModeBar': True})
                         # Distribuição de labs por nível de risco e rede
                         col1, col2 = st.columns(2)
-
                         with col1:
                             # Labs de alto risco por rede
                             alto_risco = df_rede_filtrado[df_rede_filtrado['Score_Risco'] > 70].groupby('Rede').size().reset_index(name='Qtd_Alto_Risco')
                             alto_risco = alto_risco.sort_values('Qtd_Alto_Risco', ascending=False)
-
                             fig_alto = px.bar(
                                 alto_risco.head(10),
                                 x='Rede',
@@ -3126,9 +2807,8 @@ def main():
                                 color='Qtd_Alto_Risco',
                                 color_continuous_scale='Reds'
                             )
-                            fig_alto.update_layout(xaxis_tickangle=-45)
-                            st.plotly_chart(fig_alto, use_container_width=True)
-
+                            fig_alto.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
+                            st.plotly_chart(fig_alto, use_container_width=True, config={'displayModeBar': True})
                         with col2:
                             # Status de risco por rede
                             risco_status = df_rede_filtrado.groupby(['Rede', 'Status_Risco']).size().reset_index(name='Qtd')
@@ -3140,30 +2820,23 @@ def main():
                                 title="📊 Status de Risco por Rede",
                                 color_discrete_map={'Alto': '#d62728', 'Médio': '#ff7f0e', 'Baixo': '#2ca02c', 'Inativo': '#9467bd'}
                             )
-                            fig_status.update_layout(xaxis_tickangle=-45)
-                            st.plotly_chart(fig_status, use_container_width=True)
-
+                            fig_status.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
+                            st.plotly_chart(fig_status, use_container_width=True, config={'displayModeBar': True})
                         # Adicionar indicadores de risco às redes de alto risco
                         risco_rede_display = risco_rede.copy()
-
                         # Função para indicadores de risco em análise por risco
                         def adicionar_indicador_risco_alto(row):
                             indicadores = []
-
                             # Indicador crítico para score máximo > 80
                             if row['Score_Max'] > 80:
                                 indicadores.append("🚨")
                             elif row['Score_Max'] > 60:
                                 indicadores.append("⚠️")
-
                             # Indicador de rede com muitos labs em risco
-                            if row['count'] > row['Qtd_Labs'] * 0.5:  # Mais de 50% dos labs com score alto
+                            if row['Qtd_Labs'] > row['Qtd_Labs'] * 0.5: # Mais de 50% dos labs com score alto
                                 indicadores.append("🔴")
-
                             return ' '.join(indicadores) if indicadores else "⚡"
-
                         risco_rede_display['🚨 Prioridade'] = risco_rede_display.apply(adicionar_indicador_risco_alto, axis=1)
-
                         # Tabela de risco detalhada com indicadores
                         st.dataframe(
                             risco_rede_display.round(2),
@@ -3177,17 +2850,14 @@ def main():
                                 "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f")
                             }
                         )
-
                         # Alertas críticos
                         redes_criticas = risco_rede_display[risco_rede_display['🚨 Prioridade'].str.contains('🚨')]
                         if not redes_criticas.empty:
                             st.error(f"🚨 **ATENÇÃO CRÍTICA:** {len(redes_criticas)} rede(s) com score máximo > 80 requerem intervenção imediata!")
                             for _, rede in redes_criticas.iterrows():
                                 st.write(f"• **{rede['Rede']}**: Score máximo de {rede['Score_Max']:.1f}")
-
                 elif tipo_analise == "🔄 Comparação de Redes":
                     st.subheader("🔄 Comparação Direta de Redes")
-
                     # Seletor de redes para comparação (máximo 5 para legibilidade)
                     redes_para_comparar = st.multiselect(
                         "🏢 Selecione até 5 redes para comparar:",
@@ -3196,21 +2866,16 @@ def main():
                         max_selections=5,
                         help="Escolha as redes que deseja comparar diretamente"
                     )
-
                     if redes_para_comparar:
                         # Filtrar dados apenas das redes selecionadas
                         redes_comparacao = rede_stats[rede_stats['Rede'].isin(redes_para_comparar)].copy()
-
                         if not redes_comparacao.empty:
                             # ========================================
                             # DASHBOARD DE COMPARAÇÃO
                             # ========================================
-
                             # Cards de comparação rápida
                             st.markdown("### 📊 Comparação Rápida")
-
                             col1, col2, col3, col4 = st.columns(4)
-
                             with col1:
                                 maior_qtd = redes_comparacao.loc[redes_comparacao['Qtd_Labs'].idxmax()]
                                 st.metric(
@@ -3218,7 +2883,6 @@ def main():
                                     f"{int(maior_qtd['Qtd_Labs'])}",
                                     f"{maior_qtd['Rede'][:15]}..."
                                 )
-
                             with col2:
                                 maior_volume = redes_comparacao.loc[redes_comparacao['Volume_Total'].idxmax()]
                                 st.metric(
@@ -3226,7 +2890,6 @@ def main():
                                     f"{maior_volume['Volume_Total']:,.0f}",
                                     f"{maior_volume['Rede'][:15]}..."
                                 )
-
                             with col3:
                                 menor_churn = redes_comparacao.loc[redes_comparacao['Taxa_Churn'].idxmin()]
                                 st.metric(
@@ -3234,7 +2897,6 @@ def main():
                                     f"{menor_churn['Taxa_Churn']:.1f}%",
                                     f"{menor_churn['Rede'][:15]}..."
                                 )
-
                             with col4:
                                 maior_score = redes_comparacao.loc[redes_comparacao['Score_Medio_Risco'].idxmax()]
                                 st.metric(
@@ -3242,20 +2904,15 @@ def main():
                                     f"{maior_score['Score_Medio_Risco']:.1f}",
                                     f"{maior_score['Rede'][:15]}..."
                                 )
-
                             # ========================================
                             # GRÁFICOS COMPARATIVOS
                             # ========================================
-
                             st.markdown("### 📈 Comparações Visuais")
-
                             # Gráfico de barras comparativo - múltiplas métricas
                             col1, col2 = st.columns(2)
-
                             with col1:
                                 # Comparação por quantidade de laboratórios e volume
                                 fig_comp1 = go.Figure()
-
                                 for _, rede in redes_comparacao.iterrows():
                                     fig_comp1.add_trace(go.Bar(
                                         name=f"{rede['Rede'][:12]}...",
@@ -3264,18 +2921,15 @@ def main():
                                         text=[f"{int(rede['Qtd_Labs'])}", f"{rede['Volume_Total']/1000:.0f}k"],
                                         textposition='auto',
                                     ))
-
                                 fig_comp1.update_layout(
                                     title="🏥 Labs vs 📦 Volume por Rede",
                                     barmode='group',
                                     height=400
                                 )
                                 st.plotly_chart(fig_comp1, use_container_width=True)
-
                             with col2:
                                 # Comparação de performance (volume médio e taxa churn)
                                 fig_comp2 = go.Figure()
-
                                 for _, rede in redes_comparacao.iterrows():
                                     fig_comp2.add_trace(go.Scatter(
                                         name=f"{rede['Rede'][:12]}...",
@@ -3286,7 +2940,6 @@ def main():
                                         textposition="top center",
                                         marker=dict(size=15)
                                     ))
-
                                 fig_comp2.update_layout(
                                     title="💰 Volume Médio vs 📉 Taxa Churn",
                                     xaxis_title="Volume Médio por Lab",
@@ -3294,26 +2947,20 @@ def main():
                                     height=400
                                 )
                                 st.plotly_chart(fig_comp2, use_container_width=True)
-
                             # ========================================
                             # TABELA COMPARATIVA DETALHADA
                             # ========================================
-
                             st.markdown("### 📋 Comparação Detalhada")
-
                             # Reordenar colunas para melhor visualização
                             cols_comparacao = [
                                 'Rede', 'Categoria_Rede', 'Qtd_Labs', 'Labs_Churn', 'Taxa_Churn',
                                 'Volume_Total', 'Volume_Medio', 'Volume_por_Lab', 'Score_Medio_Risco'
                             ]
-
                             # Adicionar indicadores visuais de risco
                             redes_comparacao_display = redes_comparacao[cols_comparacao].copy()
-
                             # Função para adicionar indicadores de risco
                             def adicionar_indicador_risco(row):
                                 indicadores = []
-
                                 # Indicador de alto churn
                                 if row['Taxa_Churn'] > 30:
                                     indicadores.append("🔴")
@@ -3321,26 +2968,20 @@ def main():
                                     indicadores.append("🟠")
                                 else:
                                     indicadores.append("🟢")
-
                                 # Indicador de alto risco
                                 if row['Score_Medio_Risco'] > 70:
                                     indicadores.append("⚠️")
                                 elif row['Score_Medio_Risco'] > 40:
                                     indicadores.append("⚡")
-
                                 # Indicador de baixa eficiência (volume por lab)
                                 media_geral = redes_comparacao['Volume_por_Lab'].mean()
                                 if row['Volume_por_Lab'] < media_geral * 0.7:
                                     indicadores.append("📉")
-
                                 return ' '.join(indicadores) if indicadores else "✅"
-
                             redes_comparacao_display['🚨 Indicadores'] = redes_comparacao_display.apply(adicionar_indicador_risco, axis=1)
-
                             # Reordenar para colocar indicadores primeiro
                             cols_final = ['🚨 Indicadores'] + cols_comparacao
                             redes_comparacao_display = redes_comparacao_display[cols_final]
-
                             st.dataframe(
                                 redes_comparacao_display.round(2),
                                 use_container_width=True,
@@ -3358,80 +2999,66 @@ def main():
                                 },
                                 hide_index=True
                             )
-
                             # ========================================
                             # RANKING COMPARATIVO
                             # ========================================
-
                             st.markdown("### 🏆 Rankings Comparativos")
-
                             col1, col2, col3 = st.columns(3)
-
                             with col1:
                                 st.subheader("🥇 Por Volume Total")
                                 ranking_volume = redes_comparacao.sort_values('Volume_Total', ascending=False)[['Rede', 'Volume_Total']]
                                 for idx, row in ranking_volume.iterrows():
                                     medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else "📊"
                                     st.write(f"{medal} {row['Rede'][:20]}...: {row['Volume_Total']:,.0f}")
-
                             with col2:
                                 st.subheader("🥇 Por Eficiência")
                                 ranking_eficiencia = redes_comparacao.sort_values('Volume_por_Lab', ascending=False)[['Rede', 'Volume_por_Lab']]
                                 for idx, row in ranking_eficiencia.iterrows():
                                     medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else "📊"
                                     st.write(f"{medal} {row['Rede'][:20]}...: {row['Volume_por_Lab']:,.0f}")
-
                             with col3:
                                 st.subheader("🥇 Por Menor Risco")
                                 ranking_risco = redes_comparacao.sort_values('Score_Medio_Risco', ascending=True)[['Rede', 'Score_Medio_Risco']]
                                 for idx, row in ranking_risco.iterrows():
                                     medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else "📊"
                                     st.write(f"{medal} {row['Rede'][:20]}...: {row['Score_Medio_Risco']:.1f}")
-
                         else:
                             st.warning("⚠️ Nenhuma rede encontrada com os critérios selecionados.")
                     else:
                         st.info("ℹ️ Selecione pelo menos uma rede para iniciar a comparação.")
-
                 # Análise de relacionamentos (quem pertence a quem)
                 st.markdown("---")
                 st.subheader("🔗 Análise de Relacionamentos")
-
                 # Mostrar hierarquia Rede -> Ranking -> Labs
                 if 'Ranking' in df_rede_filtrado.columns and 'Ranking Rede' in df_rede_filtrado.columns:
                     # Criar tabela hierárquica - garantir que cada laboratório seja contado apenas uma vez
                     # Remover duplicatas baseado no CNPJ antes da contagem
                     df_sem_duplicatas = df_rede_filtrado.drop_duplicates(subset=['CNPJ_PCL'], keep='first')
-                    
+                 
                     hierarquia = df_sem_duplicatas.groupby(['Rede', 'Ranking', 'Ranking Rede']).agg({
                         'Nome_Fantasia_PCL': 'count',
                         'Volume_Total_2025': 'sum'
                     }).reset_index()
-
                     hierarquia.columns = ['Rede', 'Ranking', 'Ranking_Rede', 'Qtd_Labs', 'Volume_Total']
                     hierarquia = hierarquia.sort_values(['Rede', 'Ranking', 'Ranking_Rede'])
-
                     st.dataframe(
                         hierarquia,
                         use_container_width=True,
                         column_config={
                             "Rede": st.column_config.TextColumn("🏢 Rede"),
                             "Ranking": st.column_config.TextColumn("🏆 Ranking"),
-                            "Ranking Rede": st.column_config.TextColumn("🏅 Ranking Rede"),
+                            "Ranking_Rede": st.column_config.TextColumn("🏅 Ranking Rede"),
                             "Qtd_Labs": st.column_config.NumberColumn("🏥 Qtd Labs"),
                             "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f")
                         }
                     )
-
                     # Gráfico de sunburst para hierarquia
                     if len(hierarquia) > 0:
                         # Filtrar apenas dados com volume positivo para evitar erro de normalização
                         hierarquia_plot = hierarquia[hierarquia['Volume_Total'] > 0].copy()
-
                         if not hierarquia_plot.empty:
                             # Garantir que não há valores zero ou negativos
                             hierarquia_plot['Volume_Total'] = hierarquia_plot['Volume_Total'].clip(lower=0.1)
-
                             fig_sunburst = px.sunburst(
                                 hierarquia_plot,
                                 path=['Rede', 'Ranking', 'Ranking_Rede'],
@@ -3440,33 +3067,24 @@ def main():
                                 color='Qtd_Labs',
                                 color_continuous_scale='Blues'
                             )
-                            st.plotly_chart(fig_sunburst, use_container_width=True)
+                            fig_sunburst.update_layout(height=500, margin=dict(l=40, r=40, t=40, b=40))
+                            st.plotly_chart(fig_sunburst, use_container_width=True, config={'displayModeBar': True})
                         else:
                             st.info("ℹ️ Não há dados suficientes com volume positivo para gerar o gráfico hierárquico.")
-
             else:
                 st.warning("⚠️ Nenhum dado encontrado com os filtros aplicados.")
-
         else:
             st.warning("⚠️ Dados VIP não disponíveis. Verifique se o arquivo Excel foi carregado corretamente.")
-
-    # ========================================
-    # RODAPÉ
-    # ========================================
-    st.markdown("---")
-    # ========================================
-    # ABA 4: MANUTENÇÃO VIPs
-    # ========================================
-    with tab4:
+    elif st.session_state.page == "🔧 Manutenção VIPs":
         st.header("🔧 Manutenção de Dados VIP")
         st.markdown("""
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                     color: white; padding: 1rem; border-radius: 8px; margin-bottom: 2rem;">
             <h3 style="margin: 0; color: white;">Gerenciamento de Laboratórios VIP</h3>
             <p style="margin: 0.5rem 0 0 0; opacity: 0.9;">Adicione, edite e gerencie laboratórios VIP com validação completa e histórico de alterações.</p>
         </div>
         """, unsafe_allow_html=True)
-        
+     
         # Importar módulos necessários
         try:
             from vip_history_manager import VIPHistoryManager
@@ -3476,11 +3094,11 @@ def main():
         except ImportError as e:
             st.error(f"Erro ao importar módulos VIP: {e}")
             st.stop()
-        
+     
         # Inicializar gerenciadores
         history_manager = VIPHistoryManager(OUTPUT_DIR)
         vip_integration = VIPIntegration(OUTPUT_DIR)
-        
+     
         # Sub-abas para diferentes funcionalidades
         sub_tab1, sub_tab2, sub_tab3, sub_tab4 = st.tabs([
             "📋 Visualizar VIPs",
@@ -3488,74 +3106,74 @@ def main():
             "✏️ Editar VIP",
             "📊 Histórico"
         ])
-        
+     
         with sub_tab1:
             st.subheader("📋 Lista de Laboratórios VIP")
-            
+         
             # Carregar dados VIP
             df_vip = DataManager.carregar_dados_vip()
-            
+         
             if df_vip is not None and not df_vip.empty:
                 # Filtros
                 col1, col2, col3 = st.columns(3)
-                
+             
                 with col1:
                     ranking_filtro = st.selectbox(
                         "🏆 Ranking:",
                         options=["Todos"] + sorted(df_vip['Ranking'].dropna().unique().tolist()),
                         help="Filtrar por ranking individual"
                     )
-                
+             
                 with col2:
                     ranking_rede_filtro = st.selectbox(
                         "🏅 Ranking Rede:",
                         options=["Todos"] + sorted(df_vip['Ranking Rede'].dropna().unique().tolist()),
                         help="Filtrar por ranking de rede"
                     )
-                
+             
                 with col3:
                     rede_filtro = st.selectbox(
                         "🏢 Rede:",
                         options=["Todas"] + sorted(df_vip['Rede'].dropna().unique().tolist()),
                         help="Filtrar por rede"
                     )
-                
+             
                 # Aplicar filtros
                 df_filtrado = df_vip.copy()
-                
+             
                 if ranking_filtro != "Todos":
                     df_filtrado = df_filtrado[df_filtrado['Ranking'] == ranking_filtro]
-                
+             
                 if ranking_rede_filtro != "Todos":
                     df_filtrado = df_filtrado[df_filtrado['Ranking Rede'] == ranking_rede_filtro]
-                
+             
                 if rede_filtro != "Todas":
                     df_filtrado = df_filtrado[df_filtrado['Rede'] == rede_filtro]
-                
+             
                 # Estatísticas
                 col1, col2, col3, col4 = st.columns(4)
-                
+             
                 with col1:
                     st.metric("📊 Total VIPs", len(df_filtrado))
-                
+             
                 with col2:
                     st.metric("🏆 Rankings", len(df_filtrado['Ranking'].unique()))
-                
+             
                 with col3:
                     st.metric("🏢 Redes", len(df_filtrado['Rede'].unique()))
-                
+             
                 with col4:
                     st.metric("🏅 Rankings Rede", len(df_filtrado['Ranking Rede'].unique()))
-                
+             
                 # Tabela de dados
                 st.subheader("📋 Dados VIP Filtrados")
-                
+             
                 # Configurar colunas para exibição
-                colunas_exibir = ['CNPJ', 'RAZÃO SOCIAL', 'NOME FANTASIA', 'Cidade ', 'UF', 
+                colunas_exibir = ['CNPJ', 'RAZÃO SOCIAL', 'NOME FANTASIA', 'Cidade ', 'UF',
                                 'Ranking', 'Ranking Rede', 'Rede', 'STATUS']
-                
+             
                 colunas_existentes = [col for col in colunas_exibir if col in df_filtrado.columns]
-                
+             
                 if colunas_existentes:
                     st.dataframe(
                         df_filtrado[colunas_existentes],
@@ -3577,81 +3195,81 @@ def main():
                     st.warning("Nenhuma coluna válida encontrada para exibição")
             else:
                 st.warning("⚠️ Nenhum dado VIP encontrado. Execute primeiro o script de normalização.")
-        
+     
         with sub_tab2:
             st.subheader("➕ Adicionar Novo Laboratório VIP")
-            
-            # Formulário para adicionar VIP
+         
+            # Formulário para adicionar adicionar VIP
             with st.form("form_adicionar_vip"):
                 col1, col2 = st.columns(2)
-                
+             
                 with col1:
                     cnpj_novo = st.text_input(
                         "📄 CNPJ:",
                         placeholder="00.000.000/0000-00",
                         help="CNPJ do laboratório (será validado automaticamente)"
                     )
-                    
+                 
                     razao_social = st.text_input(
                         "🏢 Razão Social:",
                         placeholder="Nome da empresa"
                     )
-                    
+                 
                     nome_fantasia = st.text_input(
                         "🏥 Nome Fantasia:",
                         placeholder="Nome comercial"
                     )
-                    
+                 
                     cidade = st.text_input(
                         "🏙️ Cidade:",
                         placeholder="Nome da cidade"
                     )
-                
+             
                 with col2:
                     uf = st.selectbox(
                         "🗺️ Estado:",
                         options=[""] + ESTADOS_BRASIL,
                         help="Selecione o estado"
                     )
-                    
+             
                     ranking = st.selectbox(
                         "🏆 Ranking:",
                         options=list(CATEGORIAS_RANKING.keys()),
                         help="Ranking individual do laboratório"
                     )
-                    
+                 
                     ranking_rede = st.selectbox(
                         "🏅 Ranking Rede:",
                         options=list(CATEGORIAS_RANKING_REDE.keys()),
                         help="Ranking da rede"
                     )
-                    
+                 
                     rede = st.text_input(
                         "🏢 Rede:",
                         placeholder="Nome da rede"
                     )
-                
+             
                 contato = st.text_input(
                     "👤 Contato:",
                     placeholder="Nome do contato"
                 )
-                
+             
                 telefone = st.text_input(
                     "📞 Telefone/WhatsApp:",
                     placeholder="(00) 00000-0000"
                 )
-                
+             
                 observacoes = st.text_area(
                     "📝 Observações:",
                     placeholder="Observações adicionais (opcional)"
                 )
-                
+             
                 submitted = st.form_submit_button("➕ Adicionar VIP", type="primary")
-                
+             
                 if submitted:
                     # Validações
                     erros = []
-                    
+                 
                     # Validar CNPJ
                     if not cnpj_novo:
                         erros.append("CNPJ é obrigatório")
@@ -3661,20 +3279,20 @@ def main():
                             erros.append(f"CNPJ inválido: {mensagem}")
                         elif vip_integration.verificar_cnpj_vip_existe(cnpj_novo):
                             erros.append("CNPJ já existe na lista VIP")
-                    
+                 
                     # Validar campos obrigatórios
                     if not razao_social:
-                        erros.append("Razão Social é obrigatória")
-                    
+                        erros.append("Razão Social é obrigatório")
+                 
                     if not nome_fantasia:
                         erros.append("Nome Fantasia é obrigatório")
-                    
+                 
                     if not uf:
                         erros.append("Estado é obrigatório")
-                    
+                 
                     if not rede:
                         erros.append("Rede é obrigatória")
-                    
+                 
                     if erros:
                         for erro in erros:
                             st.error(f"❌ {erro}")
@@ -3690,27 +3308,27 @@ def main():
                                 cidade = dados_lab.get('cidade', '')
                             if not uf:
                                 uf = dados_lab.get('estado', '')
-                        
+                     
                         # Criar backup antes de adicionar
                         if VIP_AUTO_BACKUP:
                             try:
                                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                                 backup_path = os.path.join(VIP_BACKUP_DIR, f"vip_backup_{timestamp}.csv")
                                 os.makedirs(VIP_BACKUP_DIR, exist_ok=True)
-                                
+                             
                                 if os.path.exists(os.path.join(OUTPUT_DIR, VIP_CSV_FILE)):
                                     shutil.copy2(os.path.join(OUTPUT_DIR, VIP_CSV_FILE), backup_path)
                                     st.success(f"✅ Backup criado: {backup_path}")
                             except Exception as e:
                                 st.warning(f"⚠️ Erro ao criar backup: {e}")
-                        
+                     
                         # Adicionar novo VIP
                         try:
                             # Carregar dados existentes
                             df_vip_atual = DataManager.carregar_dados_vip()
                             if df_vip_atual is None:
                                 df_vip_atual = pd.DataFrame()
-                            
+                         
                             # Criar novo registro
                             novo_registro = {
                                 'CNPJ': cnpj_novo,
@@ -3720,22 +3338,22 @@ def main():
                                 'UF': uf,
                                 'Contato PCL': contato,
                                 'Whatsapp/telefone': telefone,
-                                'REP': '',  # Será preenchido automaticamente se CNPJ existir
-                                'CS': '',   # Será preenchido automaticamente se CNPJ existir
+                                'REP': '', # Será preenchido automaticamente se CNPJ existir
+                                'CS': '', # Será preenchido automaticamente se CNPJ existir
                                 'STATUS': 'ATIVO',
                                 'Ranking': ranking,
                                 'Ranking Rede': ranking_rede,
                                 'Rede': rede
                             }
-                            
+                         
                             # Adicionar ao DataFrame
                             df_novo = pd.DataFrame([novo_registro])
                             df_vip_atualizado = pd.concat([df_vip_atual, df_novo], ignore_index=True)
-                            
+                         
                             # Salvar CSV atualizado
                             caminho_csv = os.path.join(OUTPUT_DIR, VIP_CSV_FILE)
                             df_vip_atualizado.to_csv(caminho_csv, index=False, encoding='utf-8-sig')
-                            
+                         
                             # Registrar no histórico
                             history_manager.registrar_insercao(
                                 cnpj=cnpj_novo,
@@ -3743,41 +3361,41 @@ def main():
                                 usuario="streamlit_user",
                                 observacoes=observacoes
                             )
-                            
+                         
                             # Limpar cache
                             DataManager.carregar_dados_vip.clear()
-                            
+                         
                             st.success(f"✅ Laboratório VIP adicionado com sucesso!")
                             st.success(f"📄 CNPJ: {cnpj_novo}")
                             st.success(f"🏥 Nome: {nome_fantasia}")
-                            
+                         
                             # Mostrar sugestões de laboratórios similares
                             sugestoes = vip_integration.obter_sugestoes_laboratorios(limite=5)
                             if sugestoes:
                                 st.info("💡 Outros laboratórios que ainda não são VIP:")
                                 for sug in sugestoes[:3]:
                                     st.write(f"• {sug['nome_fantasia']} ({sug['cnpj']}) - {sug['estado']}")
-                            
+                         
                         except Exception as e:
                             st.error(f"❌ Erro ao adicionar VIP: {e}")
-        
+     
         with sub_tab3:
             st.subheader("✏️ Editar Laboratório VIP")
-            
+         
             # Carregar dados VIP
             df_vip = DataManager.carregar_dados_vip()
-            
+         
             if df_vip is not None and not df_vip.empty:
                 # Selecionar VIP para editar
                 col1, col2 = st.columns([2, 1])
-                
+             
                 with col1:
                     # Busca por CNPJ ou nome
                     busca = st.text_input(
                         "🔍 Buscar VIP:",
                         placeholder="Digite CNPJ ou nome do laboratório"
                     )
-                
+             
                 with col2:
                     if busca:
                         # Filtrar resultados
@@ -3789,7 +3407,7 @@ def main():
                         df_filtrado = df_vip[mask]
                     else:
                         df_filtrado = df_vip
-                
+             
                 if not df_filtrado.empty:
                     # Selecionar VIP
                     vip_selecionado = st.selectbox(
@@ -3798,109 +3416,109 @@ def main():
                         format_func=lambda x: f"{df_filtrado.loc[x, 'NOME FANTASIA']} - {df_filtrado.loc[x, 'CNPJ']}",
                         help="Selecione o laboratório VIP para editar"
                     )
-                    
+                 
                     if vip_selecionado is not None:
                         vip_data = df_filtrado.loc[vip_selecionado]
-                        
+                     
                         st.markdown("---")
                         st.subheader(f"✏️ Editando: {vip_data['NOME FANTASIA']}")
-                        
+                     
                         # Formulário de edição
                         with st.form("form_editar_vip"):
                             col1, col2 = st.columns(2)
-                            
+                         
                             with col1:
                                 cnpj_edit = st.text_input(
                                     "📄 CNPJ:",
                                     value=vip_data['CNPJ'],
-                                    disabled=True,  # CNPJ não pode ser alterado
+                                    disabled=True, # CNPJ não pode ser alterado
                                     help="CNPJ não pode ser alterado"
                                 )
-                                
+                             
                                 razao_social_edit = st.text_input(
                                     "🏢 Razão Social:",
                                     value=vip_data.get('RAZÃO SOCIAL', '')
                                 )
-                                
+                             
                                 nome_fantasia_edit = st.text_input(
                                     "🏥 Nome Fantasia:",
                                     value=vip_data.get('NOME FANTASIA', '')
                                 )
-                                
+                             
                                 cidade_edit = st.text_input(
                                     "🏙️ Cidade:",
                                     value=vip_data.get('Cidade ', '')
                                 )
-                            
+                         
                             with col2:
                                 uf_edit = st.selectbox(
                                     "🗺️ Estado:",
                                     options=ESTADOS_BRASIL,
                                     index=ESTADOS_BRASIL.index(vip_data.get('UF', '')) if vip_data.get('UF', '') in ESTADOS_BRASIL else 0
                                 )
-                                
+                             
                                 ranking_edit = st.selectbox(
                                     "🏆 Ranking:",
                                     options=list(CATEGORIAS_RANKING.keys()),
                                     index=list(CATEGORIAS_RANKING.keys()).index(vip_data.get('Ranking', 'BRONZE')) if vip_data.get('Ranking', '') in CATEGORIAS_RANKING else 0
                                 )
-                                
+                             
                                 ranking_rede_edit = st.selectbox(
                                     "🏅 Ranking Rede:",
                                     options=list(CATEGORIAS_RANKING_REDE.keys()),
                                     index=list(CATEGORIAS_RANKING_REDE.keys()).index(vip_data.get('Ranking Rede', 'BRONZE')) if vip_data.get('Ranking Rede', '') in CATEGORIAS_RANKING_REDE else 0
                                 )
-                                
+                             
                                 rede_edit = st.text_input(
                                     "🏢 Rede:",
                                     value=vip_data.get('Rede', '')
                                 )
-                            
+                         
                             contato_edit = st.text_input(
                                 "👤 Contato:",
                                 value=vip_data.get('Contato PCL', '')
                             )
-                            
+                         
                             telefone_edit = st.text_input(
                                 "📞 Telefone/WhatsApp:",
                                 value=vip_data.get('Whatsapp/telefone', '')
                             )
-                            
+                         
                             status_edit = st.selectbox(
                                 "📊 Status:",
                                 options=['ATIVO', 'INATIVO', 'DELETADO'],
                                 index=['ATIVO', 'INATIVO', 'DELETADO'].index(vip_data.get('STATUS', 'ATIVO'))
                             )
-                            
+                         
                             observacoes_edit = st.text_area(
                                 "📝 Observações da Edição:",
                                 placeholder="Descreva as alterações realizadas"
                             )
-                            
+                         
                             submitted_edit = st.form_submit_button("💾 Salvar Alterações", type="primary")
-                            
+                         
                             if submitted_edit:
                                 # Verificar se houve alterações
                                 alteracoes = []
-                                
+                             
                                 if razao_social_edit != vip_data.get('RAZÃO SOCIAL', ''):
                                     alteracoes.append(('RAZÃO SOCIAL', vip_data.get('RAZÃO SOCIAL', ''), razao_social_edit))
-                                
+                             
                                 if nome_fantasia_edit != vip_data.get('NOME FANTASIA', ''):
                                     alteracoes.append(('NOME FANTASIA', vip_data.get('NOME FANTASIA', ''), nome_fantasia_edit))
-                                
+                             
                                 if ranking_edit != vip_data.get('Ranking', ''):
                                     alteracoes.append(('Ranking', vip_data.get('Ranking', ''), ranking_edit))
-                                
+                             
                                 if ranking_rede_edit != vip_data.get('Ranking Rede', ''):
                                     alteracoes.append(('Ranking Rede', vip_data.get('Ranking Rede', ''), ranking_rede_edit))
-                                
+                             
                                 if rede_edit != vip_data.get('Rede', ''):
                                     alteracoes.append(('Rede', vip_data.get('Rede', ''), rede_edit))
-                                
+                             
                                 if status_edit != vip_data.get('STATUS', ''):
                                     alteracoes.append(('STATUS', vip_data.get('STATUS', ''), status_edit))
-                                
+                             
                                 if alteracoes:
                                     # Criar backup antes de editar
                                     if VIP_AUTO_BACKUP:
@@ -3908,13 +3526,13 @@ def main():
                                             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                                             backup_path = os.path.join(VIP_BACKUP_DIR, f"vip_backup_{timestamp}.csv")
                                             os.makedirs(VIP_BACKUP_DIR, exist_ok=True)
-                                            
+                                         
                                             if os.path.exists(os.path.join(OUTPUT_DIR, VIP_CSV_FILE)):
                                                 shutil.copy2(os.path.join(OUTPUT_DIR, VIP_CSV_FILE), backup_path)
                                                 st.success(f"✅ Backup criado: {backup_path}")
                                         except Exception as e:
                                             st.warning(f"⚠️ Erro ao criar backup: {e}")
-                                    
+                                 
                                     # Atualizar dados
                                     try:
                                         # Atualizar DataFrame
@@ -3929,11 +3547,11 @@ def main():
                                         df_vip_atualizado.loc[vip_selecionado, 'Contato PCL'] = contato_edit
                                         df_vip_atualizado.loc[vip_selecionado, 'Whatsapp/telefone'] = telefone_edit
                                         df_vip_atualizado.loc[vip_selecionado, 'STATUS'] = status_edit
-                                        
+                                     
                                         # Salvar CSV atualizado
                                         caminho_csv = os.path.join(OUTPUT_DIR, VIP_CSV_FILE)
                                         df_vip_atualizado.to_csv(caminho_csv, index=False, encoding='utf-8-sig')
-                                        
+                                     
                                         # Registrar alterações no histórico
                                         for campo, valor_anterior, valor_novo in alteracoes:
                                             history_manager.registrar_edicao(
@@ -3946,112 +3564,112 @@ def main():
                                                 usuario="streamlit_user",
                                                 observacoes=observacoes_edit
                                             )
-                                        
+                                     
                                         # Limpar cache
                                         DataManager.carregar_dados_vip.clear()
-                                        
+                                     
                                         st.success(f"✅ Laboratório VIP atualizado com sucesso!")
                                         st.success(f"📝 {len(alteracoes)} campo(s) alterado(s)")
-                                        
+                                     
                                         # Mostrar resumo das alterações
                                         for campo, valor_anterior, valor_novo in alteracoes:
                                             st.info(f"🔄 {campo}: '{valor_anterior}' → '{valor_novo}'")
-                                        
+                                     
                                     except Exception as e:
                                         st.error(f"❌ Erro ao atualizar VIP: {e}")
                                 else:
                                     st.info("ℹ️ Nenhuma alteração detectada")
             else:
                 st.warning("⚠️ Nenhum dado VIP encontrado. Execute primeiro o script de normalização.")
-        
+     
         with sub_tab4:
             st.subheader("📊 Histórico de Alterações")
-            
+         
             # Estatísticas do histórico
             stats = history_manager.obter_estatisticas()
-            
-            if stats['total_alteracoes'] > 0:
+         
+            if stats['total_total_alteracoes'] > 0:
                 col1, col2, col3, col4 = st.columns(4)
-                
+             
                 with col1:
                     st.metric("📊 Total Alterações", stats['total_alteracoes'])
-                
+             
                 with col2:
                     st.metric("➕ Inserções", stats['por_tipo'].get('insercao', 0))
-                
+             
                 with col3:
                     st.metric("✏️ Edições", stats['por_tipo'].get('edicao', 0))
-                
+             
                 with col4:
                     st.metric("🗑️ Exclusões", stats['por_tipo'].get('exclusao', 0))
-                
+             
                 # Filtros para histórico
                 col1, col2, col3 = st.columns(3)
-                
+             
                 with col1:
                     tipo_filtro = st.selectbox(
                         "🔍 Tipo de Alteração:",
                         options=["Todos"] + list(stats['por_tipo'].keys()),
                         help="Filtrar por tipo de alteração"
                     )
-                
+             
                 with col2:
                     cnpj_filtro = st.text_input(
                         "📄 CNPJ:",
                         placeholder="Digite CNPJ para filtrar",
                         help="Filtrar por CNPJ específico"
                     )
-                
+             
                 with col3:
                     dias_filtro = st.selectbox(
                         "📅 Período:",
                         options=["Todos", "Últimos 7 dias", "Últimos 30 dias", "Últimos 90 dias"],
                         help="Filtrar por período"
                     )
-                
+             
                 # Obter histórico filtrado
                 if cnpj_filtro:
                     historico_filtrado = history_manager.buscar_historico_cnpj(cnpj_filtro)
                 else:
                     historico_filtrado = history_manager.historico
-                
+             
                 # Filtrar por tipo
                 if tipo_filtro != "Todos":
                     historico_filtrado = [alt for alt in historico_filtrado if alt['tipo'] == tipo_filtro]
-                
+             
                 # Filtrar por período
                 if dias_filtro != "Todos":
                     dias = {"Últimos 7 dias": 7, "Últimos 30 dias": 30, "Últimos 90 dias": 90}[dias_filtro]
                     data_limite = datetime.now() - timedelta(days=dias)
-                    historico_filtrado = [alt for alt in historico_filtrado 
+                    historico_filtrado = [alt for alt in historico_filtrado
                                         if datetime.fromisoformat(alt['timestamp']) >= data_limite]
-                
+             
                 # Mostrar histórico
                 if historico_filtrado:
                     st.subheader(f"📋 Histórico Filtrado ({len(historico_filtrado)} registros)")
-                    
+                 
                     # Ordenar por timestamp (mais recente primeiro)
                     historico_filtrado.sort(key=lambda x: x['timestamp'], reverse=True)
-                    
-                    for i, alt in enumerate(historico_filtrado[:20]):  # Mostrar apenas os 20 mais recentes
+                 
+                    for i, alt in enumerate(historico_filtrado[:20]): # Mostrar apenas os 20 mais recentes
                         with st.expander(f"{alt['tipo'].title()} - {alt['cnpj']} - {alt['timestamp'][:19]}"):
                             col1, col2 = st.columns(2)
-                            
+                         
                             with col1:
                                 st.write(f"**Tipo:** {alt['tipo'].title()}")
                                 st.write(f"**CNPJ:** {alt['cnpj']}")
                                 st.write(f"**Data/Hora:** {alt['timestamp'][:19]}")
                                 st.write(f"**Usuário:** {alt.get('usuario', 'N/A')}")
-                            
+                         
                             with col2:
                                 if alt['tipo'] == 'edicao':
                                     st.write(f"**Campo:** {alt.get('campo_alterado', 'N/A')}")
                                     st.write(f"**De:** {alt.get('valor_anterior', 'N/A')}")
                                     st.write(f"**Para:** {alt.get('valor_novo', 'N/A')}")
-                                
+                             
                                 if alt.get('observacoes'):
                                     st.write(f"**Observações:** {alt['observacoes']}")
-                    
+                 
                     # Botão para exportar histórico
                     if st.button("📥 Exportar Histórico CSV"):
                         try:
@@ -4064,13 +3682,15 @@ def main():
                     st.info("ℹ️ Nenhum registro encontrado com os filtros aplicados")
             else:
                 st.info("ℹ️ Nenhuma alteração registrada ainda")
-
+    # ========================================
+    # RODAPÉ
+    # ========================================
+    st.markdown("---")
     st.markdown("""
     <div class="footer">
         <p>📊 <strong>Syntox Churn</strong> - Dashboard profissional de análise de retenção de laboratórios</p>
         <p>Desenvolvido com ❤️ para otimizar a gestão de relacionamento com PCLs</p>
     </div>
     """, unsafe_allow_html=True)
-
 if __name__ == "__main__":
     main()

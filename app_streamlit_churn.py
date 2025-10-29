@@ -1066,18 +1066,20 @@ class ChartManager:
              
                 df_grafico = pd.DataFrame(dados_grafico)
              
-                # Criar gráfico de linha múltipla
+                # Criar gráfico de linha interativo
                 fig = px.line(
                     df_grafico,
                     x='Dia',
                     y='Coletas',
                     color='Mês',
                     title=f"📅 Coletas por Dia do Mês - {lab_selecionado}",
-                    markers=True
+                    markers=True,
+                    line_shape='linear'
                 )
              
+                # Configurar tooltip personalizado com nome correto do mês
                 fig.update_traces(
-                    hovertemplate='<b>Dia:</b> %{x}<br><b>Mês:</b> %{legendgroup}<br><b>Coletas:</b> %{y:.0f}<extra></extra>'
+                    hovertemplate='<b>Dia:</b> %{x}<br><b>Mês:</b> %{fullData.name}<br><b>Coletas:</b> %{y:.0f}<extra></extra>'
                 )
              
                 fig.update_layout(
@@ -1087,14 +1089,32 @@ class ChartManager:
                     legend=dict(
                         orientation="h",
                         yanchor="bottom",
-                        y=-0.2,
+                        y=-0.15,
                         xanchor="center",
-                        x=0.5
+                        x=0.5,
+                        bgcolor="rgba(255,255,255,0.8)",
+                        bordercolor="rgba(0,0,0,0.2)",
+                        borderwidth=1
                     ),
-                    height=600,  # Aumentado conforme solicitado
-                    margin=dict(l=60, r=60, t=60, b=100),  # Margens aumentadas para legenda
-                    autosize=True,  # Responsivo
-                    font=dict(size=14)  # Fonte maior
+                    height=600,
+                    margin=dict(l=60, r=60, t=80, b=120),  # Margem inferior maior para legenda
+                    autosize=True,
+                    font=dict(size=14),
+                    # Tornar o gráfico mais interativo
+                    hovermode='x unified',
+                    # Melhorar a aparência das linhas
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)'
+                )
+                
+                # Adicionar anotação explicativa
+                fig.add_annotation(
+                    text="💡 Clique nos meses na legenda para mostrar/ocultar linhas e comparar visualmente",
+                    xref="paper", yref="paper",
+                    x=0.5, y=-0.25,
+                    showarrow=False,
+                    font=dict(size=12, color="gray"),
+                    xanchor="center"
                 )
              
                 st.plotly_chart(fig, use_container_width=True)

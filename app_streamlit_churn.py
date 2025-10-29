@@ -1787,7 +1787,7 @@ def main():
         # KPIs principais com cards modernos
         UIManager.renderizar_kpi_cards(metrics)
         # Usar tabs para organização
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 Resumo", "📈 Tendências", "📊 Distribuição", "🚨 Alto Risco"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Resumo", "📈 Tendências", "📊 Distribuição", "🚨 Alto Risco", "🏆 Top 100 PCLs"])
         with tab1:
             st.subheader("📊 Resumo Geral")
             # Adicionar métricas adicionais aqui
@@ -1829,6 +1829,238 @@ def main():
                 )
             else:
                 st.success("✅ Nenhum laboratório em alto risco encontrado!")
+        with tab5:
+            st.subheader("🏆 Top 100 PCLs - Maiores Coletas")
+            
+            # Calcular total de coletas para cada laboratório
+            if not df_filtrado.empty:
+                # Calcular total de coletas 2025
+                meses_2025 = ChartManager._meses_ate_hoje(df_filtrado, 2025)
+                colunas_2025 = [f'N_Coletas_{mes}_25' for mes in meses_2025]
+                colunas_existentes = [col for col in colunas_2025 if col in df_filtrado.columns]
+                
+                if colunas_existentes:
+                    df_filtrado['Total_Coletas_2025_Calculado'] = df_filtrado[colunas_existentes].sum(axis=1)
+                else:
+                    df_filtrado['Total_Coletas_2025_Calculado'] = 0
+                
+                # Criar ranking dos top 100
+                top_100 = df_filtrado.nlargest(100, 'Total_Coletas_2025_Calculado')
+                
+                # Preparar dados para exibição
+                ranking_data = []
+                for idx, (_, row) in enumerate(top_100.iterrows(), 1):
+                    ranking_data.append({
+                        'Ranking': idx,
+                        'CNPJ': row.get('CNPJ_PCL', 'N/A'),
+                        'Laboratório': row.get('Nome_Fantasia_PCL', 'N/A'),
+                        'Coletas': int(row.get('Total_Coletas_2025_Calculado', 0)),
+                        'Representante': row.get('Representante_Nome', 'N/A'),
+                        'Estado': row.get('Estado', 'N/A'),
+                        'Cidade': row.get('Cidade', 'N/A')
+                    })
+                
+                df_ranking = pd.DataFrame(ranking_data)
+                
+                # Filtros de busca
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    busca = st.text_input("🔍 Faça sua Pesquisa", placeholder="Digite CNPJ, nome do laboratório ou representante...")
+                with col2:
+                    estado_filtro = st.selectbox("📍 Estado", ["Todos"] + sorted(df_ranking['Estado'].unique().tolist()))
+                
+                # Aplicar filtros
+                df_filtrado_ranking = df_ranking.copy()
+                
+                if busca:
+                    mask = (
+                        df_filtrado_ranking['CNPJ'].str.contains(busca, case=False, na=False) |
+                        df_filtrado_ranking['Laboratório'].str.contains(busca, case=False, na=False) |
+                        df_filtrado_ranking['Representante'].str.contains(busca, case=False, na=False)
+                    )
+                    df_filtrado_ranking = df_filtrado_ranking[mask]
+                
+                if estado_filtro != "Todos":
+                    df_filtrado_ranking = df_filtrado_ranking[df_filtrado_ranking['Estado'] == estado_filtro]
+                
+                # Exibir tabela
+                if not df_filtrado_ranking.empty:
+                    # Estilizar a tabela
+                    st.markdown("""
+                    <style>
+                    .ranking-table {
+                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                        border-collapse: collapse;
+                        width: 100%;
+                        margin-top: 1rem;
+                    }
+                    .ranking-table th {
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white;
+                        padding: 12px 8px;
+                        text-align: left;
+                        font-weight: 600;
+                        font-size: 0.9rem;
+                    }
+                    .ranking-table td {
+                        padding: 10px 8px;
+                        border-bottom: 1px solid #e9ecef;
+                        font-size: 0.85rem;
+                    }
+                    .ranking-table tr:nth-child(even) {
+                        background-color: #f8f9fa;
+                    }
+                    .ranking-table tr:hover {
+                        background-color: #e3f2fd;
+                        transition: background-color 0.2s;
+                    }
+                    .ranking-number {
+                        font-weight: bold;
+                        color: #667eea;
+                        text-align: center;
+                    }
+                    .coletas-number {
+                        font-weight: bold;
+                        color: #28a745;
+                        text-align: right;
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+                    
+                    # Mostrar estatísticas
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("🏆 Total de Labs", f"{len(df_filtrado_ranking):,}")
+                    with col2:
+                        total_coletas = df_filtrado_ranking['Coletas'].sum()
+                        st.metric("📊 Total de Coletas", f"{total_coletas:,}")
+                    with col3:
+                        media_coletas = df_filtrado_ranking['Coletas'].mean()
+                        st.metric("📈 Média por Lab", f"{media_coletas:.0f}")
+                    with col4:
+                        top_coletas = df_filtrado_ranking['Coletas'].max() if not df_filtrado_ranking.empty else 0
+                        st.metric("🥇 Maior Volume", f"{top_coletas:,}")
+                    
+                    # Exibir tabela com formatação
+                    st.dataframe(
+                        df_filtrado_ranking[['Ranking', 'CNPJ', 'Laboratório', 'Coletas', 'Representante', 'Estado', 'Cidade']],
+                        use_container_width=True,
+                        height=600,
+                        column_config={
+                            "Ranking": st.column_config.NumberColumn(
+                                "Ranking",
+                                help="Posição no ranking",
+                                format="%d",
+                                width="small"
+                            ),
+                            "CNPJ": st.column_config.TextColumn(
+                                "CNPJ",
+                                help="CNPJ do laboratório",
+                                width="medium"
+                            ),
+                            "Laboratório": st.column_config.TextColumn(
+                                "Laboratório",
+                                help="Nome fantasia do laboratório",
+                                width="large"
+                            ),
+                            "Coletas": st.column_config.NumberColumn(
+                                "Coletas",
+                                help="Total de coletas em 2025",
+                                format="%d",
+                                width="small"
+                            ),
+                            "Representante": st.column_config.TextColumn(
+                                "Representante",
+                                help="Nome do representante",
+                                width="medium"
+                            ),
+                            "Estado": st.column_config.TextColumn(
+                                "Estado",
+                                help="Estado do laboratório",
+                                width="small"
+                            ),
+                            "Cidade": st.column_config.TextColumn(
+                                "Cidade",
+                                help="Cidade do laboratório",
+                                width="medium"
+                            )
+                        }
+                    )
+                    
+                    # Botões de download
+                    col_download1, col_download2 = st.columns(2)
+                    
+                    with col_download1:
+                        csv_data = df_filtrado_ranking.to_csv(index=False, encoding='utf-8')
+                        st.download_button(
+                            "📥 Download CSV",
+                            csv_data,
+                            file_name=f"ranking_top_100_pcls_{datetime.now().strftime('%Y%m%d')}.csv",
+                            mime="text/csv",
+                            use_container_width=True
+                        )
+                    
+                    with col_download2:
+                        # Preparar dados para Excel
+                        excel_buffer = BytesIO()
+                        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                            # Adicionar metadados na primeira aba
+                            metadata_df = pd.DataFrame({
+                                'Métrica': ['Total de Laboratórios', 'Total de Coletas', 'Média por Laboratório', 'Maior Volume', 'Data de Geração'],
+                                'Valor': [
+                                    f"{len(df_filtrado_ranking):,}",
+                                    f"{df_filtrado_ranking['Coletas'].sum():,}",
+                                    f"{df_filtrado_ranking['Coletas'].mean():.0f}",
+                                    f"{df_filtrado_ranking['Coletas'].max():,}",
+                                    datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+                                ]
+                            })
+                            metadata_df.to_excel(writer, sheet_name='Resumo', index=False)
+                            
+                            # Adicionar ranking na segunda aba
+                            df_filtrado_ranking.to_excel(writer, sheet_name='Ranking Top 100', index=False)
+                            
+                            # Formatação da planilha
+                            workbook = writer.book
+                            
+                            # Formatar aba de resumo
+                            summary_sheet = writer.sheets['Resumo']
+                            summary_sheet.column_dimensions['A'].width = 25
+                            summary_sheet.column_dimensions['B'].width = 20
+                            
+                            # Formatar aba de ranking
+                            ranking_sheet = writer.sheets['Ranking Top 100']
+                            ranking_sheet.column_dimensions['A'].width = 8   # Ranking
+                            ranking_sheet.column_dimensions['B'].width = 18  # CNPJ
+                            ranking_sheet.column_dimensions['C'].width = 40  # Laboratório
+                            ranking_sheet.column_dimensions['D'].width = 12  # Coletas
+                            ranking_sheet.column_dimensions['E'].width = 25  # Representante
+                            ranking_sheet.column_dimensions['F'].width = 8   # Estado
+                            ranking_sheet.column_dimensions['G'].width = 20  # Cidade
+                            
+                            # Aplicar formatação condicional para destacar top 10
+                            from openpyxl.styles import PatternFill, Font
+                            yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+                            bold_font = Font(bold=True)
+                            
+                            for row in range(2, min(12, len(df_filtrado_ranking) + 2)):  # Top 10
+                                for col in range(1, 8):
+                                    cell = ranking_sheet.cell(row=row, column=col)
+                                    cell.fill = yellow_fill
+                                    cell.font = bold_font
+                        
+                        excel_data = excel_buffer.getvalue()
+                        st.download_button(
+                            "📊 Download Excel",
+                            excel_data,
+                            file_name=f"ranking_top_100_pcls_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+                else:
+                    st.info("🔍 Nenhum resultado encontrado para os filtros aplicados.")
+            else:
+                st.warning("⚠️ Nenhum dado disponível para gerar o ranking.")
     elif st.session_state.page == "📋 Análise Detalhada":
         st.header("📋 Análise Detalhada")
         # Filtros avançados com design moderno

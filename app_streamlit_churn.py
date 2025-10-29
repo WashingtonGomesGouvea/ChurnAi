@@ -904,7 +904,7 @@ class ChartManager:
             height=500,  # Aumentado tamanho
             margin=dict(l=40, r=40, t=40, b=40)  # Ajustado margens
         )
-        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
+        st.plotly_chart(fig, width='stretch', config={'displayModeBar': True})
     @staticmethod
     def criar_grafico_top_labs(df: pd.DataFrame, top_n: int = 10):
         """Cria gráfico dos laboratórios em risco prioritários - Atualizado layout."""
@@ -948,7 +948,8 @@ class ChartManager:
         fig.update_traces(
             texttemplate='%{text:.0f} dias',
             textposition='outside',
-            hovertemplate='<b>%{y}</b><br>Dias sem coleta: %{x:.0f}<br>Status: %{marker.color}<extra></extra>'
+            hovertemplate='<b>%{y}</b><br>Dias sem coleta: %{x:.0f}<br>Status: %{customdata}<extra></extra>',
+            customdata=top_labs_risco['Status_Risco']
         )
         fig.update_layout(
             yaxis={'categoryorder': 'total ascending'},
@@ -958,7 +959,7 @@ class ChartManager:
             height=500,  # Aumentado
             margin=dict(l=40, r=40, t=40, b=100)  # Ajustado para evitar corte
         )
-        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
+        st.plotly_chart(fig, width='stretch', config={'displayModeBar': True})
     @staticmethod
     def criar_grafico_media_diaria(df: pd.DataFrame, lab_selecionado: str = None):
         """Cria gráfico de média diária por mês - Atualizado layout e bugs."""
@@ -1008,7 +1009,7 @@ class ChartManager:
                     font=dict(size=14)  # Fonte maior
                 )
              
-                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
+                st.plotly_chart(fig, width='stretch', config={'displayModeBar': True})
     @staticmethod
     def criar_grafico_coletas_por_dia(df: pd.DataFrame, lab_selecionado: str = None):
         """Cria gráfico de coletas por dia do mês (0-31) - Corrigido zeros inconsistentes."""
@@ -1097,7 +1098,7 @@ class ChartManager:
                     font=dict(size=14)  # Fonte maior
                 )
              
-                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
+                st.plotly_chart(fig, width='stretch', config={'displayModeBar': True})
     @staticmethod
     def criar_grafico_media_dia_semana(df: pd.DataFrame, lab_selecionado: str = None, filtros: dict = None):
         """Cria gráfico de distribuição de coletas por dia da semana baseado em dados mensais - Corrigido porcentagens."""
@@ -1221,7 +1222,7 @@ class ChartManager:
                 annotation_text=f"Média diária: {media_diaria:.0f} coletas",
                 annotation_position="top right"
             )
-            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
+            st.plotly_chart(fig, width='stretch', config={'displayModeBar': True})
             # Métricas adicionais
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -1334,7 +1335,7 @@ class ChartManager:
                     autosize=True,  # Responsivo
                     showlegend=True
                 )
-                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True}, key=f"evolucao_mensal_lab_{chart_key}")
+                st.plotly_chart(fig, width='stretch', config={'displayModeBar': True}, key=f"evolucao_mensal_lab_{chart_key}")
         else:
             # Gráfico agregado
             valores_agregados = [df[col].sum() for col in colunas_meses]
@@ -1359,7 +1360,7 @@ class ChartManager:
                 margin=dict(l=60, r=60, t=60, b=80),  # Margens aumentadas
                 autosize=True  # Responsivo
             )
-            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True}, key=f"evolucao_mensal_agregado_{chart_key}")
+            st.plotly_chart(fig, width='stretch', config={'displayModeBar': True}, key=f"evolucao_mensal_agregado_{chart_key}")
 class UIManager:
     """Gerenciador da interface do usuário - Atualizado com tabs."""
     @staticmethod
@@ -1657,8 +1658,13 @@ class ReportManager:
         """Gera relatório mensal detalhado."""
         # Calcular top variações
         if 'Variacao_Percentual' in df.columns:
-            top_quedas = df.nsmallest(10, 'Variacao_Percentual')[['Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']]
-            top_recuperacoes = df.nlargest(10, 'Variacao_Percentual')[['Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']]
+            top_quedas = df.nsmallest(10, 'Variacao_Percentual')[['Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']].copy()
+            top_quedas['Ranking'] = range(1, len(top_quedas) + 1)
+            top_quedas = top_quedas[['Ranking', 'Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']]
+            
+            top_recuperacoes = df.nlargest(10, 'Variacao_Percentual')[['Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']].copy()
+            top_recuperacoes['Ranking'] = range(1, len(top_recuperacoes) + 1)
+            top_recuperacoes = top_recuperacoes[['Ranking', 'Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']]
         sumario = f"""
         📊 **Relatório Mensal de Churn - {datetime.now().strftime('%B/%Y').title()}**
         **KPIs Executivos:**
@@ -1690,10 +1696,30 @@ class ReportManager:
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("📉 Top 10 Quedas")
-                st.dataframe(top_quedas)
+                st.dataframe(
+                    top_quedas,
+                    width='stretch',
+                    column_config={
+                        "Ranking": st.column_config.NumberColumn("🏆", width="small", help="Posição no ranking"),
+                        "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome do laboratório"),
+                        "Variacao_Percentual": st.column_config.NumberColumn("Variação %", format="%.2f%%", help="Variação percentual"),
+                        "Estado": st.column_config.TextColumn("Estado", help="Estado do laboratório")
+                    },
+                    hide_index=True
+                )
             with col2:
                 st.subheader("📈 Top 10 Recuperações")
-                st.dataframe(top_recuperacoes)
+                st.dataframe(
+                    top_recuperacoes,
+                    width='stretch',
+                    column_config={
+                        "Ranking": st.column_config.NumberColumn("🏆", width="small", help="Posição no ranking"),
+                        "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome do laboratório"),
+                        "Variacao_Percentual": st.column_config.NumberColumn("Variação %", format="%.2f%%", help="Variação percentual"),
+                        "Estado": st.column_config.TextColumn("Estado", help="Estado do laboratório")
+                    },
+                    hide_index=True
+                )
         # Download do relatório
         st.download_button(
             "📥 Download Relatório Mensal",
@@ -1748,7 +1774,7 @@ def main():
         st.session_state.page = pages[0]
    
     for page in pages:
-        if st.sidebar.button(page, key=page, use_container_width=True):
+        if st.sidebar.button(page, key=page, width='stretch'):
             st.session_state.page = page
    
     # Separador visual
@@ -1799,14 +1825,42 @@ def main():
                     st.subheader("📉 Maiores Quedas")
                     top_quedas = df_filtrado.nsmallest(10, 'Variacao_Percentual')[
                         ['Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']
-                    ]
-                    st.dataframe(top_quedas, use_container_width=True)
+                    ].copy()
+                    # Adicionar coluna de ranking explícita
+                    top_quedas['Ranking'] = range(1, len(top_quedas) + 1)
+                    # Reordenar colunas para mostrar ranking primeiro
+                    top_quedas = top_quedas[['Ranking', 'Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']]
+                    st.dataframe(
+                        top_quedas, 
+                        width='stretch',
+                        column_config={
+                            "Ranking": st.column_config.NumberColumn("🏆", width="small", help="Posição no ranking"),
+                            "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome do laboratório"),
+                            "Variacao_Percentual": st.column_config.NumberColumn("Variação %", format="%.2f%%", help="Variação percentual"),
+                            "Estado": st.column_config.TextColumn("Estado", help="Estado do laboratório")
+                        },
+                        hide_index=True
+                    )
                 with col2:
                     st.subheader("📈 Maiores Recuperações")
                     top_recuperacoes = df_filtrado.nlargest(10, 'Variacao_Percentual')[
                         ['Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']
-                    ]
-                    st.dataframe(top_recuperacoes, use_container_width=True)
+                    ].copy()
+                    # Adicionar coluna de ranking explícita
+                    top_recuperacoes['Ranking'] = range(1, len(top_recuperacoes) + 1)
+                    # Reordenar colunas para mostrar ranking primeiro
+                    top_recuperacoes = top_recuperacoes[['Ranking', 'Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']]
+                    st.dataframe(
+                        top_recuperacoes, 
+                        width='stretch',
+                        column_config={
+                            "Ranking": st.column_config.NumberColumn("🏆", width="small", help="Posição no ranking"),
+                            "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome do laboratório"),
+                            "Variacao_Percentual": st.column_config.NumberColumn("Variação %", format="%.2f%%", help="Variação percentual"),
+                            "Estado": st.column_config.TextColumn("Estado", help="Estado do laboratório")
+                        },
+                        hide_index=True
+                    )
         with tab3:
             st.subheader("📊 Distribuição por Status")
             ChartManager.criar_grafico_distribuicao_risco(df_filtrado)
@@ -1824,8 +1878,16 @@ def main():
                                  'Dias_Sem_Coleta', 'Motivo_Risco']
                 st.dataframe(
                     labs_alto_risco[colunas_resumo],
-                    use_container_width=True,
-                    height=300
+                    width='stretch',
+                    height=300,
+                    column_config={
+                        "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome do laboratório"),
+                        "Estado": st.column_config.TextColumn("Estado", help="Estado do laboratório"),
+                        "Representante_Nome": st.column_config.TextColumn("Representante", help="Nome do representante"),
+                        "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias Sem Coleta", help="Dias sem coleta"),
+                        "Motivo_Risco": st.column_config.TextColumn("Motivo Risco", help="Motivo do risco")
+                    },
+                    hide_index=True
                 )
             else:
                 st.success("✅ Nenhum laboratório em alto risco encontrado!")
@@ -1944,7 +2006,7 @@ def main():
                     # Exibir tabela com formatação
                     st.dataframe(
                         df_filtrado_ranking[['Ranking', 'CNPJ', 'Laboratório', 'Coletas', 'Representante', 'Estado', 'Cidade']],
-                        use_container_width=True,
+                        width='stretch',
                         height=600,
                         column_config={
                             "Ranking": st.column_config.NumberColumn(
@@ -1984,7 +2046,8 @@ def main():
                                 help="Cidade do laboratório",
                                 width="medium"
                             )
-                        }
+                        },
+                        hide_index=True
                     )
                     
                     # Botões de download
@@ -1997,7 +2060,7 @@ def main():
                             csv_data,
                             file_name=f"ranking_top_100_pcls_{datetime.now().strftime('%Y%m%d')}.csv",
                             mime="text/csv",
-                            use_container_width=True
+                            width='stretch'
                         )
                     
                     with col_download2:
@@ -2055,7 +2118,7 @@ def main():
                             excel_data,
                             file_name=f"ranking_top_100_pcls_{datetime.now().strftime('%Y%m%d')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True
+                            width='stretch'
                         )
                 else:
                     st.info("🔍 Nenhum resultado encontrado para os filtros aplicados.")
@@ -2092,7 +2155,7 @@ def main():
                     # Espaçamento para alinhamento
                     st.write("") # Espaço vazio para alinhar com o campo de texto
                     # Botão de busca rápida
-                    buscar_btn = st.button("🔎 Buscar", type="primary", use_container_width=True)
+                    buscar_btn = st.button("🔎 Buscar", type="primary", width='stretch')
                 with col3:
                     # Seleção por dropdown como alternativa
                     lab_selecionado = st.selectbox(
@@ -2721,8 +2784,9 @@ def main():
             st.markdown(f"**Mostrando {len(df_exibicao_renamed)} laboratórios**")
             st.dataframe(
                 df_exibicao_renamed,
-                use_container_width=True,
-                height=500
+                width='stretch',
+                height=500,
+                hide_index=True
             )
             
             # Botões de download
@@ -2954,10 +3018,15 @@ def main():
                     col1, col2 = st.columns(2)
                     with col1:
                         st.subheader("📍 Top Estados")
+                        # Adicionar ranking para top_estados
+                        top_estados_display = top_estados.copy()
+                        top_estados_display['Ranking'] = range(1, len(top_estados_display) + 1)
+                        top_estados_display = top_estados_display[['Ranking', 'Estado', 'Qtd_Labs', 'Volume_Total', 'Volume_Medio']]
                         st.dataframe(
-                            top_estados,
-                            use_container_width=True,
+                            top_estados_display,
+                            width='stretch',
                             column_config={
+                                "Ranking": st.column_config.NumberColumn("🏆", width="small", help="Posição no ranking"),
                                 "Estado": st.column_config.TextColumn("🏛️ Estado"),
                                 "Qtd_Labs": st.column_config.NumberColumn("🏥 Labs"),
                                 "Volume_Total": st.column_config.NumberColumn("📦 Vol. Total", format="%.0f"),
@@ -2967,10 +3036,15 @@ def main():
                         )
                     with col2:
                         st.subheader("🏙️ Top Cidades")
+                        # Adicionar ranking para top_cidades
+                        top_cidades_display = top_cidades.copy()
+                        top_cidades_display['Ranking'] = range(1, len(top_cidades_display) + 1)
+                        top_cidades_display = top_cidades_display[['Ranking', 'Cidade', 'Qtd_Labs', 'Volume_Total', 'Volume_Medio']]
                         st.dataframe(
-                            top_cidades,
-                            use_container_width=True,
+                            top_cidades_display,
+                            width='stretch',
                             column_config={
+                                "Ranking": st.column_config.NumberColumn("🏆", width="small", help="Posição no ranking"),
                                 "Cidade": st.column_config.TextColumn("🏙️ Cidade"),
                                 "Qtd_Labs": st.column_config.NumberColumn("🏥 Labs"),
                                 "Volume_Total": st.column_config.NumberColumn("📦 Vol. Total", format="%.0f"),
@@ -2997,17 +3071,23 @@ def main():
                     )
                     fig_ranking.update_traces(texttemplate='%{text:.0f}', textposition='outside')
                     fig_ranking.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
-                    st.plotly_chart(fig_ranking, use_container_width=True, config={'displayModeBar': True})
+                    st.plotly_chart(fig_ranking, width='stretch', config={'displayModeBar': True})
                     # Tabela detalhada
+                    # Adicionar ranking para volume_por_rede
+                    volume_por_rede_display = volume_por_rede.round(2).copy()
+                    volume_por_rede_display['Ranking'] = range(1, len(volume_por_rede_display) + 1)
+                    volume_por_rede_display = volume_por_rede_display[['Ranking', 'Rede', 'Volume_Total', 'Volume_Medio', 'Qtd_Labs']]
                     st.dataframe(
-                        volume_por_rede.round(2),
-                        use_container_width=True,
+                        volume_por_rede_display,
+                        width='stretch',
                         column_config={
+                            "Ranking": st.column_config.NumberColumn("🏆", width="small", help="Posição no ranking"),
                             "Rede": st.column_config.TextColumn("🏢 Rede"),
                             "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f"),
                             "Volume_Medio": st.column_config.NumberColumn("📊 Volume Médio", format="%.1f"),
                             "Qtd_Labs": st.column_config.NumberColumn("🏥 Qtd Labs")
-                        }
+                        },
+                        hide_index=True
                     )
                 elif tipo_analise == "Por Performance":
                     st.subheader("📈 Análise de Performance por Rede")
@@ -3034,7 +3114,7 @@ def main():
                             )
                             fig_perf.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
                             fig_perf.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
-                            st.plotly_chart(fig_perf, use_container_width=True, config={'displayModeBar': True})
+                            st.plotly_chart(fig_perf, width='stretch', config={'displayModeBar': True})
                         with col2:
                             # Scatter plot: Volume vs Performance
                             fig_scatter = px.scatter(
@@ -3047,17 +3127,18 @@ def main():
                                 labels={'Volume_Total': 'Volume Total', 'Variacao_Media': 'Variação Média %'}
                             )
                             fig_scatter.update_layout(height=500, margin=dict(l=40, r=40, t=40, b=40))
-                            st.plotly_chart(fig_scatter, use_container_width=True, config={'displayModeBar': True})
+                            st.plotly_chart(fig_scatter, width='stretch', config={'displayModeBar': True})
                         # Tabela de performance
                         st.dataframe(
                             perf_rede.round(2),
-                            use_container_width=True,
+                            width='stretch',
                             column_config={
                                 "Rede": st.column_config.TextColumn("🏢 Rede"),
                                 "Variacao_Media": st.column_config.NumberColumn("📈 Variação Média %", format="%.2f%%"),
                                 "Qtd_Labs": st.column_config.NumberColumn("🏥 Qtd Labs"),
                                 "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f")
-                            }
+                            },
+                            hide_index=True
                         )
                 elif tipo_analise == "Por Risco":
                     st.subheader("⚠️ Análise de Risco por Rede")
@@ -3081,7 +3162,7 @@ def main():
                         )
                         fig_risco.update_traces(texttemplate='%{text:.1f}', textposition='outside')
                         fig_risco.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
-                        st.plotly_chart(fig_risco, use_container_width=True, config={'displayModeBar': True})
+                        st.plotly_chart(fig_risco, width='stretch', config={'displayModeBar': True})
                         # Distribuição de labs por nível de risco e rede
                         col1, col2 = st.columns(2)
                         with col1:
@@ -3097,7 +3178,7 @@ def main():
                                 color_continuous_scale='Reds'
                             )
                             fig_alto.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
-                            st.plotly_chart(fig_alto, use_container_width=True, config={'displayModeBar': True})
+                            st.plotly_chart(fig_alto, width='stretch', config={'displayModeBar': True})
                         with col2:
                             # Status de risco por rede
                             risco_status = df_rede_filtrado.groupby(['Rede', 'Status_Risco']).size().reset_index(name='Qtd')
@@ -3110,7 +3191,7 @@ def main():
                                 color_discrete_map={'Alto': '#d62728', 'Médio': '#ff7f0e', 'Baixo': '#2ca02c', 'Inativo': '#9467bd'}
                             )
                             fig_status.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
-                            st.plotly_chart(fig_status, use_container_width=True, config={'displayModeBar': True})
+                            st.plotly_chart(fig_status, width='stretch', config={'displayModeBar': True})
                         # Adicionar indicadores de risco às redes de alto risco
                         risco_rede_display = risco_rede.copy()
                         # Função para indicadores de risco em análise por risco
@@ -3129,7 +3210,7 @@ def main():
                         # Tabela de risco detalhada com indicadores
                         st.dataframe(
                             risco_rede_display.round(2),
-                            use_container_width=True,
+                            width='stretch',
                             column_config={
                                 "🚨 Prioridade": st.column_config.TextColumn("🚨 Prioridade", width="small", help="Nível de prioridade para intervenção"),
                                 "Rede": st.column_config.TextColumn("🏢 Rede"),
@@ -3137,7 +3218,8 @@ def main():
                                 "Score_Max": st.column_config.NumberColumn("🚨 Score Máximo", format="%.1f"),
                                 "Qtd_Labs": st.column_config.NumberColumn("🏥 Qtd Labs"),
                                 "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f")
-                            }
+                            },
+                            hide_index=True
                         )
                         # Alertas críticos
                         redes_criticas = risco_rede_display[risco_rede_display['🚨 Prioridade'].str.contains('🚨')]
@@ -3215,7 +3297,7 @@ def main():
                                     barmode='group',
                                     height=400
                                 )
-                                st.plotly_chart(fig_comp1, use_container_width=True)
+                                st.plotly_chart(fig_comp1, width='stretch')
                             with col2:
                                 # Comparação de performance (volume médio e taxa churn)
                                 fig_comp2 = go.Figure()
@@ -3235,7 +3317,7 @@ def main():
                                     yaxis_title="Taxa Churn (%)",
                                     height=400
                                 )
-                                st.plotly_chart(fig_comp2, use_container_width=True)
+                                st.plotly_chart(fig_comp2, width='stretch')
                             # ========================================
                             # TABELA COMPARATIVA DETALHADA
                             # ========================================
@@ -3273,7 +3355,7 @@ def main():
                             redes_comparacao_display = redes_comparacao_display[cols_final]
                             st.dataframe(
                                 redes_comparacao_display.round(2),
-                                use_container_width=True,
+                                width='stretch',
                                 column_config={
                                     "🚨 Indicadores": st.column_config.TextColumn("🚨 Alertas", width="small"),
                                     "Rede": st.column_config.TextColumn("🏢 Rede", width="medium"),
@@ -3332,14 +3414,15 @@ def main():
                     hierarquia = hierarquia.sort_values(['Rede', 'Ranking', 'Ranking_Rede'])
                     st.dataframe(
                         hierarquia,
-                        use_container_width=True,
+                        width='stretch',
                         column_config={
                             "Rede": st.column_config.TextColumn("🏢 Rede"),
                             "Ranking": st.column_config.TextColumn("🏆 Ranking"),
                             "Ranking_Rede": st.column_config.TextColumn("🏅 Ranking Rede"),
                             "Qtd_Labs": st.column_config.NumberColumn("🏥 Qtd Labs"),
                             "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f")
-                        }
+                        },
+                        hide_index=True
                     )
                     # Gráfico de sunburst para hierarquia
                     if len(hierarquia) > 0:
@@ -3357,7 +3440,7 @@ def main():
                                 color_continuous_scale='Blues'
                             )
                             fig_sunburst.update_layout(height=500, margin=dict(l=40, r=40, t=40, b=40))
-                            st.plotly_chart(fig_sunburst, use_container_width=True, config={'displayModeBar': True})
+                            st.plotly_chart(fig_sunburst, width='stretch', config={'displayModeBar': True})
                         else:
                             st.info("ℹ️ Não há dados suficientes com volume positivo para gerar o gráfico hierárquico.")
             else:
@@ -3466,7 +3549,7 @@ def main():
                 if colunas_existentes:
                     st.dataframe(
                         df_filtrado[colunas_existentes],
-                        use_container_width=True,
+                        width='stretch',
                         height=400,
                         column_config={
                             "CNPJ": st.column_config.TextColumn("📄 CNPJ", help="CNPJ do laboratório"),
@@ -3478,7 +3561,8 @@ def main():
                             "Ranking Rede": st.column_config.TextColumn("🏅 Ranking Rede"),
                             "Rede": st.column_config.TextColumn("🏢 Rede"),
                             "STATUS": st.column_config.TextColumn("📊 Status")
-                        }
+                        },
+                        hide_index=True
                     )
                 else:
                     st.warning("Nenhuma coluna válida encontrada para exibição")
@@ -3877,7 +3961,7 @@ def main():
             # Estatísticas do histórico
             stats = history_manager.obter_estatisticas()
          
-            if stats['total_total_alteracoes'] > 0:
+            if stats.get('total_alteracoes', 0) > 0:
                 col1, col2, col3, col4 = st.columns(4)
              
                 with col1:

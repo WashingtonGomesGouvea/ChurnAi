@@ -349,6 +349,107 @@ def calcular_metricas_churn():
     base['Total_Coletas_2025'] = total_2025.reindex(base.index).fillna(0).astype(int)
     base['Data_Ultima_Coleta'] = ultima_2025.reindex(base.index)
 
+    # Agregação de dados diários para 2025 (para gráficos detalhados)
+    import json
+    def agregar_dados_diarios_2025(df_gatherings_2025, base_index):
+        """Agrega dados de coletas por dia para cada laboratório em 2025."""
+        if df_gatherings_2025.empty:
+            return pd.Series(['{}'] * len(base_index), index=base_index)
+        
+        # Converter createdAt para datetime se não estiver
+        df_gatherings_2025 = df_gatherings_2025.copy()
+        df_gatherings_2025['createdAt'] = pd.to_datetime(df_gatherings_2025['createdAt'], errors='coerce', utc=True)
+        
+        # Extrair ano, mês e dia
+        df_gatherings_2025['ano'] = df_gatherings_2025['createdAt'].dt.year
+        df_gatherings_2025['mes'] = df_gatherings_2025['createdAt'].dt.month
+        df_gatherings_2025['dia'] = df_gatherings_2025['createdAt'].dt.day
+        
+        # Filtrar apenas 2025
+        df_2025 = df_gatherings_2025[df_gatherings_2025['ano'] == 2025].copy()
+        
+        if df_2025.empty:
+            return pd.Series(['{}'] * len(base_index), index=base_index)
+        
+        # Agrupar por laboratório, mês e dia
+        dados_diarios = df_2025.groupby(['_laboratory', 'mes', 'dia']).size().reset_index()
+        dados_diarios.columns = ['_laboratory', 'mes', 'dia', 'coletas']
+        
+        # Converter para estrutura JSON por laboratório
+        def criar_json_lab(lab_id):
+            lab_data = dados_diarios[dados_diarios['_laboratory'] == lab_id]
+            if lab_data.empty:
+                return '{}'
+            
+            # Criar estrutura: {"2025-01": {"1": 2, "8": 1}, "2025-10": {"1": 1, "8": 1}}
+            json_data = {}
+            for _, row in lab_data.iterrows():
+                # Verificar se mes e dia são válidos (não NaN)
+                if pd.notna(row['mes']) and pd.notna(row['dia']):
+                    mes_key = f"2025-{int(row['mes']):02d}"
+                    if mes_key not in json_data:
+                        json_data[mes_key] = {}
+                    json_data[mes_key][str(int(row['dia']))] = int(row['coletas'])
+            
+            return json.dumps(json_data, ensure_ascii=False)
+        
+        # Aplicar para todos os laboratórios
+        resultado = base_index.to_series().apply(criar_json_lab)
+        return resultado
+
+    # Adicionar coluna com dados diários de 2025
+    base['Dados_Diarios_2025'] = agregar_dados_diarios_2025(df_gatherings_2025, base.index)
+
+    # Agregação de dados por dia da semana para 2025 (para gráfico semanal)
+    def agregar_dados_semanais_2025(df_gatherings_2025, base_index):
+        """Agrega dados de coletas por dia da semana para cada laboratório em 2025."""
+        if df_gatherings_2025.empty:
+            return pd.Series(['{}'] * len(base_index), index=base_index)
+        
+        # Converter createdAt para datetime se não estiver
+        df_gatherings_2025 = df_gatherings_2025.copy()
+        df_gatherings_2025['createdAt'] = pd.to_datetime(df_gatherings_2025['createdAt'], errors='coerce', utc=True)
+        
+        # Extrair ano e dia da semana (0=segunda, 6=domingo)
+        df_gatherings_2025['ano'] = df_gatherings_2025['createdAt'].dt.year
+        df_gatherings_2025['dia_semana'] = df_gatherings_2025['createdAt'].dt.dayofweek
+        
+        # Filtrar apenas 2025
+        df_2025 = df_gatherings_2025[df_gatherings_2025['ano'] == 2025].copy()
+        
+        if df_2025.empty:
+            return pd.Series(['{}'] * len(base_index), index=base_index)
+        
+        # Mapear números para nomes dos dias
+        dias_semana_map = {0: 'Segunda', 1: 'Terça', 2: 'Quarta', 3: 'Quinta', 4: 'Sexta', 5: 'Sábado', 6: 'Domingo'}
+        df_2025['dia_semana_nome'] = df_2025['dia_semana'].map(dias_semana_map)
+        
+        # Agrupar por laboratório e dia da semana
+        dados_semanais = df_2025.groupby(['_laboratory', 'dia_semana_nome']).size().reset_index()
+        dados_semanais.columns = ['_laboratory', 'dia_semana', 'coletas']
+        
+        # Converter para estrutura JSON por laboratório
+        def criar_json_semanal_lab(lab_id):
+            lab_data = dados_semanais[dados_semanais['_laboratory'] == lab_id]
+            if lab_data.empty:
+                return '{}'
+            
+            # Criar estrutura: {"Segunda": 2, "Terça": 1, "Quarta": 1, ...}
+            json_data = {}
+            for _, row in lab_data.iterrows():
+                # Verificar se dia_semana é válido (não NaN)
+                if pd.notna(row['dia_semana']):
+                    json_data[row['dia_semana']] = int(row['coletas'])
+            
+            return json.dumps(json_data, ensure_ascii=False)
+        
+        # Aplicar para todos os laboratórios
+        resultado = base_index.to_series().apply(criar_json_semanal_lab)
+        return resultado
+
+    # Adicionar coluna com dados semanais de 2025
+    base['Dados_Semanais_2025'] = agregar_dados_semanais_2025(df_gatherings_2025, base.index)
+
     # Maior mês 2024 e 2025
     if not m2024.empty:
         m24_vals = m2024.reindex(base.index).fillna(0)
@@ -510,7 +611,7 @@ def calcular_metricas_churn():
     cols_fim = [
         'Data_Ultima_Coleta','Dias_Sem_Coleta','Media_Coletas_Mensal_2024','Media_Coletas_Mensal_2025',
         'Variacao_Percentual','Tendencia','Status_Risco','Motivo_Risco','Data_Analise',
-        'Total_Coletas_2024','Total_Coletas_2025'
+        'Total_Coletas_2024','Total_Coletas_2025','Dados_Diarios_2025','Dados_Semanais_2025'
     ]
 
     # Garantir colunas existentes

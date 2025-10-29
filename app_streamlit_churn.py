@@ -961,57 +961,112 @@ class ChartManager:
         st.plotly_chart(fig, use_container_width=True)
     @staticmethod
     def criar_grafico_media_diaria(df: pd.DataFrame, lab_selecionado: str = None):
-        """Cria gráfico de média diária por mês - Atualizado layout e bugs."""
+        """Cria gráfico de média diária por mês usando dados reais de 2025."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
-        meses = ChartManager._meses_ate_hoje(df, 2025)
-        if not meses:
+        if not lab_selecionado:
+            st.info("📊 Selecione um laboratório para visualizar a média diária")
             return
-        colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses]
+            
+        lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
+        if lab_data.empty:
+            st.info("📊 Laboratório não encontrado")
+            return
+            
+        lab = lab_data.iloc[0]
+        
+        # Verificar se temos dados diários reais de 2025
+        if 'Dados_Diarios_2025' not in lab or pd.isna(lab['Dados_Diarios_2025']) or lab['Dados_Diarios_2025'] == '{}':
+            st.info("📊 Nenhum dado diário disponível para 2025. Use o gerador para atualizar os dados.")
+            return
+        
+        import json
+        try:
+            # Carregar dados diários reais
+            dados_diarios = json.loads(lab['Dados_Diarios_2025'])
+        except (json.JSONDecodeError, TypeError):
+            st.info("📊 Erro ao carregar dados diários. Use o gerador para atualizar os dados.")
+            return
+        
+        if not dados_diarios:
+            st.info("📊 Nenhum dado diário disponível para 2025.")
+            return
+        
+        # Calcular média diária real baseada em dias com coleta
+        meses_ordem = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+        medias_diarias = []
+        meses_com_dados = []
+        
+        for mes_key, dias_mes in dados_diarios.items():
+            # Extrair mês do formato "2025-10"
+            try:
+                ano, mes_num = mes_key.split('-')
+                mes_num = int(mes_num)
+                if mes_num >= 1 and mes_num <= 12:
+                    mes_nome = meses_ordem[mes_num - 1]
+                    
+                    # Calcular total de coletas e dias com coleta para este mês
+                    total_coletas = sum(int(coletas) for coletas in dias_mes.values())
+                    dias_com_coleta = len(dias_mes)
+                    
+                    # Média diária = total de coletas / dias com coleta (não dias do mês)
+                    if dias_com_coleta > 0:
+                        media_diaria = total_coletas / dias_com_coleta
+                        medias_diarias.append(media_diaria)
+                        meses_com_dados.append(mes_nome)
+            except (ValueError, IndexError):
+                continue
+        
+        if not medias_diarias:
+            st.info("📊 Nenhuma coleta encontrada nos dados diários de 2025.")
+            return
+        
+        # Criar gráfico
+        fig = px.bar(
+            x=meses_com_dados,
+            y=medias_diarias,
+            title=f"📊 Média Diária Real por Mês - {lab_selecionado}<br><sup>Baseado em dias com coleta real</sup>",
+            color=medias_diarias,
+            color_continuous_scale='Blues',
+            text=[f"{val:.1f}" for val in medias_diarias]
+        )
      
-        if lab_selecionado:
-            lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
-            if not lab_data.empty:
-                lab = lab_data.iloc[0]
-                valores_mensais = [lab.get(col, 0) for col in colunas_meses]  # Use 0 se NaN
-             
-                # Calcular média diária (dias reais aproximados por mês) - Corrigido zeros inconsistentes
-                dias_map = {
-                    'Jan': 31, 'Fev': 28, 'Mar': 31, 'Abr': 30, 'Mai': 31, 'Jun': 30,
-                    'Jul': 31, 'Ago': 31, 'Set': 30, 'Out': 31, 'Nov': 30, 'Dez': 31
-                }
-                medias_diarias = [val / dias_map.get(mes, 30) if val > 0 else 0 for val, mes in zip(valores_mensais, meses)]
-             
-                fig = px.bar(
-                    x=meses,
-                    y=medias_diarias,
-                    title=f"📊 Média Diária por Mês - {lab_selecionado}",
-                    color=medias_diarias,
-                    color_continuous_scale='Blues',
-                    text=[f"{val:.0f}" for val in medias_diarias]
-                )
-             
-                fig.update_traces(
-                    texttemplate='%{text} coletas',
-                    textposition='outside',
-                    hovertemplate='<b>Mês:</b> %{x}<br><b>Média Diária:</b> %{y:.0f} coletas<extra></extra>'
-                )
-             
-                fig.update_layout(
-                    xaxis_title="Mês",
-                    yaxis_title="Média Diária (Coletas)",
-                    showlegend=False,
-                    height=600,  # Aumentado conforme solicitado
-                    margin=dict(l=60, r=60, t=60, b=80),  # Margens aumentadas
-                    autosize=True,  # Responsivo
-                    font=dict(size=14)  # Fonte maior
-                )
-             
-                st.plotly_chart(fig, use_container_width=True)
+        fig.update_traces(
+            texttemplate='%{text} coletas',
+            textposition='outside',
+            hovertemplate='<b>Mês:</b> %{x}<br><b>Média Diária:</b> %{y:.1f} coletas<br><sup>Baseado em dias com coleta real</sup><extra></extra>'
+        )
+     
+        fig.update_layout(
+            xaxis_title="Mês",
+            yaxis_title="Média Diária (Coletas)",
+            showlegend=False,
+            height=600,
+            margin=dict(l=60, r=60, t=80, b=80),
+            autosize=True,
+            font=dict(size=14)
+        )
+     
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Explicação metodológica
+        with st.expander("ℹ️ Sobre Esta Análise", expanded=False):
+            st.markdown(f"""
+            **Como é calculada a média diária real:**
+            1. **Base de dados**: Dados reais de coletas de 2025 por dia
+            2. **Cálculo**: Total de coletas do mês ÷ dias com coleta (não dias do mês)
+            3. **Vantagem**: Mostra a produtividade real nos dias de trabalho
+            4. **Exemplo**: Se em Outubro houve 8 coletas em 4 dias diferentes, a média é 2.0 coletas/dia
+            
+            **💡 Insight**: Esta análise mostra:
+            - Produtividade real nos dias de coleta
+            - Padrões de intensidade de trabalho
+            - Comparação mais precisa entre meses
+            """)
     @staticmethod
     def criar_grafico_coletas_por_dia(df: pd.DataFrame, lab_selecionado: str = None):
-        """Cria gráfico de coletas por dia do mês (0-31) - Corrigido zeros inconsistentes."""
+        """Cria gráfico de coletas por dia do mês usando dados reais de 2025."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
@@ -1020,50 +1075,51 @@ class ChartManager:
             if not lab_data.empty:
                 lab = lab_data.iloc[0]
              
-                # Simular distribuição de coletas por dia (baseado no volume mensal)
-                meses = ChartManager._meses_ate_hoje(df, 2025)
-                colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses]
-                valores_mensais = [lab.get(col, 0) for col in colunas_meses]  # Use 0 se NaN
-             
-                # Obter data atual para limitar os dias
-                hoje = pd.Timestamp.today()
-                dia_atual = hoje.day
-                mes_atual = hoje.month
-                ano_atual = hoje.year
-             
-                # Mapear nomes dos meses para números
-                meses_ordem = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+                # Verificar se temos dados diários reais de 2025
+                if 'Dados_Diarios_2025' not in lab or pd.isna(lab['Dados_Diarios_2025']) or lab['Dados_Diarios_2025'] == '{}':
+                    st.info("📊 Nenhum dado diário disponível para 2025. Use o gerador para atualizar os dados.")
+                    return
+                
+                import json
+                try:
+                    # Carregar dados diários reais
+                    dados_diarios = json.loads(lab['Dados_Diarios_2025'])
+                except (json.JSONDecodeError, TypeError):
+                    st.info("📊 Erro ao carregar dados diários. Use o gerador para atualizar os dados.")
+                    return
+                
+                if not dados_diarios:
+                    st.info("📊 Nenhum dado diário disponível para 2025.")
+                    return
+                
+                # Converter dados para DataFrame
                 dados_grafico = []
-             
-                for i, (mes, volume) in enumerate(zip(meses, valores_mensais)):
-                    # Determinar quantos dias considerar para este mês
-                    mes_numero = meses_ordem.index(mes) + 1
-                 
-                    # Se for o mês atual, considerar apenas até o dia atual
-                    if mes_numero == mes_atual and ano_atual == 2025:
-                        dias_limite = dia_atual
-                    else:
-                        # Para meses anteriores, considerar todos os dias
-                        dias_limite = 31
-                 
-                    # Simular distribuição uniforme por dia (pode ser melhorado com dados reais)
-                    if volume > 0 and dias_limite > 0:
-                        # Garantir que o total seja exato (sem decimais)
-                        coletas_por_dia_base = volume // dias_limite  # Divisão inteira
-                        resto = volume % dias_limite  # Resto da divisão
-                    else:
-                        coletas_por_dia_base = 0
-                        resto = 0
-                 
-                    for dia in range(1, dias_limite + 1):
-                        # Distribuir o resto nos primeiros dias
-                        coletas_dia = coletas_por_dia_base + (1 if dia <= resto else 0)
-                        dados_grafico.append({
-                            'Dia': dia,
-                            'Mês': mes,
-                            'Coletas': coletas_dia
-                        })
-             
+                meses_ordem = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+                
+                for mes_key, dias_mes in dados_diarios.items():
+                    # Extrair mês do formato "2025-10"
+                    try:
+                        ano, mes_num = mes_key.split('-')
+                        mes_num = int(mes_num)
+                        if mes_num >= 1 and mes_num <= 12:
+                            mes_nome = meses_ordem[mes_num - 1]
+                            
+                            # Adicionar apenas dias com coletas reais
+                            for dia_str, coletas in dias_mes.items():
+                                dia = int(dia_str)
+                                if coletas > 0:  # Só mostrar dias com coletas
+                                    dados_grafico.append({
+                                        'Dia': dia,
+                                        'Mês': mes_nome,
+                                        'Coletas': int(coletas)
+                                    })
+                    except (ValueError, IndexError):
+                        continue
+                
+                if not dados_grafico:
+                    st.info("📊 Nenhuma coleta encontrada nos dados diários de 2025.")
+                    return
+                
                 df_grafico = pd.DataFrame(dados_grafico)
              
                 # Criar gráfico de linha interativo
@@ -1119,8 +1175,128 @@ class ChartManager:
              
                 st.plotly_chart(fig, use_container_width=True)
     @staticmethod
+    def criar_grafico_media_dia_semana_novo(df: pd.DataFrame, lab_selecionado: str = None, filtros: dict = None):
+        """NOVA VERSÃO - Cria gráfico de distribuição de coletas por dia da semana usando dados reais de 2025."""
+        if df.empty:
+            st.info("📊 Nenhum dado disponível para o gráfico")
+            return
+        if not lab_selecionado:
+            st.info("📊 Selecione um laboratório para visualizar a distribuição semanal")
+            return
+            
+        lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
+        if lab_data.empty:
+            st.info("📊 Laboratório não encontrado")
+            return
+            
+        lab = lab_data.iloc[0]
+        
+        # Verificar se temos dados semanais reais de 2025
+        if 'Dados_Semanais_2025' not in lab or pd.isna(lab['Dados_Semanais_2025']) or lab['Dados_Semanais_2025'] == '{}':
+            st.info("📊 Nenhum dado semanal disponível para 2025. Use o gerador para atualizar os dados.")
+            return
+        
+        import json
+        try:
+            dados_semanais = json.loads(lab['Dados_Semanais_2025'])
+        except (json.JSONDecodeError, TypeError):
+            st.info("📊 Erro ao carregar dados semanais. Use o gerador para atualizar os dados.")
+            return
+        
+        if not dados_semanais:
+            st.info("📊 Nenhum dado semanal disponível para 2025.")
+            return
+        
+        # NOVA IMPLEMENTAÇÃO - Criar dados de forma mais simples e direta
+        dias_semana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
+        cores_dias = {
+            'Segunda': '#1f77b4', 'Terça': '#ff7f0e', 'Quarta': '#2ca02c', 'Quinta': '#d62728',
+            'Sexta': '#9467bd', 'Sábado': '#8c564b', 'Domingo': '#e377c2'
+        }
+        
+        # Criar lista de dados de forma mais direta
+        dados_grafico = []
+        total_coletas = 0
+        
+        for dia in dias_semana:
+            coletas = dados_semanais.get(dia, 0)
+            total_coletas += coletas
+            dados_grafico.append({
+                'dia': dia,
+                'coletas': coletas,
+                'cor': cores_dias[dia]
+            })
+        
+        # Calcular percentuais
+        for item in dados_grafico:
+            if total_coletas > 0:
+                item['percentual'] = round((item['coletas'] / total_coletas) * 100, 1)
+            else:
+                item['percentual'] = 0.0
+        
+        # CRIAR GRÁFICO NOVO DO ZERO
+        import plotly.graph_objects as go
+        
+        fig = go.Figure()
+        
+        # Adicionar barras uma por uma para ter controle total
+        for i, row in enumerate(dados_grafico):
+            fig.add_trace(go.Bar(
+                x=[row['dia']],
+                y=[row['coletas']],
+                name=row['dia'],
+                marker_color=row['cor'],
+                text=[f"{row['coletas']} coletas<br>({row['percentual']:.1f}%)"],
+                textposition='outside',
+                hovertemplate=f"<b>{row['dia']}</b><br>" +
+                             f"Coletas: {row['coletas']}<br>" +
+                             f"Percentual: {row['percentual']:.1f}% da semana<extra></extra>",
+                showlegend=False
+            ))
+        
+        # Configurar layout
+        fig.update_layout(
+            title=f"📅 Distribuição Real de Coletas por Dia da Semana<br><sup>{lab_selecionado} | Total semanal: {total_coletas} coletas</sup>",
+            xaxis_title="Dia da Semana",
+            yaxis_title="Coletas por Dia",
+            height=600,
+            margin=dict(l=60, r=60, t=80, b=60),
+            font=dict(size=14),
+            title_font_size=18
+        )
+        
+        # Adicionar linha de média diária
+        if total_coletas > 0:
+            media_diaria = total_coletas / 7
+            fig.add_hline(
+                y=media_diaria,
+                line_dash="dash",
+                line_color="red",
+                annotation_text=f"Média diária: {media_diaria:.1f} coletas",
+                annotation_position="top right"
+            )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Métricas
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            dia_max = max(dados_grafico, key=lambda x: x['coletas'])
+            st.metric("📈 Dia Mais Forte", dia_max['dia'], f"{dia_max['coletas']:.0f} coletas")
+        with col2:
+            dia_min = min(dados_grafico, key=lambda x: x['coletas'])
+            st.metric("📉 Dia Mais Fraco", dia_min['dia'], f"{dia_min['coletas']:.0f} coletas")
+        with col3:
+            max_coletas = max(item['coletas'] for item in dados_grafico)
+            min_coletas = min(item['coletas'] for item in dados_grafico)
+            variacao = ((max_coletas - min_coletas) / max_coletas * 100) if max_coletas > 0 else 0
+            st.metric("📊 Variação Semanal", f"{variacao:.1f}%", "diferença máxima")
+        
+        # Debug removido após validação dos percentuais
+
+    @staticmethod
     def criar_grafico_media_dia_semana(df: pd.DataFrame, lab_selecionado: str = None, filtros: dict = None):
-        """Cria gráfico de distribuição de coletas por dia da semana baseado em dados mensais - Corrigido porcentagens."""
+        """Cria gráfico de distribuição de coletas por dia da semana usando dados reais de 2025."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
@@ -1130,52 +1306,25 @@ class ChartManager:
         lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
         if not lab_data.empty:
             lab = lab_data.iloc[0]
-            # Usar filtros do sidebar se disponíveis
-            ano_selecionado = filtros.get('ano_selecionado', 2025) if filtros else 2025
-            meses_selecionados = filtros.get('meses_selecionados', []) if filtros else []
-            sufixo_ano = filtros.get('sufixo_ano', '25') if filtros else '25'
-            # Se não há meses selecionados, usar todos disponíveis
-            if not meses_selecionados:
-                meses_disponiveis = ChartManager._meses_ate_hoje(df, ano_selecionado)
-                meses_selecionados = meses_disponiveis
-            # Calcular total de coletas dos meses selecionados
-            colunas_meses = [f'N_Coletas_{mes}_{sufixo_ano}' for mes in meses_selecionados if f'N_Coletas_{mes}_{sufixo_ano}' in lab.index]
-            valores_mensais = [lab.get(col, 0) for col in colunas_meses]  # Use 0 se NaN
-            if not valores_mensais:
-                st.info("📊 Nenhum dado disponível para os meses selecionados")
-                return
-            total_coletas = sum(valores_mensais)
-            media_mensal = total_coletas / len(valores_mensais) if valores_mensais else 0
-            if media_mensal <= 0:
-                st.info("📊 Dados insuficientes para calcular distribuição semanal")
-                return
-            # Calcular distribuição real baseada nos dados mensais
-            # Simular distribuição baseada em padrões reais de coleta
-            dias_semana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
             
-            # Padrão baseado em dados reais de laboratórios (não mocado)
-            # Segunda-feira: maior movimento (início da semana)
-            # Terça a Quinta: movimento regular
-            # Sexta: movimento moderado (pré-final de semana)
-            # Sábado: movimento reduzido
-            # Domingo: movimento mínimo
-            distribuicao_semanal = {
-                'Segunda': 0.20,  # 20% - maior movimento
-                'Terça': 0.18,    # 18% - movimento regular
-                'Quarta': 0.18,   # 18% - movimento regular
-                'Quinta': 0.18,   # 18% - movimento regular
-                'Sexta': 0.15,    # 15% - movimento moderado
-                'Sábado': 0.08,   # 8% - movimento reduzido
-                'Domingo': 0.03   # 3% - movimento mínimo
-            }
+            # Verificar se temos dados semanais reais de 2025
+            if 'Dados_Semanais_2025' not in lab or pd.isna(lab['Dados_Semanais_2025']) or lab['Dados_Semanais_2025'] == '{}':
+                st.info("📊 Nenhum dado semanal disponível para 2025. Use o gerador para atualizar os dados.")
+                return
             
-            # Verificar e normalizar para soma exata de 100%
-            soma_dist = sum(distribuicao_semanal.values())
-            if abs(soma_dist - 1.0) > 0.001:  # Tolerância para arredondamento
-                for dia in distribuicao_semanal:
-                    distribuicao_semanal[dia] /= soma_dist
-            # Calcular valores absolutos baseados na média mensal
-            dados_semana = []
+            import json
+            try:
+                # Carregar dados semanais reais
+                dados_semanais = json.loads(lab['Dados_Semanais_2025'])
+            except (json.JSONDecodeError, TypeError):
+                st.info("📊 Erro ao carregar dados semanais. Use o gerador para atualizar os dados.")
+                return
+            
+            if not dados_semanais:
+                st.info("📊 Nenhum dado semanal disponível para 2025.")
+                return
+            
+            # Converter dados para DataFrame
             dias_semana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
             cores_dias = {
                 'Segunda': '#1f77b4', # Azul
@@ -1186,44 +1335,52 @@ class ChartManager:
                 'Sábado': '#8c564b', # Marrom
                 'Domingo': '#e377c2' # Rosa
             }
+            
+            dados_semana = []
+            total_coletas_semana = 0
+            
             for dia in dias_semana:
-                coletas_dia = round(media_mensal * distribuicao_semanal[dia])  # Inteiros
+                coletas_dia = dados_semanais.get(dia, 0)
+                total_coletas_semana += coletas_dia
                 dados_semana.append({
                     'Dia_Semana': dia,
-                    'Coletas_Estimadas': coletas_dia,
-                    'Percentual': distribuicao_semanal[dia] * 100,
+                    'Coletas_Reais': coletas_dia,
                     'Cor': cores_dias[dia]
                 })
+            
             df_semana = pd.DataFrame(dados_semana)
+            
+            # Calcular percentuais corretos baseados nos dados reais
+            if total_coletas_semana > 0:
+                df_semana['Percentual'] = (df_semana['Coletas_Reais'] / total_coletas_semana * 100).round(1)
+            else:
+                df_semana['Percentual'] = 0.0
             # Criar título informativo
-            periodo_texto = f"{len(meses_selecionados)} mês(es) de {ano_selecionado}"
-            if len(meses_selecionados) <= 3:
-                meses_nomes = {
-                    'Jan': 'Jan', 'Fev': 'Fev', 'Mar': 'Mar', 'Abr': 'Abr',
-                    'Mai': 'Mai', 'Jun': 'Jun', 'Jul': 'Jul', 'Ago': 'Ago',
-                    'Set': 'Set', 'Out': 'Out', 'Nov': 'Nov', 'Dez': 'Dez'
-                }
-                nomes = [meses_nomes.get(mes, mes) for mes in meses_selecionados]
-                periodo_texto = f"{', '.join(nomes)}/{ano_selecionado}"
+            periodo_texto = "dados reais de 2025"
+            
+            # Calcular média diária correta (soma das coletas semanais / 7)
+            media_diaria = total_coletas_semana / 7 if total_coletas_semana > 0 else 0
+            
             # Gráfico de barras
             fig = px.bar(
                 df_semana,
                 x='Dia_Semana',
-                y='Coletas_Estimadas',
-                title=f"📅 Distribuição Estimada de Coletas por Dia da Semana<br><sup>{lab_selecionado} | Baseado em: {periodo_texto} | Média mensal: {media_mensal:.0f} coletas</sup>",
+                y='Coletas_Reais',
+                title=f"📅 Distribuição Real de Coletas por Dia da Semana<br><sup>{lab_selecionado} | Baseado em: {periodo_texto} | Total semanal: {total_coletas_semana:.0f} coletas</sup>",
                 color='Dia_Semana',
                 color_discrete_map=cores_dias,
-                text='Coletas_Estimadas'
+                text='Coletas_Reais'
             )
+            # Usar hovertemplate com cálculo direto do percentual
             fig.update_traces(
-                texttemplate='%{text:.0f} coletas<br>(%{customdata:.0f}%)',
+                texttemplate='%{text:.0f} coletas<br>(%{customdata:.1f}%)',
                 textposition='outside',
                 customdata=df_semana['Percentual'],
-                hovertemplate='<b>%{x}</b><br>Coletas: %{y:.0f}<br>Percentual: %{customdata:.0f}% da semana<extra></extra>'
+                hovertemplate='<b>%{x}</b><br>Coletas: %{y:.0f}<br>Percentual: %{customdata:.1f}% da semana<extra></extra>'
             )
             fig.update_layout(
                 xaxis_title="Dia da Semana",
-                yaxis_title="Coletas Estimadas por Dia",
+                yaxis_title="Coletas por Dia",
                 showlegend=False,
                 coloraxis_showscale=False,
                 height=700,  # Aumentado significativamente para destaque
@@ -1233,31 +1390,31 @@ class ChartManager:
                 title_font_size=18  # Título maior
             )
             # Adicionar linha de referência da média diária
-            media_diaria = media_mensal / 30 # aproximada
-            fig.add_hline(
-                y=media_diaria,
-                line_dash="dash",
-                line_color="red",
-                annotation_text=f"Média diária: {media_diaria:.0f} coletas",
-                annotation_position="top right"
-            )
+            if media_diaria > 0:
+                fig.add_hline(
+                    y=media_diaria,
+                    line_dash="dash",
+                    line_color="red",
+                    annotation_text=f"Média diária: {media_diaria:.1f} coletas",
+                    annotation_position="top right"
+                )
             st.plotly_chart(fig, use_container_width=True)
             # Métricas adicionais
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric(
                     "📈 Dia Mais Forte",
-                    df_semana.loc[df_semana['Coletas_Estimadas'].idxmax(), 'Dia_Semana'],
-                    f"{df_semana['Coletas_Estimadas'].max():.0f} coletas"
+                    df_semana.loc[df_semana['Coletas_Reais'].idxmax(), 'Dia_Semana'],
+                    f"{df_semana['Coletas_Reais'].max():.0f} coletas"
                 )
             with col2:
                 st.metric(
                     "📉 Dia Mais Fraco",
-                    df_semana.loc[df_semana['Coletas_Estimadas'].idxmin(), 'Dia_Semana'],
-                    f"{df_semana['Coletas_Estimadas'].min():.0f} coletas"
+                    df_semana.loc[df_semana['Coletas_Reais'].idxmin(), 'Dia_Semana'],
+                    f"{df_semana['Coletas_Reais'].min():.0f} coletas"
                 )
             with col3:
-                variacao_semanal = (df_semana['Coletas_Estimadas'].max() - df_semana['Coletas_Estimadas'].min()) / df_semana['Coletas_Estimadas'].max() * 100 if df_semana['Coletas_Estimadas'].max() > 0 else 0
+                variacao_semanal = (df_semana['Coletas_Reais'].max() - df_semana['Coletas_Reais'].min()) / df_semana['Coletas_Reais'].max() * 100 if df_semana['Coletas_Reais'].max() > 0 else 0
                 st.metric(
                     "📊 Variação Semanal",
                     f"{variacao_semanal:.1f}%",
@@ -1267,15 +1424,14 @@ class ChartManager:
             with st.expander("ℹ️ Sobre Esta Análise", expanded=False):
                 st.markdown(f"""
                 **Como é calculada a distribuição semanal:**
-                1. **Base de dados**: Média mensal de {media_mensal:.0f} coletas ({periodo_texto})
-                2. **Distribuição padrão**: Baseada em padrões típicos de coleta de sangue
-                   - **Segunda-Quinta**: Dias de maior movimento (16-18% cada)
-                   - **Sexta**: Dia intermediário (15%)
-                   - **Finais de semana**: Menor movimento devido a feriados e menor fluxo
-                3. **Média diária**: ~{media_diaria:.0f} coletas (aproximada)
-                **💡 Insight**: Esta análise ajuda a identificar:
-                - Dias com maior potencial de coleta
-                - Possíveis gargalos operacionais
+                1. **Base de dados**: Dados reais de coletas de 2025 ({periodo_texto})
+                2. **Distribuição real**: Baseada nas datas exatas das coletas (createdAt)
+                   - **Total semanal**: {total_coletas_semana:.0f} coletas
+                   - **Percentuais**: Calculados baseados na distribuição real dos dados
+                3. **Média diária**: {media_diaria:.1f} coletas (total semanal ÷ 7)
+                **💡 Insight**: Esta análise mostra:
+                - Padrões reais de coleta do laboratório
+                - Dias com maior/menor movimento baseado em dados históricos
                 - Oportunidades de otimização de recursos
                 **⚠️ Importante**: Estes são valores estimados baseados em padrões históricos.
                 Dados diários reais forneceriam análise mais precisa.
@@ -2483,9 +2639,9 @@ def main():
                                 </div>
                                 """, unsafe_allow_html=True)
                                 
-                                # Comparativos - Atualizado para Último mês vs Média de 2025
+                                # Comparativos - Último mês vs Média 2025 e vs Máxima de 2025
                                 variacao_ultimo_vs_media = ((metricas_evolucao['media_ultimo_mes'] - metricas_evolucao['media_2025']) / metricas_evolucao['media_2025'] * 100) if metricas_evolucao['media_2025'] > 0 else 0
-                                percentual_maxima = (metricas_evolucao['media_ultimo_mes'] / max(metricas_evolucao['max_2024'], metricas_evolucao['max_2025']) * 100) if max(metricas_evolucao['max_2024'], metricas_evolucao['max_2025']) > 0 else 0
+                                percentual_maxima = (metricas_evolucao['media_ultimo_mes'] / metricas_evolucao['max_2025'] * 100) if metricas_evolucao['max_2025'] > 0 else 0
                                 cor_variacao = "#28a745" if variacao_ultimo_vs_media >= 0 else "#dc3545"
                                 cor_percentual = "#28a745" if percentual_maxima >= 80 else "#ffc107" if percentual_maxima >= 50 else "#dc3545"
                                 st.markdown(f"""
@@ -2500,11 +2656,11 @@ def main():
                                             <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {metricas_evolucao['media_2025']:.1f}</div>
                                         </div>
                                         <div>
-                                            <div style="font-size: 0.8rem; color: #666;">Último Mês vs Máxima</div>
+                                            <div style="font-size: 0.8rem; color: #666;">Último Mês vs Máxima 2025</div>
                                             <div style="font-size: 1.2rem; font-weight: bold; color: {cor_percentual};">
                                                 {percentual_maxima:.1f}%
                                             </div>
-                                            <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {max(metricas_evolucao['max_2024'], metricas_evolucao['max_2025']):,}</div>
+                                            <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {metricas_evolucao['max_2025']:,}</div>
                                         </div>
                                     </div>
                                 </div>
@@ -2520,7 +2676,7 @@ def main():
                         with tab_distribuicao:
                             st.subheader("📊 Distribuição de Coletas por Dia da Semana")
                             # Gráfico com destaque maior conforme solicitado
-                            ChartManager.criar_grafico_media_dia_semana(df_filtrado, lab_final, filtros)
+                            ChartManager.criar_grafico_media_dia_semana_novo(df_filtrado, lab_final, filtros)
                         
                         with tab_media_diaria:
                             st.subheader("📊 Média Diária por Mês")

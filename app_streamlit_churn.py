@@ -537,16 +537,16 @@ class DataManager:
                         # Renomear para CNPJ para compatibilidade
                         df['CNPJ'] = df['CNPJ_PCL']
                     else:
-                        st.warning("⚠️ Coluna 'CNPJ' ou 'CNPJ_PCL' não encontrada na matriz CS. Colunas disponíveis:")
-                        st.write(df.columns.tolist())
+                    # Warning removido - será tratado onde a função é chamada
                         return None
                     # Ler CNPJ como string para preservar zeros à esquerda
                     df['CNPJ'] = df['CNPJ'].astype(str)
                     df['CNPJ_Normalizado'] = df['CNPJ'].apply(DataManager.normalizar_cnpj)
-                    st.success(f"✅ Matriz CS normalizada carregada: {len(df)} registros")
+                    # Toast removido - será exibido onde a função é chamada
                     return df
                 except Exception as e:
-                    st.warning(f"⚠️ Erro ao ler arquivo do SharePoint: {e}")
+                    # Warning removido - será tratado onde a função é chamada
+                    pass
             # FALLBACK: Tentar arquivos locais
             caminhos_possiveis = [
                 VIP_CSV_FILE,
@@ -569,11 +569,11 @@ class DataManager:
                 # Garantir que CNPJ seja string e normalizar
                 df['CNPJ'] = df['CNPJ'].astype(str)
                 df['CNPJ_Normalizado'] = df['CNPJ'].apply(DataManager.normalizar_cnpj)
-                st.success(f"✅ Matriz CS normalizada carregada (local): {len(df)} registros")
+                # Toast removido - será exibido onde a função é chamada
                 return df
             return None
         except Exception as e:
-            st.error(f"❌ Erro ao carregar matriz CS normalizada: {e}")
+            # Error removido - será tratado onde a função é chamada
             return None
     @staticmethod
     @st.cache_data(ttl=VIP_CACHE_TTL)
@@ -597,13 +597,12 @@ class DataManager:
                     # Renomear para CNPJ para compatibilidade
                     df_vip['CNPJ'] = df_vip['CNPJ_PCL']
                 else:
-                    st.warning("⚠️ Coluna 'CNPJ' ou 'CNPJ_PCL' não encontrada no arquivo VIP. Colunas disponíveis:")
-                    st.write(df_vip.columns.tolist())
+                    # Warning removido - será tratado onde a função é chamada
                     return None
                 # Ler CNPJ como string para preservar zeros à esquerda
                 df_vip['CNPJ'] = df_vip['CNPJ'].astype(str)
                 df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
-                st.success(f"✅ Dados VIP carregados do SharePoint: {len(df_vip)} registros")
+                # Toast removido - será exibido onde a função é chamada
                 return df_vip
          
             # FALLBACK: Tentar múltiplos caminhos locais
@@ -627,10 +626,10 @@ class DataManager:
                 # Garantir que CNPJ seja string e normalizar
                 df_vip['CNPJ'] = df_vip['CNPJ'].astype(str)
                 df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
-                st.success(f"✅ Dados VIP carregados (local): {len(df_vip)} registros")
+                # Toast removido - será exibido onde a função é chamada
                 return df_vip
             else:
-                st.warning(f"Arquivo VIP normalizado não encontrado em nenhum dos caminhos: {caminhos_possiveis}")
+                # Warning removido - será tratado onde a função é chamada
                 return None
         except Exception as e:
             st.warning(f"Erro ao carregar arquivo VIP: {e}")
@@ -904,7 +903,7 @@ class ChartManager:
             height=500,  # Aumentado tamanho
             margin=dict(l=40, r=40, t=40, b=40)  # Ajustado margens
         )
-        st.plotly_chart(fig, width='stretch', config={'displayModeBar': True})
+        st.plotly_chart(fig, width='stretch')
     @staticmethod
     def criar_grafico_top_labs(df: pd.DataFrame, top_n: int = 10):
         """Cria gráfico dos laboratórios em risco prioritários - Atualizado layout."""
@@ -959,7 +958,7 @@ class ChartManager:
             height=500,  # Aumentado
             margin=dict(l=40, r=40, t=40, b=100)  # Ajustado para evitar corte
         )
-        st.plotly_chart(fig, width='stretch', config={'displayModeBar': True})
+        st.plotly_chart(fig, width='stretch')
     @staticmethod
     def criar_grafico_media_diaria(df: pd.DataFrame, lab_selecionado: str = None):
         """Cria gráfico de média diária por mês - Atualizado layout e bugs."""
@@ -1009,7 +1008,7 @@ class ChartManager:
                     font=dict(size=14)  # Fonte maior
                 )
              
-                st.plotly_chart(fig, width='stretch', config={'displayModeBar': True})
+                st.plotly_chart(fig, width='stretch')
     @staticmethod
     def criar_grafico_coletas_por_dia(df: pd.DataFrame, lab_selecionado: str = None):
         """Cria gráfico de coletas por dia do mês (0-31) - Corrigido zeros inconsistentes."""
@@ -1098,7 +1097,7 @@ class ChartManager:
                     font=dict(size=14)  # Fonte maior
                 )
              
-                st.plotly_chart(fig, width='stretch', config={'displayModeBar': True})
+                st.plotly_chart(fig, width='stretch')
     @staticmethod
     def criar_grafico_media_dia_semana(df: pd.DataFrame, lab_selecionado: str = None, filtros: dict = None):
         """Cria gráfico de distribuição de coletas por dia da semana baseado em dados mensais - Corrigido porcentagens."""
@@ -1222,7 +1221,7 @@ class ChartManager:
                 annotation_text=f"Média diária: {media_diaria:.0f} coletas",
                 annotation_position="top right"
             )
-            st.plotly_chart(fig, width='stretch', config={'displayModeBar': True})
+            st.plotly_chart(fig, width='stretch')
             # Métricas adicionais
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -1335,7 +1334,7 @@ class ChartManager:
                     autosize=True,  # Responsivo
                     showlegend=True
                 )
-                st.plotly_chart(fig, width='stretch', config={'displayModeBar': True}, key=f"evolucao_mensal_lab_{chart_key}")
+                st.plotly_chart(fig, width='stretch', key=f"evolucao_mensal_lab_{chart_key}")
         else:
             # Gráfico agregado
             valores_agregados = [df[col].sum() for col in colunas_meses]
@@ -1360,7 +1359,7 @@ class ChartManager:
                 margin=dict(l=60, r=60, t=60, b=80),  # Margens aumentadas
                 autosize=True  # Responsivo
             )
-            st.plotly_chart(fig, width='stretch', config={'displayModeBar': True}, key=f"evolucao_mensal_agregado_{chart_key}")
+            st.plotly_chart(fig, width='stretch', key=f"evolucao_mensal_agregado_{chart_key}")
 class UIManager:
     """Gerenciador da interface do usuário - Atualizado com tabs."""
     @staticmethod
@@ -1728,6 +1727,12 @@ class ReportManager:
             mime="text/markdown",
             key="download_relatorio_mensal"
         )
+def show_toast_once(message: str, key: str):
+    """Mostra um toast apenas uma vez por sessão."""
+    if key not in st.session_state:
+        st.toast(message)
+        st.session_state[key] = True
+
 def main():
     """Função principal do dashboard v2.0 - Atualizado com tabs e navegação."""
     # ============================================
@@ -1758,7 +1763,7 @@ def main():
             st.error("❌ Não foi possível carregar os dados. Execute o gerador de dados primeiro.")
             return
         df = DataManager.preparar_dados(df_raw)
-        st.success(f"✅ Dados carregados: {len(df):,} laboratórios")
+        show_toast_once(f"✅ Dados carregados: {len(df):,} laboratórios", "dados_carregados")
     # Indicador de última atualização
     if not df.empty and 'Data_Analise' in df.columns:
         ultima_atualizacao = df['Data_Analise'].max()
@@ -1793,7 +1798,7 @@ def main():
     # Botão de refresh
     if st.sidebar.button("🔄 Atualizar Dados", help="Limpar cache e recarregar dados"):
         st.cache_data.clear()
-        st.success("✅ Cache limpo! Os dados serão recarregados automaticamente.")
+        st.toast("✅ Cache limpo! Os dados serão recarregados automaticamente.")
     # Seção de relatórios na sidebar
     st.sidebar.markdown("---")
     st.sidebar.markdown('<div class="sidebar-header"><h3>📅 Relatórios</h3></div>', unsafe_allow_html=True)
@@ -2203,7 +2208,7 @@ def main():
                         if not lab_encontrado.empty:
                             if len(lab_encontrado) == 1:
                                 lab_final = lab_encontrado.iloc[0]['Nome_Fantasia_PCL']
-                                st.success(f"✅ Laboratório encontrado: {lab_final}")
+                                st.toast(f"✅ Laboratório encontrado: {lab_final}")
                             else:
                                 # Múltiplos resultados - mostrar opções
                                 st.info(f"🔍 Encontrados {len(lab_encontrado)} laboratórios. Selecione um:")
@@ -2571,7 +2576,7 @@ def main():
                 # Botão para limpar filtro automático
                 if st.button("🔄 Mostrar Todas as Redes", key="limpar_filtro_auto", help="Mostrar laboratórios de todas as redes"):
                     st.session_state['rede_lab_pesquisado'] = None
-                    st.success("✅ Filtro de rede limpo! Todas as redes serão exibidas.")
+                    st.toast("✅ Filtro de rede limpo! Todas as redes serão exibidas.")
             else:
                 # Seleção manual de rede
                 rede_filtro = st.selectbox(
@@ -3071,7 +3076,7 @@ def main():
                     )
                     fig_ranking.update_traces(texttemplate='%{text:.0f}', textposition='outside')
                     fig_ranking.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
-                    st.plotly_chart(fig_ranking, width='stretch', config={'displayModeBar': True})
+                    st.plotly_chart(fig_ranking, width='stretch')
                     # Tabela detalhada
                     # Adicionar ranking para volume_por_rede
                     volume_por_rede_display = volume_por_rede.round(2).copy()
@@ -3114,7 +3119,7 @@ def main():
                             )
                             fig_perf.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
                             fig_perf.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
-                            st.plotly_chart(fig_perf, width='stretch', config={'displayModeBar': True})
+                            st.plotly_chart(fig_perf, width='stretch')
                         with col2:
                             # Scatter plot: Volume vs Performance
                             fig_scatter = px.scatter(
@@ -3127,7 +3132,7 @@ def main():
                                 labels={'Volume_Total': 'Volume Total', 'Variacao_Media': 'Variação Média %'}
                             )
                             fig_scatter.update_layout(height=500, margin=dict(l=40, r=40, t=40, b=40))
-                            st.plotly_chart(fig_scatter, width='stretch', config={'displayModeBar': True})
+                            st.plotly_chart(fig_scatter, width='stretch')
                         # Tabela de performance
                         st.dataframe(
                             perf_rede.round(2),
@@ -3162,7 +3167,7 @@ def main():
                         )
                         fig_risco.update_traces(texttemplate='%{text:.1f}', textposition='outside')
                         fig_risco.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
-                        st.plotly_chart(fig_risco, width='stretch', config={'displayModeBar': True})
+                        st.plotly_chart(fig_risco, width='stretch')
                         # Distribuição de labs por nível de risco e rede
                         col1, col2 = st.columns(2)
                         with col1:
@@ -3178,7 +3183,7 @@ def main():
                                 color_continuous_scale='Reds'
                             )
                             fig_alto.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
-                            st.plotly_chart(fig_alto, width='stretch', config={'displayModeBar': True})
+                            st.plotly_chart(fig_alto, width='stretch')
                         with col2:
                             # Status de risco por rede
                             risco_status = df_rede_filtrado.groupby(['Rede', 'Status_Risco']).size().reset_index(name='Qtd')
@@ -3191,7 +3196,7 @@ def main():
                                 color_discrete_map={'Alto': '#d62728', 'Médio': '#ff7f0e', 'Baixo': '#2ca02c', 'Inativo': '#9467bd'}
                             )
                             fig_status.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
-                            st.plotly_chart(fig_status, width='stretch', config={'displayModeBar': True})
+                            st.plotly_chart(fig_status, width='stretch')
                         # Adicionar indicadores de risco às redes de alto risco
                         risco_rede_display = risco_rede.copy()
                         # Função para indicadores de risco em análise por risco
@@ -3440,7 +3445,7 @@ def main():
                                 color_continuous_scale='Blues'
                             )
                             fig_sunburst.update_layout(height=500, margin=dict(l=40, r=40, t=40, b=40))
-                            st.plotly_chart(fig_sunburst, width='stretch', config={'displayModeBar': True})
+                            st.plotly_chart(fig_sunburst, width='stretch')
                         else:
                             st.info("ℹ️ Não há dados suficientes com volume positivo para gerar o gráfico hierárquico.")
             else:
@@ -3691,7 +3696,7 @@ def main():
                              
                                 if os.path.exists(os.path.join(OUTPUT_DIR, VIP_CSV_FILE)):
                                     shutil.copy2(os.path.join(OUTPUT_DIR, VIP_CSV_FILE), backup_path)
-                                    st.success(f"✅ Backup criado: {backup_path}")
+                                    st.toast(f"✅ Backup criado: {backup_path}")
                             except Exception as e:
                                 st.warning(f"⚠️ Erro ao criar backup: {e}")
                      
@@ -3738,7 +3743,7 @@ def main():
                             # Limpar cache
                             DataManager.carregar_dados_vip.clear()
                          
-                            st.success(f"✅ Laboratório VIP adicionado com sucesso!")
+                            st.toast(f"✅ Laboratório VIP adicionado com sucesso!")
                             st.success(f"📄 CNPJ: {cnpj_novo}")
                             st.success(f"🏥 Nome: {nome_fantasia}")
                          
@@ -3902,7 +3907,7 @@ def main():
                                          
                                             if os.path.exists(os.path.join(OUTPUT_DIR, VIP_CSV_FILE)):
                                                 shutil.copy2(os.path.join(OUTPUT_DIR, VIP_CSV_FILE), backup_path)
-                                                st.success(f"✅ Backup criado: {backup_path}")
+                                                st.toast(f"✅ Backup criado: {backup_path}")
                                         except Exception as e:
                                             st.warning(f"⚠️ Erro ao criar backup: {e}")
                                  
@@ -3941,7 +3946,7 @@ def main():
                                         # Limpar cache
                                         DataManager.carregar_dados_vip.clear()
                                      
-                                        st.success(f"✅ Laboratório VIP atualizado com sucesso!")
+                                        st.toast(f"✅ Laboratório VIP atualizado com sucesso!")
                                         st.success(f"📝 {len(alteracoes)} campo(s) alterado(s)")
                                      
                                         # Mostrar resumo das alterações
@@ -4048,7 +4053,7 @@ def main():
                         try:
                             caminho_export = history_manager.exportar_historico_csv()
                             if caminho_export:
-                                st.success(f"✅ Histórico exportado: {caminho_export}")
+                                st.toast(f"✅ Histórico exportado: {caminho_export}")
                         except Exception as e:
                             st.error(f"❌ Erro ao exportar histórico: {e}")
                 else:

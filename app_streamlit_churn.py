@@ -765,6 +765,8 @@ class RiskEngine:
             risco = "🟠 Moderado"
         elif (((hoje < 0.50 * mm7) or (d1 > 0 and hoje < 0.60 * d1)) and (hoje < 0.70 * mm30)):
             risco = "🔴 Alto"
+        if d1 > 0 and hoje <= 0.60 * d1:
+            risco = "🔴 Alto"
         if m["zeros_consec"] >= 7 or m["quedas50_consec"] >= 3:
             risco = "⚫ Crítico"
         if dow > 0 and abs(hoje - dow) / dow <= 0.15 and risco in {"🟡 Atenção", "🟠 Moderado"}:
@@ -809,6 +811,18 @@ class VIPManager:
                 'email': row.get('Email', '')
             }
         return None
+def _formatar_df_exibicao(df: pd.DataFrame) -> pd.DataFrame:
+    """Padroniza exibição: números sem NaN/None (0), textos como '—'."""
+    if df is None or df.empty:
+        return df
+    df_fmt = df.copy()
+    for col in df_fmt.columns:
+        if pd.api.types.is_numeric_dtype(df_fmt[col]):
+            df_fmt[col] = pd.to_numeric(df_fmt[col], errors='coerce').fillna(0)
+        else:
+            df_fmt[col] = df_fmt[col].astype(object)
+            df_fmt[col] = df_fmt[col].where(df_fmt[col].notna(), '—')
+    return df_fmt
 class FilterManager:
     """Gerenciador de filtros da interface."""
     def __init__(self):
@@ -1299,9 +1313,9 @@ class ChartManager:
                     paper_bgcolor='rgba(0,0,0,0)'
                 )
                 
-                # Adicionar anotação explicativa
+                # Adicionar anotação explicativa (dica persistente)
                 fig.add_annotation(
-                    text="💡 Clique nos meses na legenda para mostrar/ocultar linhas e comparar visualmente",
+                    text="💡 Dica: dê duplo clique no mês na legenda para focar apenas aquela série. Clique simples mostra/oculta linhas.",
                     xref="paper", yref="paper",
                     x=0.5, y=-0.25,
                     showarrow=False,
@@ -1430,7 +1444,7 @@ class ChartManager:
             max_coletas = max(item['coletas'] for item in dados_grafico)
             min_coletas = min(item['coletas'] for item in dados_grafico)
             variacao = ((max_coletas - min_coletas) / max_coletas * 100) if max_coletas > 0 else 0
-            st.metric("📊 Variação Semanal", f"{variacao:.1f}%", "diferença máxima")
+            st.metric("📊 Variação (forte vs fraco)", f"{variacao:.1f}%", "forte vs fraco")
         
         # Debug removido após validação dos percentuais
 
@@ -1559,9 +1573,9 @@ class ChartManager:
             with col3:
                 variacao_semanal = (df_semana['Coletas_Reais'].max() - df_semana['Coletas_Reais'].min()) / df_semana['Coletas_Reais'].max() * 100 if df_semana['Coletas_Reais'].max() > 0 else 0
                 st.metric(
-                    "📊 Variação Semanal",
+                    "📊 Variação (forte vs fraco)",
                     f"{variacao_semanal:.1f}%",
-                    "diferença máxima"
+                    "forte vs fraco"
                 )
             # Explicação metodológica
             with st.expander("ℹ️ Sobre Esta Análise", expanded=False):
@@ -1789,6 +1803,12 @@ class MetricasAvancadas:
         delta_mm7 = round(float(delta_mm7_val), 1) if pd.notna(delta_mm7_val) else None
         delta_d1_val = lab.get('Delta_D1', None)
         delta_d1 = round(float(delta_d1_val), 1) if pd.notna(delta_d1_val) else None
+        mm7_val = lab.get('MM7', None)
+        mm30_val = lab.get('MM30', None)
+        delta_mm30_val = lab.get('Delta_MM30', None)
+        mm7 = round(float(mm7_val), 1) if pd.notna(mm7_val) else None
+        mm30 = round(float(mm30_val), 1) if pd.notna(mm30_val) else None
+        delta_mm30 = round(float(delta_mm30_val), 1) if pd.notna(delta_mm30_val) else None
         risco_diario = lab.get('Risco_Diario', 'N/A')
         if pd.isna(risco_diario):
             risco_diario = 'N/A'
@@ -1801,6 +1821,9 @@ class MetricasAvancadas:
             'vol_d1': vol_d1,
             'delta_mm7': delta_mm7,
             'delta_d1': delta_d1,
+            'mm7': mm7,
+            'mm30': mm30,
+            'delta_mm30': delta_mm30,
             'agudo': agudo,
             'cronico': cronico,
             'dias_sem_coleta': int(dias_sem_coleta),
@@ -2146,11 +2169,16 @@ def main():
                     criticos = df_filtrado[df_filtrado['Risco_Diario'] == '⚫ Crítico'].copy()
                     if not criticos.empty:
                         st.error(f"⚠️ {len(criticos)} laboratório(s) em risco **CRÍTICO** — intervenção imediata necessária.")
-                        colunas_alerta = ['Nome_Fantasia_PCL', 'Estado', 'Vol_Hoje', 'Vol_D1', 'Delta_MM7', 'Dias_Sem_Coleta']
+                        colunas_alerta = [
+                            'Nome_Fantasia_PCL', 'Estado',
+                            'Vol_Hoje', 'Delta_MM7', 'MM7',
+                            'Vol_D1', 'Delta_D1',
+                            'Dias_Sem_Coleta'
+                        ]
                         colunas_alerta = [c for c in colunas_alerta if c in criticos.columns]
                         if colunas_alerta:
                             st.dataframe(
-                                criticos[colunas_alerta].sort_values('Vol_Hoje', ascending=True).head(10),
+                                _formatar_df_exibicao(criticos[colunas_alerta].sort_values('Vol_Hoje', ascending=True).head(10)),
                                 use_container_width=True,
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
@@ -2176,11 +2204,16 @@ def main():
                         st.warning(
                             f"🔻 {len(quedas_relevantes)} laboratório(s) com queda ≥50% vs MM7 e risco elevado — priorize contato de recuperação."
                         )
-                        colunas_queda = ['Nome_Fantasia_PCL', 'Estado', 'Vol_Hoje', 'Vol_D1', 'Delta_MM7', 'Risco_Diario', 'Recuperacao']
+                        colunas_queda = [
+                            'Nome_Fantasia_PCL', 'Estado',
+                            'Vol_Hoje', 'Delta_MM7', 'MM7',
+                            'Vol_D1', 'Delta_D1',
+                            'Risco_Diario', 'Recuperacao'
+                        ]
                         colunas_queda = [c for c in colunas_queda if c in quedas_relevantes.columns]
                         if colunas_queda:
                             st.dataframe(
-                                quedas_relevantes[colunas_queda].sort_values(['Delta_MM7', 'Vol_Hoje']).head(15),
+                                _formatar_df_exibicao(quedas_relevantes[colunas_queda].sort_values(['Delta_MM7', 'Vol_Hoje']).head(15)),
                                 use_container_width=True,
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
@@ -2190,6 +2223,40 @@ def main():
                                     "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
                                     "Risco_Diario": st.column_config.TextColumn("Risco"),
                                     "Recuperacao": st.column_config.CheckboxColumn("Em Recuperação")
+                                },
+                                hide_index=True
+                            )
+
+                if {'Risco_Diario', 'Delta_MM7'}.issubset(df_filtrado.columns):
+                    moderados = df_filtrado[
+                        (df_filtrado['Risco_Diario'] == '🟠 Moderado') & df_filtrado['Delta_MM7'].notna()
+                    ].copy()
+                    if not moderados.empty:
+                        moderados = moderados.sort_values('Delta_MM7').head(10)
+                        st.markdown("#### 🟠 Risco Moderado — Top 10 quedas vs MM7")
+                        st.caption("Ordenado por maior queda percentual (ΔMM7) e limitado aos 10 piores casos.")
+                        colunas_moderado = [
+                            'Nome_Fantasia_PCL', 'Estado',
+                            'Vol_Hoje', 'Delta_MM7', 'MM7',
+                            'Vol_D1', 'Delta_D1',
+                            'MM30', 'Delta_MM30',
+                            'Dias_Sem_Coleta'
+                        ]
+                        colunas_moderado = [c for c in colunas_moderado if c in moderados.columns]
+                        if colunas_moderado:
+                            st.dataframe(
+                                _formatar_df_exibicao(moderados[colunas_moderado]),
+                                use_container_width=True,
+                                column_config={
+                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
+                                    "Estado": st.column_config.TextColumn("UF"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.1f"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
+                                    "Delta_MM30": st.column_config.NumberColumn("Δ vs MM30", format="%.1f%%"),
+                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta")
                                 },
                                 hide_index=True
                             )
@@ -2204,7 +2271,7 @@ def main():
                         colunas_zero = [c for c in colunas_zero if c in dois_dias_sem_coleta.columns]
                         if colunas_zero:
                             st.dataframe(
-                                dois_dias_sem_coleta[colunas_zero].head(15),
+                                _formatar_df_exibicao(dois_dias_sem_coleta[colunas_zero].head(15)),
                                 use_container_width=True,
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
@@ -2245,12 +2312,14 @@ def main():
                         if not quedas_diarias.empty:
                             quedas_diarias = quedas_diarias.sort_values('Delta_MM7').head(10)
                             colunas_quedas = [
-                                'Nome_Fantasia_PCL', 'Estado', 'Vol_Hoje', 'Vol_D1', 'MM7',
-                                'Delta_MM7', 'Delta_D1', 'Risco_Diario', 'Dias_Sem_Coleta'
+                                'Nome_Fantasia_PCL', 'Estado',
+                                'Vol_Hoje', 'Delta_MM7', 'MM7',
+                                'Vol_D1', 'Delta_D1',
+                                'Risco_Diario', 'Dias_Sem_Coleta'
                             ]
                             colunas_quedas = [c for c in colunas_quedas if c in quedas_diarias.columns]
                             st.dataframe(
-                                quedas_diarias[colunas_quedas],
+                                _formatar_df_exibicao(quedas_diarias[colunas_quedas]),
                                 use_container_width=True,
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
@@ -2265,7 +2334,7 @@ def main():
                                 },
                                 hide_index=True
                             )
-                        else:
+                        if quedas_diarias.empty:
                             st.success("Nenhuma queda relevante detectada hoje.")
                     else:
                         st.warning("⚠️ Colunas necessárias para a análise de quedas (Δ vs MM7) não encontradas.")
@@ -2278,12 +2347,14 @@ def main():
                         if not altas_diarias.empty:
                             altas_diarias = altas_diarias.sort_values('Delta_MM7', ascending=False).head(10)
                             colunas_altas = [
-                                'Nome_Fantasia_PCL', 'Estado', 'Vol_Hoje', 'Vol_D1', 'MM7',
-                                'Delta_MM7', 'Delta_D1', 'Risco_Diario', 'Recuperacao'
+                                'Nome_Fantasia_PCL', 'Estado',
+                                'Vol_Hoje', 'Delta_MM7', 'MM7',
+                                'Vol_D1', 'Delta_D1',
+                                'Risco_Diario', 'Recuperacao'
                             ]
                             colunas_altas = [c for c in colunas_altas if c in altas_diarias.columns]
                             st.dataframe(
-                                altas_diarias[colunas_altas],
+                                _formatar_df_exibicao(altas_diarias[colunas_altas]),
                                 use_container_width=True,
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
@@ -2307,14 +2378,29 @@ def main():
                 if 'Recuperacao' in df_filtrado.columns:
                     recuperacoes = df_filtrado[(df_filtrado['Recuperacao'] == True) & df_filtrado['Delta_MM7'].notna()].copy()
                     if not recuperacoes.empty:
+                        # Recalcular Δ vs MM7 para garantir fórmula consistente: (Hoje - MM7) / MM7
+                        for col in ['Vol_Hoje', 'MM7']:
+                            recuperacoes[col] = pd.to_numeric(recuperacoes[col], errors='coerce')
+                        delta_mm7_calc = (
+                            (recuperacoes['Vol_Hoje'] - recuperacoes['MM7'])
+                            .where(recuperacoes['MM7'].notna() & (recuperacoes['MM7'] != 0))
+                        )
+                        recuperacoes['Delta_MM7'] = (
+                            (delta_mm7_calc / recuperacoes['MM7'])
+                            .mul(100)
+                            .round(1)
+                            .fillna(recuperacoes['Delta_MM7'])
+                        )
                         recuperacoes = recuperacoes.sort_values('Delta_MM7', ascending=False)
                         colunas_recuperacao = [
-                            'Nome_Fantasia_PCL', 'Estado', 'Vol_Hoje', 'Vol_D1', 'MM7',
-                            'Delta_MM7', 'Delta_D1', 'Risco_Diario', 'Dias_Sem_Coleta'
+                            'Nome_Fantasia_PCL', 'Estado',
+                            'Vol_Hoje', 'Delta_MM7', 'MM7',
+                            'Vol_D1', 'Delta_D1',
+                            'Risco_Diario', 'Dias_Sem_Coleta'
                         ]
                         colunas_recuperacao = [c for c in colunas_recuperacao if c in recuperacoes.columns]
                         st.dataframe(
-                            recuperacoes[colunas_recuperacao].head(10),
+                            _formatar_df_exibicao(recuperacoes[colunas_recuperacao].head(10)),
                             use_container_width=True,
                             column_config={
                                 "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
@@ -2348,7 +2434,7 @@ def main():
                 colunas_resumo = ['Nome_Fantasia_PCL', 'Estado', 'Representante_Nome',
                                   'Vol_Hoje', 'Delta_MM7', 'Risco_Diario']
                 st.dataframe(
-                    labs_em_risco[colunas_resumo],
+                    _formatar_df_exibicao(labs_em_risco[colunas_resumo]),
                     use_container_width=True,
                     height=300,
                     column_config={
@@ -2609,111 +2695,107 @@ def main():
             </p>
         </div>
         """, unsafe_allow_html=True)
-        with st.container():
-            st.markdown('<div class="dataframe-container" style="padding: 1.5rem;">', unsafe_allow_html=True)
-            # Seleção de laboratório específico
-            if not df_filtrado.empty:
-                # Layout melhorado com 3 colunas - ajustado para melhor alinhamento
-                col1, col2, col3 = st.columns([4, 1.5, 2.5])
-                with col1:
-                    # Campo de busca aprimorado
-                    busca_lab = st.text_input(
-                        "🔍 Buscar por CNPJ ou Nome:",
-                        placeholder="Ex: 51.865.434/0012-48 ou BIOLOGICO...",
-                        help="Digite CNPJ (com ou sem pontos/tracos) ou nome do laboratório/razão social",
-                        key="busca_avancada"
-                    )
-                with col2:
-                    # Espaçamento para alinhamento
-                    st.write("") # Espaço vazio para alinhar com o campo de texto
-                    # Botão de busca rápida
-                    buscar_btn = st.button("🔎 Buscar", type="primary", use_container_width=True)
-                with col3:
-                    # Seleção por dropdown como alternativa
-                    lab_selecionado = st.selectbox(
-                        "📋 Lista Rápida:",
-                        options=[""] + sorted(df_filtrado['Nome_Fantasia_PCL'].unique()),
-                        help="Ou selecione um laboratório da lista completa",
-                        key="lista_rapida"
-                    )
-                # Informações de ajuda - Atualizado espaçamento dica busca
-                with st.expander("💡 Dicas de Busca", expanded=False):
-                    st.markdown("""
-                    **🔢 Para CNPJ:**
-                    - Apenas números: `51865434001248`
-                    - Com formatação: `51.865.434/0012-48`
-                    **🏥 Para Nome:**
-                    - Nome fantasia ou razão social
-                    - Busca parcial e sem distinção de maiúsculas/minúsculas
-                    **📊 Resultados:**
-                    - 1 resultado: Selecionado automaticamente
-                    - Múltiplos: Lista para escolher o correto
-                    """)
-                # Estado da busca
-                lab_final = None
-                # Verificar se há busca ativa ou laboratório selecionado
-                busca_ativa = buscar_btn or (busca_lab and len(busca_lab.strip()) > 2)
-                tem_selecao = lab_selecionado and lab_selecionado != ""
-                if busca_ativa or tem_selecao:
-                    # Lógica de busca aprimorada
-                    if busca_ativa and busca_lab:
-                        busca_normalizada = busca_lab.strip()
-                        # Verificar se é CNPJ (com ou sem formatação)
-                        cnpj_limpo = ''.join(filter(str.isdigit, busca_normalizada))
-                        if len(cnpj_limpo) >= 8: # CNPJ válido tem pelo menos 8 dígitos
-                            # Buscar por CNPJ normalizado
-                            df_filtrado['CNPJ_Normalizado_Busca'] = df_filtrado['CNPJ_PCL'].apply(
-                                lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
+        # Seleção de laboratório específico
+        if not df_filtrado.empty:
+            # Layout melhorado com 3 colunas - ajustado para melhor alinhamento
+            col1, col2, col3 = st.columns([4, 1.5, 2.5])
+            with col1:
+                # Campo de busca aprimorado
+                busca_lab = st.text_input(
+                    "🔎 Buscar",
+                    placeholder="CNPJ (com/sem formatação) ou Nome do laboratório",
+                    help="Digite CNPJ (com ou sem pontos/traços) ou nome do laboratório/razão social",
+                    key="busca_avancada"
+                )
+            with col2:
+                # Botão de busca rápida
+                buscar_btn = st.button("🔎 Buscar", type="primary", use_container_width=True)
+            with col3:
+                # Seleção por dropdown como alternativa
+                lab_selecionado = st.selectbox(
+                    "📋 Lista Rápida:",
+                    options=[""] + sorted(df_filtrado['Nome_Fantasia_PCL'].unique()),
+                    help="Ou selecione um laboratório da lista completa",
+                    key="lista_rapida"
+                )
+            # Informações de ajuda - Atualizado espaçamento dica busca
+            with st.expander("💡 Dicas de Busca", expanded=False):
+                st.markdown("""
+                **🔢 Para CNPJ:**
+                - Apenas números: `51865434001248`
+                - Com formatação: `51.865.434/0012-48`
+                **🏥 Para Nome:**
+                - Nome fantasia ou razão social
+                - Busca parcial e sem distinção de maiúsculas/minúsculas
+                **📊 Resultados:**
+                - 1 resultado: Selecionado automaticamente
+                - Múltiplos: Lista para escolher o correto
+                """)
+            # Estado da busca
+            lab_final = None
+            # Verificar se há busca ativa ou laboratório selecionado
+            busca_ativa = buscar_btn or (busca_lab and len(busca_lab.strip()) > 2)
+            tem_selecao = lab_selecionado and lab_selecionado != ""
+            if busca_ativa or tem_selecao:
+                # Lógica de busca aprimorada
+                if busca_ativa and busca_lab:
+                    busca_normalizada = busca_lab.strip()
+                    # Verificar se é CNPJ (com ou sem formatação)
+                    cnpj_limpo = ''.join(filter(str.isdigit, busca_normalizada))
+                    if len(cnpj_limpo) >= 8: # CNPJ válido tem pelo menos 8 dígitos
+                        # Buscar por CNPJ normalizado
+                        df_filtrado['CNPJ_Normalizado_Busca'] = df_filtrado['CNPJ_PCL'].apply(
+                            lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
+                        )
+                        lab_encontrado = df_filtrado[df_filtrado['CNPJ_Normalizado_Busca'].str.startswith(cnpj_limpo)]
+                    else:
+                        # Buscar por nome (case insensitive e parcial) - apenas nome fantasia e razão social
+                        lab_encontrado = df_filtrado[
+                            df_filtrado['Nome_Fantasia_PCL'].str.contains(busca_normalizada, case=False, na=False) |
+                            df_filtrado['Razao_Social_PCL'].str.contains(busca_normalizada, case=False, na=False)
+                        ]
+                    if not lab_encontrado.empty:
+                        if len(lab_encontrado) == 1:
+                            lab_final = lab_encontrado.iloc[0]['Nome_Fantasia_PCL']
+                            st.toast(f"✅ Laboratório encontrado: {lab_final}")
+                        else:
+                            # Múltiplos resultados - mostrar opções
+                            st.info(f"🔍 Encontrados {len(lab_encontrado)} laboratórios. Selecione um:")
+                            # Criar lista de opções com mais detalhes
+                            opcoes = []
+                            for _, row in lab_encontrado.head(10).iterrows():
+                                nome = row['Nome_Fantasia_PCL']
+                                cidade = row.get('Cidade', 'N/A')
+                                estado = row.get('Estado', 'N/A')
+                                cnpj = row.get('CNPJ_PCL', 'N/A')
+                                opcao = f"{nome} - {cidade}/{estado} (CNPJ: {cnpj})"
+                                opcoes.append(opcao)
+                            lab_selecionado_multiplo = st.selectbox(
+                                "Selecione o laboratório correto:",
+                                options=[""] + opcoes,
+                                key="multiplo_resultados"
                             )
-                            lab_encontrado = df_filtrado[df_filtrado['CNPJ_Normalizado_Busca'].str.startswith(cnpj_limpo)]
-                        else:
-                            # Buscar por nome (case insensitive e parcial) - apenas nome fantasia e razão social
-                            lab_encontrado = df_filtrado[
-                                df_filtrado['Nome_Fantasia_PCL'].str.contains(busca_normalizada, case=False, na=False) |
-                                df_filtrado['Razao_Social_PCL'].str.contains(busca_normalizada, case=False, na=False)
-                            ]
-                        if not lab_encontrado.empty:
-                            if len(lab_encontrado) == 1:
-                                lab_final = lab_encontrado.iloc[0]['Nome_Fantasia_PCL']
-                                st.toast(f"✅ Laboratório encontrado: {lab_final}")
-                            else:
-                                # Múltiplos resultados - mostrar opções
-                                st.info(f"🔍 Encontrados {len(lab_encontrado)} laboratórios. Selecione um:")
-                                # Criar lista de opções com mais detalhes
-                                opcoes = []
-                                for _, row in lab_encontrado.head(10).iterrows():
-                                    nome = row['Nome_Fantasia_PCL']
-                                    cidade = row.get('Cidade', 'N/A')
-                                    estado = row.get('Estado', 'N/A')
-                                    cnpj = row.get('CNPJ_PCL', 'N/A')
-                                    opcao = f"{nome} - {cidade}/{estado} (CNPJ: {cnpj})"
-                                    opcoes.append(opcao)
-                                lab_selecionado_multiplo = st.selectbox(
-                                    "Selecione o laboratório correto:",
-                                    options=[""] + opcoes,
-                                    key="multiplo_resultados"
-                                )
-                                if lab_selecionado_multiplo and lab_selecionado_multiplo != "":
-                                    # Extrair nome do laboratório da opção selecionada
-                                    nome_selecionado = lab_selecionado_multiplo.split(" - ")[0]
-                                    lab_final = nome_selecionado
-                        else:
-                            st.warning("⚠️ Nenhum laboratório encontrado com os critérios informados")
-                    elif tem_selecao:
-                        # Laboratório selecionado diretamente da lista
-                        lab_final = lab_selecionado
-                    # Renderizar dados do laboratório encontrado/selecionado
-                    if lab_final:
-                        st.markdown("---") # Separador antes dos dados
-                        # Verificar se é VIP
-                        df_vip = DataManager.carregar_dados_vip()
-                        lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
-                        info_vip = None
-                        if not lab_data.empty and df_vip is not None:
-                            cnpj_lab = lab_data.iloc[0].get('CNPJ_PCL', '')
-                            info_vip = VIPManager.buscar_info_vip(cnpj_lab, df_vip)
-                        # Container principal para informações do laboratório
-                        st.markdown(f"""
+                            if lab_selecionado_multiplo and lab_selecionado_multiplo != "":
+                                # Extrair nome do laboratório da opção selecionada
+                                nome_selecionado = lab_selecionado_multiplo.split(" - ")[0]
+                                lab_final = nome_selecionado
+                    else:
+                        st.warning("⚠️ Nenhum laboratório encontrado com os critérios informados")
+                elif tem_selecao:
+                    # Laboratório selecionado diretamente da lista
+                    lab_final = lab_selecionado
+                # Renderizar dados do laboratório encontrado/selecionado
+                if lab_final:
+                    st.markdown("---") # Separador antes dos dados
+                    # Verificar se é VIP
+                    df_vip = DataManager.carregar_dados_vip()
+                    lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
+                    info_vip = None
+                    if not lab_data.empty and df_vip is not None:
+                        cnpj_lab = lab_data.iloc[0].get('CNPJ_PCL', '')
+                        info_vip = VIPManager.buscar_info_vip(cnpj_lab, df_vip)
+                    # Container principal para informações do laboratório
+                    st.markdown(f"""
                         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                                     color: white; padding: 2rem; border-radius: 15px;
                                     margin-bottom: 2rem; box-shadow: 0 8px 25px rgba(0,0,0,0.15);">
@@ -2725,22 +2807,22 @@ def main():
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
-                        # Armazenar informações da rede para filtro automático na tabela
-                        if info_vip and 'rede' in info_vip:
-                            st.session_state['rede_lab_pesquisado'] = info_vip['rede']
-                        else:
-                            st.session_state['rede_lab_pesquisado'] = None
-                        # Ficha Técnica Comercial
-                        st.markdown("""
+                    # Armazenar informações da rede para filtro automático na tabela
+                    if info_vip and 'rede' in info_vip:
+                        st.session_state['rede_lab_pesquisado'] = info_vip['rede']
+                    else:
+                        st.session_state['rede_lab_pesquisado'] = None
+                    # Ficha Técnica Comercial
+                    st.markdown("""
                         <div style="background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem;
                                     border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                             <h3 style="margin: 0 0 1rem 0; color: #2c3e50; font-weight: 600; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">
                                 📋 Ficha Técnica Comercial
                             </h3>
                         """, unsafe_allow_html=True)
-                        # Informações de contato e localização
-                        lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
-                        if not lab_data.empty:
+                    # Informações de contato e localização
+                    lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
+                    if not lab_data.empty:
                             lab_info = lab_data.iloc[0]
                          
                             # CNPJ formatado
@@ -2789,9 +2871,9 @@ def main():
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
-                        # Informações VIP se disponível
-                        if info_vip:
-                            st.markdown(f"""
+                    # Informações VIP se disponível
+                    if info_vip:
+                        st.markdown(f"""
                             <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #007bff;">
                                 <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; text-align: center;">
                                     <div>
@@ -2809,11 +2891,11 @@ def main():
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
-                        # Métricas comerciais essenciais
-                        metricas = MetricasAvancadas.calcular_metricas_lab(df_filtrado, lab_final)
-                        if metricas:
-                            # Dados de Performance
-                            st.markdown(f"""
+                    # Métricas comerciais essenciais
+                    metricas = MetricasAvancadas.calcular_metricas_lab(df_filtrado, lab_final)
+                    if metricas:
+                        # Dados de Performance
+                        st.markdown(f"""
                             <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #28a745;">
                                 <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">PERFORMANCE 2025</div>
                                 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; text-align: center;">
@@ -2836,30 +2918,51 @@ def main():
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
-                            # Status e Risco
-                            status_color = "#28a745" if metricas['agudo'] == "Ativo" else "#dc3545"
-                            risco_color = "#28a745" if metricas['dias_sem_coleta'] <= 7 else "#ffc107" if metricas['dias_sem_coleta'] <= 30 else "#dc3545"
-                            risco_diario = metricas.get('risco_diario', 'N/A')
-                            cores_risco = {
-                                '🟢 Normal': '#16A34A',
-                                '🟡 Atenção': '#F59E0B',
-                                '🟠 Moderado': '#FB923C',
-                                '🔴 Alto': '#DC2626',
-                                '⚫ Crítico': '#111827'
-                            }
-                            risco_diario_color = cores_risco.get(risco_diario, "#6c757d")
-                            delta_mm7 = metricas.get('delta_mm7')
-                            if isinstance(delta_mm7, (int, float)):
-                                delta_mm7_color = "#28a745" if delta_mm7 >= 0 else "#dc3545"
-                                delta_mm7_display = f"{delta_mm7:.1f}%"
-                            else:
-                                delta_mm7_color = "#6c757d"
-                                delta_mm7_display = "--"
-                         
-                            st.markdown(f"""
+                        # Status e Risco
+                        status_color = "#28a745" if metricas['agudo'] == "Ativo" else "#dc3545"
+                        risco_color = "#28a745" if metricas['dias_sem_coleta'] <= 7 else "#ffc107" if metricas['dias_sem_coleta'] <= 30 else "#dc3545"
+                        risco_diario = metricas.get('risco_diario', 'N/A')
+                        cores_risco = {
+                            '🟢 Normal': '#16A34A',
+                            '🟡 Atenção': '#F59E0B',
+                            '🟠 Moderado': '#FB923C',
+                            '🔴 Alto': '#DC2626',
+                            '⚫ Crítico': '#111827'
+                        }
+                        risco_diario_color = cores_risco.get(risco_diario, "#6c757d")
+                        delta_mm7 = metricas.get('delta_mm7')
+                        if isinstance(delta_mm7, (int, float)):
+                            delta_mm7_color = "#28a745" if delta_mm7 >= 0 else "#dc3545"
+                            delta_mm7_display = f"{delta_mm7:.1f}%"
+                        else:
+                            delta_mm7_color = "#6c757d"
+                            delta_mm7_display = "--"
+                        mm7_val = metricas.get('mm7')
+                        if isinstance(mm7_val, (int, float)):
+                            mm7_display = f"{mm7_val:.1f}"
+                            mm7_color = "#2563eb"
+                        else:
+                            mm7_display = "--"
+                            mm7_color = "#6c757d"
+                        mm30_val = metricas.get('mm30')
+                        if isinstance(mm30_val, (int, float)):
+                            mm30_display = f"{mm30_val:.1f}"
+                            mm30_color = "#2563eb"
+                        else:
+                            mm30_display = "--"
+                            mm30_color = "#6c757d"
+                        delta_mm30_val = metricas.get('delta_mm30')
+                        if isinstance(delta_mm30_val, (int, float)):
+                            delta_mm30_color = "#28a745" if delta_mm30_val >= 0 else "#dc3545"
+                            delta_mm30_display = f"{delta_mm30_val:.1f}%"
+                        else:
+                            delta_mm30_color = "#6c757d"
+                            delta_mm30_display = "--"
+                     
+                        st.markdown(f"""
                             <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid {risco_color};">
                                 <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">STATUS & RISCO</div>
-                                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; text-align: center;">
+                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; text-align: center;">
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666;">Status Atual</div>
                                         <div style="font-size: 1.1rem; font-weight: bold; color: {status_color};">{metricas['agudo']}</div>
@@ -2876,13 +2979,25 @@ def main():
                                         <div style="font-size: 0.8rem; color: #666;">Δ vs MM7</div>
                                         <div style="font-size: 1.1rem; font-weight: bold; color: {delta_mm7_color};">{delta_mm7_display}</div>
                                     </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">MM7 (Média 7d)</div>
+                                        <div style="font-size: 1.1rem; font-weight: bold; color: {mm7_color};">{mm7_display}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">MM30 (Média 30d)</div>
+                                        <div style="font-size: 1.1rem; font-weight: bold; color: {mm30_color};">{mm30_display}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Δ vs MM30</div>
+                                        <div style="font-size: 1.1rem; font-weight: bold; color: {delta_mm30_color};">{delta_mm30_display}</div>
+                                    </div>
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
-                            # Histórico de Performance - Reorganizado conforme solicitação
-                            # Calcular máxima de coletas histórica (respeitando meses disponíveis)
-                            metricas_evolucao = MetricasAvancadas.calcular_metricas_evolucao(df_filtrado, lab_final)
-                            st.markdown(f"""
+                        # Histórico de Performance - Reorganizado conforme solicitação
+                        # Calcular máxima de coletas histórica (respeitando meses disponíveis)
+                        metricas_evolucao = MetricasAvancadas.calcular_metricas_evolucao(df_filtrado, lab_final)
+                        st.markdown(f"""
                             <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #17a2b8;">
                                 <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">HISTÓRICO DE PERFORMANCE</div>
                                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
@@ -2905,91 +3020,79 @@ def main():
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
-                            st.markdown("</div>", unsafe_allow_html=True)
-                        # Seção de Gráficos com Abas - Refatorado conforme solicitação
-                        st.markdown("""
+                        # Adiciona também os cards de Totais e Comparativos ao bloco de Histórico
+                        st.markdown(f"""
+                        <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #28a745;">
+                            <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">TOTAIS DE COLETAS</div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
+                                <div>
+                                    <div style="font-size: 0.8rem; color: #666;">Total 2024</div>
+                                    <div style="font-size: 1.4rem; font-weight: bold; color: #28a745;">{metricas_evolucao['total_coletas_2024']:,}</div>
+                                </div>
+                                <div>
+                                    <div style="font-size: 0.8rem; color: #666;">Total 2025</div>
+                                    <div style="font-size: 1.4rem; font-weight: bold; color: #007bff;">{metricas_evolucao['total_coletas_2025']:,}</div>
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        variacao_ultimo_vs_media = ((metricas_evolucao['media_ultimo_mes'] - metricas_evolucao['media_2025']) / metricas_evolucao['media_2025'] * 100) if metricas_evolucao['media_2025'] > 0 else 0
+                        percentual_maxima = (metricas_evolucao['media_ultimo_mes'] / metricas_evolucao['max_2025'] * 100) if metricas_evolucao['max_2025'] > 0 else 0
+                        cor_variacao = "#28a745" if variacao_ultimo_vs_media >= 0 else "#dc3545"
+                        cor_percentual = "#28a745" if percentual_maxima >= 80 else "#ffc107" if percentual_maxima >= 50 else "#dc3545"
+                        st.markdown(f"""
+                        <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #6f42c1;">
+                            <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">COMPARATIVOS</div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
+                                <div>
+                                    <div style="font-size: 0.8rem; color: #666;">Último Mês vs Média 2025</div>
+                                    <div style="font-size: 1.2rem; font-weight: bold; color: {cor_variacao};">
+                                        {'+' if variacao_ultimo_vs_media >= 0 else ''}{variacao_ultimo_vs_media:.1f}%
+                                    </div>
+                                    <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {metricas_evolucao['media_2025']:.1f}</div>
+                                </div>
+                                <div>
+                                    <div style="font-size: 0.8rem; color: #666;">Último Mês vs Máxima 2025</div>
+                                    <div style="font-size: 1.2rem; font-weight: bold; color: {cor_percentual};">
+                                        {percentual_maxima:.1f}%
+                                    </div>
+                                    <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {metricas_evolucao['max_2025']:,}</div>
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        # Gráfico de Evolução Mensal abaixo dos comparativos
+                        st.markdown("---")
+                        st.subheader("📈 Evolução Mensal")
+                        ChartManager.criar_grafico_evolucao_mensal(df_filtrado, lab_final, "historico")
+                    st.markdown("</div>", unsafe_allow_html=True)
+                    # Seção de Gráficos com Abas - Refatorado conforme solicitação
+                    st.markdown("""
                         <div style="background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem;
                                     border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                             <h3 style="margin: 0 0 1rem 0; color: #2c3e50; font-weight: 600; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">
                                 📊 Análise Visual Detalhada
                             </h3>
                         """, unsafe_allow_html=True)
-                        
-                        # Criar abas para organizar os gráficos
-                        tab_resumo, tab_distribuicao, tab_media_diaria, tab_coletas_dia = st.tabs([
-                            "📋 Resumo Executivo", "📊 Distribuição por Dia", "📅 Média Diária", "📈 Coletas por Dia"
-                        ])
-                        
-                        with tab_resumo:
-                            st.subheader("📋 Resumo Executivo")
-                            # Calcular métricas de evolução
-                            metricas_evolucao = MetricasAvancadas.calcular_metricas_evolucao(df_filtrado, lab_final)
-                            if metricas_evolucao:
-                                # Primeiro bloco: Totais de Coletas
-                                st.markdown(f"""
-                                <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #28a745;">
-                                    <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">TOTAIS DE COLETAS</div>
-                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
-                                        <div>
-                                            <div style="font-size: 0.8rem; color: #666;">Total 2024</div>
-                                            <div style="font-size: 1.4rem; font-weight: bold; color: #28a745;">{metricas_evolucao['total_coletas_2024']:,}</div>
-                                        </div>
-                                        <div>
-                                            <div style="font-size: 0.8rem; color: #666;">Total 2025</div>
-                                            <div style="font-size: 1.4rem; font-weight: bold; color: #007bff;">{metricas_evolucao['total_coletas_2025']:,}</div>
-                                        </div>
-                                    </div>
-                                </div>
-                                """, unsafe_allow_html=True)
-                                
-                                # Comparativos - Último mês vs Média 2025 e vs Máxima de 2025
-                                variacao_ultimo_vs_media = ((metricas_evolucao['media_ultimo_mes'] - metricas_evolucao['media_2025']) / metricas_evolucao['media_2025'] * 100) if metricas_evolucao['media_2025'] > 0 else 0
-                                percentual_maxima = (metricas_evolucao['media_ultimo_mes'] / metricas_evolucao['max_2025'] * 100) if metricas_evolucao['max_2025'] > 0 else 0
-                                cor_variacao = "#28a745" if variacao_ultimo_vs_media >= 0 else "#dc3545"
-                                cor_percentual = "#28a745" if percentual_maxima >= 80 else "#ffc107" if percentual_maxima >= 50 else "#dc3545"
-                                st.markdown(f"""
-                                <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #6f42c1;">
-                                    <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">COMPARATIVOS</div>
-                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
-                                        <div>
-                                            <div style="font-size: 0.8rem; color: #666;">Último Mês vs Média 2025</div>
-                                            <div style="font-size: 1.2rem; font-weight: bold; color: {cor_variacao};">
-                                                {'+' if variacao_ultimo_vs_media >= 0 else ''}{variacao_ultimo_vs_media:.1f}%
-                                            </div>
-                                            <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {metricas_evolucao['media_2025']:.1f}</div>
-                                        </div>
-                                        <div>
-                                            <div style="font-size: 0.8rem; color: #666;">Último Mês vs Máxima 2025</div>
-                                            <div style="font-size: 1.2rem; font-weight: bold; color: {cor_percentual};">
-                                                {percentual_maxima:.1f}%
-                                            </div>
-                                            <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {metricas_evolucao['max_2025']:,}</div>
-                                        </div>
-                                    </div>
-                                </div>
-                                """, unsafe_allow_html=True)
-                                
-                                # Gráfico de Evolução Mensal integrado no Resumo Executivo
-                                st.markdown("---")
-                                st.subheader("📈 Evolução Mensal")
-                                ChartManager.criar_grafico_evolucao_mensal(df_filtrado, lab_final, "resumo")
-                            else:
-                                st.info("📊 Dados insuficientes para análise de evolução")
-                        
-                        with tab_distribuicao:
-                            st.subheader("📊 Distribuição de Coletas por Dia da Semana")
-                            # Gráfico com destaque maior conforme solicitado
-                            ChartManager.criar_grafico_media_dia_semana_novo(df_filtrado, lab_final, filtros)
-                        
-                        with tab_media_diaria:
-                            st.subheader("📊 Média Diária por Mês")
-                            ChartManager.criar_grafico_media_diaria(df_filtrado, lab_final)
+                    
+                    # Criar abas para organizar os gráficos (Resumo Executivo removido)
+                    tab_distribuicao, tab_media_diaria, tab_coletas_dia = st.tabs([
+                        "📊 Distribuição por Dia", "📅 Média Diária", "📈 Coletas por Dia"
+                    ])
+                    
+                    with tab_distribuicao:
+                        st.subheader("📊 Distribuição de Coletas por Dia da Semana")
+                        # Gráfico com destaque maior conforme solicitado
+                        ChartManager.criar_grafico_media_dia_semana_novo(df_filtrado, lab_final, filtros)
+                    
+                    with tab_media_diaria:
+                        st.subheader("📊 Média Diária por Mês")
+                        ChartManager.criar_grafico_media_diaria(df_filtrado, lab_final)
 
-                        with tab_coletas_dia:
-                            st.subheader("📈 Coletas por Dia do Mês")
-                            ChartManager.criar_grafico_coletas_por_dia(df_filtrado, lab_final)
-                # Fechar container
-                st.markdown('</div>', unsafe_allow_html=True)
+                    with tab_coletas_dia:
+                        st.subheader("📈 Coletas por Dia do Mês")
+                        ChartManager.criar_grafico_coletas_por_dia(df_filtrado, lab_final)
 
         # Seção organizada com tabs para melhor visualização
         st.markdown("""
@@ -3116,10 +3219,16 @@ def main():
         # Configurar colunas da tabela
         colunas_principais = [
             'CNPJ_PCL', 'Nome_Fantasia_PCL', 'Estado', 'Cidade', 'Representante_Nome',
-            'Risco_Diario', 'Dias_Sem_Coleta', 'Variacao_Percentual',
+            'Risco_Diario', 'Dias_Sem_Coleta',
             'Volume_Atual_2025', 'Volume_Maximo_2024', 'Tendencia_Volume',
-            'Vol_Hoje', 'Vol_D1', 'MM7', 'MM30', 'MM90',
-            'Delta_D1', 'Delta_MM7', 'Delta_MM30', 'Delta_MM90'
+            # Pares encadeados: Hoje + ΔHoje vs MM7 (+ MM7 como referência ao lado)
+            'Vol_Hoje', 'Delta_MM7', 'MM7',
+            # Pares encadeados: D-1 + ΔD-1
+            'Vol_D1', 'Delta_D1',
+            # Pares encadeados: MM30 + ΔMM30
+            'MM30', 'Delta_MM30',
+            # Pares encadeados: MM90 + ΔMM90
+            'MM90', 'Delta_MM90'
         ]
 
         # Adicionar colunas de coletas mensais (2024 e 2025)
@@ -3182,18 +3291,14 @@ def main():
                     "Dias Sem Coleta",
                     help="Número de dias sem coleta"
                 ),
-                "Variacao_Percentual": st.column_config.NumberColumn(
-                    "Variação %",
-                    format="%.2f%%",
-                    help="Variação percentual em relação ao ano anterior"
-                ),
+                # Removido da tabela principal: Variação %
                 "Volume_Atual_2025": st.column_config.NumberColumn(
                     "Volume Atual 2025",
                     help="Volume atual de coletas em 2025"
                 ),
                 "Volume_Maximo_2024": st.column_config.NumberColumn(
-                    "Volume Máximo 2024",
-                    help="Volume máximo de coletas em 2024"
+                    "Máximo mensal 2024",
+                    help="Maior volume mensal de coletas em 2024 (máximo por mês)"
                 ),
                 "Tendencia_Volume": st.column_config.TextColumn(
                     "Tendência",
@@ -3253,7 +3358,7 @@ def main():
                 )
             
             # Renomear as colunas diretamente no dataframe para exibir nomes completos dos meses
-            df_exibicao_renamed = df_exibicao.copy()
+            df_exibicao_renamed = _formatar_df_exibicao(df_exibicao)
             rename_dict = {}
             
             # Renomear colunas principais para nomes mais legíveis
@@ -3263,9 +3368,8 @@ def main():
                 "Representante_Nome": "Representante",
                 "Risco_Diario": "Risco Diário",
                 "Dias_Sem_Coleta": "Dias Sem Coleta",
-                "Variacao_Percentual": "Variação %",
                 "Volume_Atual_2025": "Volume Atual 2025",
-                "Volume_Maximo_2024": "Volume Máximo 2024",
+                "Volume_Maximo_2024": "Máximo mensal 2024",
                 "Tendencia_Volume": "Tendência",
                 "Vol_Hoje": "Coletas (Hoje)",
                 "Vol_D1": "D-1",

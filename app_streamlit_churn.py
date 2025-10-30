@@ -1324,6 +1324,9 @@ class ChartManager:
                 'cor': cores_dias[dia]
             })
         
+        max_coletas = max((item['coletas'] for item in dados_grafico), default=0)
+        y_axis_max = max_coletas * 1.2 if max_coletas > 0 else 10
+
         # Calcular percentuais
         for item in dados_grafico:
             if total_coletas > 0:
@@ -1348,8 +1351,7 @@ class ChartManager:
                 hovertemplate=f"<b>{row['dia']}</b><br>" +
                              f"Coletas: {row['coletas']}<br>" +
                              f"Percentual: {row['percentual']:.1f}% da semana<extra></extra>",
-                showlegend=False,
-                cliponaxis=False
+                showlegend=False
             ))
         
         # Configurar layout
@@ -1360,8 +1362,11 @@ class ChartManager:
             height=600,
             margin=dict(l=60, r=60, t=100, b=80),
             font=dict(size=14),
-            title_font_size=18
+            title_font_size=18,
+            yaxis=dict(range=[0, y_axis_max])
         )
+        
+        # Adicionar linha de média diária
         if total_coletas > 0:
             media_diaria = total_coletas / 7
             fig.add_hline(
@@ -1458,6 +1463,8 @@ class ChartManager:
             media_diaria = total_coletas_semana / 7 if total_coletas_semana > 0 else 0
             
             # Gráfico de barras
+            max_coletas_semana = df_semana['Coletas_Reais'].max() if not df_semana.empty else 0
+            y_axis_max = max_coletas_semana * 1.2 if max_coletas_semana > 0 else 10
             fig = px.bar(
                 df_semana,
                 x='Dia_Semana',
@@ -1472,8 +1479,7 @@ class ChartManager:
                 texttemplate='%{text:.0f} coletas<br>(%{customdata:.1f}%)',
                 textposition='outside',
                 customdata=df_semana['Percentual'],
-                hovertemplate='<b>%{x}</b><br>Coletas: %{y:.0f}<br>Percentual: %{customdata:.1f}% da semana<extra></extra>',
-                cliponaxis=False
+                hovertemplate='<b>%{x}</b><br>Coletas: %{y:.0f}<br>Percentual: %{customdata:.1f}% da semana<extra></extra>'
             )
             fig.update_layout(
                 xaxis_title="Dia da Semana",
@@ -1481,13 +1487,12 @@ class ChartManager:
                 showlegend=False,
                 coloraxis_showscale=False,
                 height=700,  # Aumentado significativamente para destaque
-                margin=dict(l=60, r=60, t=110, b=80),  # Margens aumentadas
+                margin=dict(l=60, r=60, t=100, b=80),  # Margens aumentadas
                 autosize=True,  # Responsivo
                 font=dict(size=14),  # Fonte maior para melhor legibilidade
-                title_font_size=18  # Título maior
+                title_font_size=18,  # Título maior
+                yaxis=dict(range=[0, y_axis_max])
             )
-            if df_semana['Coletas_Reais'].max() > 0:
-                fig.update_yaxes(range=[0, df_semana['Coletas_Reais'].max() * 1.2])
             # Adicionar linha de referência da média diária
             if media_diaria > 0:
                 fig.add_hline(

@@ -1598,6 +1598,11 @@ class ChartManager:
                 fig.data[2].line.dash = 'dash'
                 fig.data[3].line.color = '#ff7f0e' # Laranja claro para média 2024
                 fig.data[3].line.dash = 'dash'
+                # Ajustar textos de hover para diferenciar coletas x médias
+                fig.data[0].hovertemplate = '<b>Mês:</b> %{x}<br><b>Coletas 2025:</b> %{y:.0f}<extra></extra>'
+                fig.data[1].hovertemplate = '<b>Mês:</b> %{x}<br><b>Coletas 2024:</b> %{y:.0f}<extra></extra>'
+                fig.data[2].hovertemplate = '<b>Mês:</b> %{x}<br><b>Média 2025:</b> %{y:.1f}<extra></extra>'
+                fig.data[3].hovertemplate = '<b>Mês:</b> %{x}<br><b>Média 2024:</b> %{y:.1f}<extra></extra>'
                 fig.update_layout(
                     xaxis_title="Mês",
                     yaxis_title="Número de Coletas",
@@ -3525,7 +3530,14 @@ def main():
                         text='Volume_Total'
                     )
                     fig_ranking.update_traces(texttemplate='%{text:.0f}', textposition='outside')
-                    fig_ranking.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
+                    max_volume = volume_por_rede.head(10)['Volume_Total'].max()
+                    y_axis_max = max_volume * 1.2 if max_volume > 0 else 10
+                    fig_ranking.update_layout(
+                        xaxis_tickangle=-45,
+                        height=500,
+                        margin=dict(l=60, r=60, t=80, b=80),
+                        yaxis=dict(range=[0, y_axis_max])
+                    )
                     st.plotly_chart(fig_ranking, use_container_width=True)
                     # Tabela detalhada
                     # Adicionar ranking para volume_por_rede
@@ -3568,7 +3580,14 @@ def main():
                                 text='Variacao_Media'
                             )
                             fig_perf.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-                            fig_perf.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
+                            max_var = perf_rede.head(10)['Variacao_Media'].max()
+                            y_axis_max = max_var * 1.15 if max_var > 0 else 1
+                            fig_perf.update_layout(
+                                xaxis_tickangle=-45,
+                                height=500,
+                                margin=dict(l=60, r=60, t=80, b=80),
+                                yaxis=dict(range=[0, y_axis_max])
+                            )
                             st.plotly_chart(fig_perf, use_container_width=True)
                         with col2:
                             # Scatter plot: Volume vs Performance
@@ -3616,7 +3635,7 @@ def main():
                                 Labs_Risco=('CNPJ_PCL', 'count'),
                                 Vol_Hoje_Medio=('Vol_Hoje', 'mean'),
                                 Delta_MM7_Medio=('Delta_MM7', 'mean'),
-                                Recuperando=('Recuperacao', lambda x: x.sum())
+                            Recuperando=('Recuperacao', lambda x: x.fillna(False).astype(bool).sum())
                             ).reset_index()
                             resumo_rede['Delta_MM7_Medio'] = resumo_rede['Delta_MM7_Medio'].round(1)
                             resumo_rede['Vol_Hoje_Medio'] = resumo_rede['Vol_Hoje_Medio'].round(1)
@@ -3653,18 +3672,18 @@ def main():
                                 fig_delta.update_layout(xaxis_title="Δ vs MM7 (%)", yaxis_title="Rede",
                                                         height=500, margin=dict(l=40, r=40, t=40, b=40))
                                 st.plotly_chart(fig_delta, use_container_width=True)
-                            st.dataframe(
-                                resumo_rede,
-                                use_container_width=True,
-                                column_config={
-                                    "Rede": st.column_config.TextColumn("🏢 Rede"),
-                                    "Labs_Risco": st.column_config.NumberColumn("🚨 Labs em Risco"),
-                                    "Vol_Hoje_Medio": st.column_config.NumberColumn("📦 Vol. Médio (Hoje)", format="%.1f"),
-                                    "Delta_MM7_Medio": st.column_config.NumberColumn("Δ Médio vs MM7", format="%.1f%%"),
-                                    "Recuperando": st.column_config.NumberColumn("🔁 Em Recuperação")
-                                },
-                                hide_index=True
-                            )
+                        st.dataframe(
+                            resumo_rede,
+                            use_container_width=True,
+                            column_config={
+                                "Rede": st.column_config.TextColumn("🏢 Rede"),
+                                "Labs_Risco": st.column_config.NumberColumn("🚨 Labs em Risco"),
+                                "Vol_Hoje_Medio": st.column_config.NumberColumn("📦 Vol. Médio (Hoje)", format="%.1f"),
+                                "Delta_MM7_Medio": st.column_config.NumberColumn("Δ Médio vs MM7", format="%.1f%%"),
+                                "Recuperando": st.column_config.NumberColumn("🔁 Em Recuperação")
+                            },
+                            hide_index=True
+                        )
                         risco_status = df_risco.groupby(['Rede', 'Risco_Diario']).size().reset_index(name='Qtd')
                         fig_status = px.bar(
                             risco_status,

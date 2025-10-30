@@ -2057,8 +2057,7 @@ def main():
     # ============================================
     # DASHBOARD PRINCIPAL (APENAS PARA USUÁRIOS AUTENTICADOS)
     # ============================================
-    # Renderizar header do dashboard
-    UIManager.renderizar_header()
+    # Removido cabeçalho principal para layout mais discreto
     # Carregar e preparar dados
     loader_placeholder = st.empty()
     loader_placeholder.markdown(

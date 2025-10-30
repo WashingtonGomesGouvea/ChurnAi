@@ -364,7 +364,7 @@ def create_login_page(auth: MicrosoftAuth) -> bool:
 
 
 def create_user_header():
-    """Criar cabeçalho com informações do usuário e botão de logout"""
+    """Mostrar informações do usuário e botão de logout na sidebar (discreto)."""
     if not AuthManager.is_authenticated():
         return
 
@@ -372,22 +372,19 @@ def create_user_header():
     if not user:
         return
 
-    # Header com informações do usuário
-    col1, col2 = st.columns([3, 1])
-
-    with col1:
-        st.markdown("### 👋 Bem-vindo!")
-        st.markdown(f"**{user.get('displayName', 'Usuário')}**")
+    with st.sidebar:
+        display_name = user.get('displayName', 'Usuário')
         email = user.get('mail') or user.get('userPrincipalName', '')
+
+        # Bloco discreto de conta na sidebar
+        st.caption("Conta")
+        st.markdown(f"👤 {display_name}")
         if email:
             st.caption(f"📧 {email}")
 
-    with col2:
-        if st.button("🚪 Logout", type="secondary", help="Fazer logout do sistema"):
+        if st.button("🚪 Logout", key="logout_sidebar", type="secondary", help="Sair da conta"):
             AuthManager.logout()
             st.rerun()
-
-    st.markdown("---")
 
 
 # Função de compatibilidade para código existente

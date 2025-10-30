@@ -402,6 +402,13 @@ class KPIMetrics:
     labs_medio_risco: int = 0
     labs_baixo_risco: int = 0
     labs_inativos: int = 0
+    labs_critico: int = 0
+    labs_recuperando: int = 0
+    labs_sem_coleta_48h: int = 0
+    vol_hoje_total: int = 0
+    vol_d1_total: int = 0
+    ativos_7d_count: int = 0
+    ativos_30d_count: int = 0
 class DataManager:
     """Gerenciador de dados com cache inteligente."""
     @staticmethod
@@ -491,6 +498,27 @@ class DataManager:
         # Filtro Active == True para coerência
         if 'Active' in df.columns:
             df = df[df['Active'] == True]
+        # === Nova régua de risco diário ===
+        colunas_novas = [
+            "Vol_Hoje", "Vol_D1", "MM7", "MM30", "MM90", "DOW_Media",
+            "Delta_D1", "Delta_MM7", "Delta_MM30", "Delta_MM90",
+            "Risco_Diario", "Recuperacao"
+        ]
+        try:
+            registros = []
+            for _, r in df.iterrows():
+                res = RiskEngine.classificar(r)
+                registros.append(res if res else {c: None for c in colunas_novas})
+            df_risk = pd.DataFrame(registros, index=df.index)
+            for c in colunas_novas:
+                df[c] = df_risk.get(c)
+        except Exception:
+            for c in colunas_novas:
+                if c not in df.columns:
+                    df[c] = None
+        # Opcional: preservar a coluna antiga para auditoria
+        if 'Status_Risco' in df.columns and 'Risco_Diario' in df.columns:
+            df.rename(columns={'Status_Risco': 'Status_Risco_Legado'}, inplace=True)
         return df
     @staticmethod
     @st.cache_data(ttl=CACHE_TTL)
@@ -609,6 +637,114 @@ class DataManager:
         except Exception as e:
             st.warning(f"Erro ao carregar arquivo VIP: {e}")
             return None
+
+
+class RiskEngine:
+    """Calcula MM7/MM30/MM90, D-1, DOW e classifica o risco diário (nova régua)."""
+
+    @staticmethod
+    def _serie_diaria_from_json(json_str: str) -> pd.Series:
+        """Converte 'Dados_Diarios_2025' (dict 'YYYY-MM' -> {dia:coletas}) em série diária."""
+        if pd.isna(json_str) or str(json_str).strip() in ("", "{}", "null"):
+            return pd.Series(dtype="float")
+        import json
+        try:
+            j = json.loads(json_str)
+        except Exception:
+            return pd.Series(dtype="float")
+        rows = []
+        for ym, dias in j.items():
+            try:
+                y, m = ym.split("-")
+            except Exception:
+                continue
+            for d_str, v in dias.items():
+                try:
+                    d = int(d_str)
+                    rows.append((pd.Timestamp(int(y), int(m), d), int(v)))
+                except Exception:
+                    continue
+        if not rows:
+            return pd.Series(dtype="float")
+        s = pd.Series({d: v for d, v in rows}).sort_index()
+        full_idx = pd.date_range(s.index.min(), s.index.max(), freq="D")
+        return s.reindex(full_idx).fillna(0)
+
+    @staticmethod
+    def _rolling_means(s: pd.Series, ref_date: pd.Timestamp) -> dict:
+        """MM7/MM30/MM90, D-1, média por DOW e contadores auxiliares."""
+        if s.empty:
+            return dict(MM7=0, MM30=0, MM90=0, D1=0, DOW=0, HOJE=0, zeros_consec=0, quedas50_consec=0)
+        s = s.sort_index()
+        if ref_date not in s.index:
+            ref_date = s.index.max()
+        hoje = float(s.loc[ref_date])
+        d1 = float(s.shift(1).loc[ref_date]) if ref_date - pd.Timedelta(days=1) in s.index else 0.0
+        mm7 = float(s.loc[:ref_date].tail(7).mean())
+        mm30 = float(s.loc[:ref_date].tail(30).mean())
+        mm90 = float(s.loc[:ref_date].tail(90).mean())
+        dow = int(ref_date.weekday())
+        ult_90 = s.loc[:ref_date].tail(90)
+        dow_vals = ult_90[ult_90.index.weekday == dow]
+        dow_mean = float(dow_vals.mean()) if len(dow_vals) else 0.0
+        zeros_consec = int((s.loc[:ref_date][::-1] == 0).astype(int)
+                           .groupby((s.loc[:ref_date][::-1] != 0).cumsum()).cumcount()[0] + 1) if hoje == 0 else 0
+
+        def _is_queda50(idx):
+            mm7_local = s.loc[:idx].tail(7).mean()
+            return s.loc[idx] < 0.5 * mm7_local if mm7_local > 0 else False
+
+        ultimos = s.loc[:ref_date].tail(3)
+        quedas50_consec = sum([_is_queda50(idx) for idx in ultimos.index])
+        return dict(MM7=mm7, MM30=mm30, MM90=mm90, D1=d1, DOW=dow_mean, HOJE=hoje,
+                    zeros_consec=zeros_consec, quedas50_consec=quedas50_consec)
+
+    @staticmethod
+    def classificar(row: pd.Series) -> dict:
+        """Aplica as regras do anexo e retorna métricas + 'Risco_Diario' e 'Recuperacao'."""
+        s = RiskEngine._serie_diaria_from_json(row.get("Dados_Diarios_2025", "{}"))
+        if s.empty:
+            return {}
+        ref_date = s.index.max()
+        m = RiskEngine._rolling_means(s, ref_date)
+        hoje, d1 = m["HOJE"], m["D1"]
+        mm7, mm30, mm90, dow = m["MM7"], m["MM30"], m["MM90"], m["DOW"]
+
+        def pct(a, b):
+            return (a - b) / b * 100 if b and b != 0 else 0.0
+
+        d_vs_d1 = pct(hoje, d1)
+        d_vs_mm7 = pct(hoje, mm7)
+        d_vs_mm30 = pct(hoje, mm30)
+        d_vs_mm90 = pct(hoje, mm90)
+        risco = "🟢 Normal"
+        if (hoje >= 0.90 * mm7) and (hoje <= 1.20 * d1 if d1 > 0 else True):
+            risco = "🟢 Normal"
+        elif ((hoje >= 0.70 * mm7) or (hoje >= 0.70 * d1)) and (hoje >= 0.85 * mm30):
+            risco = "🟡 Atenção"
+        elif ((hoje >= 0.50 * mm7 and hoje < 0.70 * mm7) or (d1 > 0 and hoje >= 0.60 * d1 and hoje < 0.70 * d1)):
+            risco = "🟠 Moderado"
+        elif (((hoje < 0.50 * mm7) or (d1 > 0 and hoje < 0.60 * d1)) and (hoje < 0.70 * mm30)):
+            risco = "🔴 Alto"
+        if m["zeros_consec"] >= 7 or m["quedas50_consec"] >= 3:
+            risco = "⚫ Crítico"
+        if dow > 0 and abs(hoje - dow) / dow <= 0.15 and risco in {"🟡 Atenção", "🟠 Moderado"}:
+            risco = "🟢 Normal"
+        if m["zeros_consec"] >= 2 and risco in {"🟢 Normal", "🟡 Atenção"}:
+            risco = "🟠 Moderado" if risco == "🟡 Atenção" else "🟡 Atenção"
+        recuperacao = False
+        ultimos_4 = s.loc[:ref_date].tail(4)
+        if len(ultimos_4) == 4 and hoje >= mm7 and (ultimos_4.iloc[:3].mean() < 0.9 * mm7):
+            recuperacao = True
+        return {
+            "Vol_Hoje": int(hoje), "Vol_D1": int(d1),
+            "MM7": round(mm7, 1), "MM30": round(mm30, 1), "MM90": round(mm90, 1), "DOW_Media": round(dow, 1),
+            "Delta_D1": round(d_vs_d1, 1), "Delta_MM7": round(d_vs_mm7, 1),
+            "Delta_MM30": round(d_vs_mm30, 1), "Delta_MM90": round(d_vs_mm90, 1),
+            "Risco_Diario": risco, "Recuperacao": recuperacao
+        }
+
+
 class VIPManager:
     """Gerenciador de dados VIP."""
     @staticmethod
@@ -786,46 +922,50 @@ class KPIManager:
     """Gerenciador de cálculos de KPIs - Atualizado para coerência entre telas."""
     @staticmethod
     def calcular_kpis(df: pd.DataFrame) -> KPIMetrics:
-        """Calcula todas as métricas principais - Atualizado com filtro de coletas recentes."""
         if df.empty:
             return KPIMetrics()
         metrics = KPIMetrics()
-        # Filtrar labs com coleta nos últimos 90 dias para coerência
-        if 'Dias_Sem_Coleta' in df.columns:
-            df_recent = df[df['Dias_Sem_Coleta'] <= 90]
-        else:
-            df_recent = df.copy()
+        df_recent = df[df['Dias_Sem_Coleta'] <= 90].copy() if 'Dias_Sem_Coleta' in df.columns else df.copy()
         metrics.total_labs = len(df_recent)
-        # Distribuição por status de risco
-        if 'Status_Risco' in df_recent.columns:
-            status_counts = df_recent['Status_Risco'].value_counts()
-            metrics.labs_alto_risco = status_counts.get('Alto', 0)
-            metrics.labs_medio_risco = status_counts.get('Médio', 0)
-            metrics.labs_baixo_risco = status_counts.get('Baixo', 0)
-        else:
-            # Se não tiver Status_Risco, usar valores padrão
-            metrics.labs_alto_risco = 0
-            metrics.labs_medio_risco = 0
-            metrics.labs_baixo_risco = 0
-            metrics.labs_inativos = 0
-        # Churn Rate (Alto + Médio risco)
-        labs_churn = metrics.labs_alto_risco + metrics.labs_medio_risco
-        metrics.churn_rate = (labs_churn / metrics.total_labs * 100) if metrics.total_labs > 0 else 0
-        # Total de coletas 2025
+        # Distribuição por Risco_Diario
+        labs_normal = labs_atencao = labs_moderado = labs_alto = labs_critico = 0
+        if 'Risco_Diario' in df_recent.columns:
+            c = df_recent['Risco_Diario'].value_counts()
+            labs_normal = c.get('🟢 Normal', 0)
+            labs_atencao = c.get('🟡 Atenção', 0)
+            labs_moderado = c.get('🟠 Moderado', 0)
+            labs_alto = c.get('🔴 Alto', 0)
+            labs_critico = c.get('⚫ Crítico', 0)
+        metrics.labs_baixo_risco = labs_normal + labs_atencao
+        metrics.labs_medio_risco = labs_moderado
+        metrics.labs_alto_risco = labs_alto + labs_critico
+        metrics.labs_em_risco = labs_moderado + labs_alto + labs_critico
+        metrics.labs_critico = labs_critico
+        metrics.churn_rate = (metrics.labs_em_risco / metrics.total_labs * 100) if metrics.total_labs else 0
+        # Total coletas 2025
         meses_2025 = ChartManager._meses_ate_hoje(df_recent, 2025)
-        colunas_2025 = [f'N_Coletas_{mes}_25' for mes in meses_2025]
-        colunas_existentes = [col for col in colunas_2025 if col in df_recent.columns]
-        if colunas_existentes:
-            metrics.total_coletas = int(df_recent[colunas_existentes].sum().sum())
-        else:
-            metrics.total_coletas = 0
-        # Labs em risco (todos exceto Baixo)
-        metrics.labs_em_risco = metrics.total_labs - metrics.labs_baixo_risco
-        # NRR removido conforme solicitação
+        cols = [f'N_Coletas_{m}_25' for m in meses_2025 if f'N_Coletas_{m}_25' in df_recent.columns]
+        metrics.total_coletas = int(df_recent[cols].sum().sum()) if cols else 0
+        # Volumes diários
+        metrics.vol_hoje_total = int(df_recent['Vol_Hoje'].fillna(0).sum()) if 'Vol_Hoje' in df_recent.columns else 0
+        metrics.vol_d1_total = int(df_recent['Vol_D1'].fillna(0).sum()) if 'Vol_D1' in df_recent.columns else 0
+        # Recuperação e zeros consecutivos
+        if 'Recuperacao' in df_recent.columns:
+            metrics.labs_recuperando = int(df_recent['Recuperacao'].fillna(False).sum())
+        if {'Vol_Hoje', 'Vol_D1'}.issubset(df_recent.columns):
+            zeros_48h = df_recent[
+                df_recent['Vol_Hoje'].fillna(0).eq(0) &
+                df_recent['Vol_D1'].fillna(0).eq(0)
+            ]
+            metrics.labs_sem_coleta_48h = len(zeros_48h)
         # Ativos recentes
-        if 'Dias_Sem_Coleta' in df_recent.columns:
-            metrics.ativos_7d = (len(df_recent[df_recent['Dias_Sem_Coleta'] <= DIAS_ATIVO_REcente_7]) / metrics.total_labs * 100) if metrics.total_labs > 0 else 0
-            metrics.ativos_30d = (len(df_recent[df_recent['Dias_Sem_Coleta'] <= DIAS_ATIVO_REcente_30]) / metrics.total_labs * 100) if metrics.total_labs > 0 else 0
+        if 'Dias_Sem_Coleta' in df_recent.columns and metrics.total_labs > 0:
+            ativos_7d_df = df_recent[df_recent['Dias_Sem_Coleta'] <= 7]
+            ativos_30d_df = df_recent[df_recent['Dias_Sem_Coleta'] <= 30]
+            metrics.ativos_7d_count = len(ativos_7d_df)
+            metrics.ativos_30d_count = len(ativos_30d_df)
+            metrics.ativos_7d = metrics.ativos_7d_count / metrics.total_labs * 100
+            metrics.ativos_30d = metrics.ativos_30d_count / metrics.total_labs * 100
         return metrics
 class ChartManager:
     """Gerenciador de criação de gráficos - Atualizado com correções de bugs e layouts."""
@@ -844,25 +984,24 @@ class ChartManager:
         return [m for m in meses_limite if f'N_Coletas_{m}_{sufixo}' in df.columns]
     @staticmethod
     def criar_grafico_distribuicao_risco(df: pd.DataFrame):
-        """Cria gráfico de distribuição de risco - Atualizado layout."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
-        if 'Status_Risco' not in df.columns:
-            st.warning("⚠️ Coluna 'Status_Risco' não encontrada nos dados.")
+        if 'Risco_Diario' not in df.columns:
+            st.warning("⚠️ Coluna 'Risco_Diario' não encontrada nos dados.")
             return
-         
-        status_counts = df['Status_Risco'].value_counts()
+        status_counts = df['Risco_Diario'].value_counts()
         cores_map = {
-            'Alto': '#d62728',
-            'Médio': '#ff7f0e',
-            'Baixo': '#2ca02c',
-            'Inativo': '#9467bd'
+            '🟢 Normal': '#16A34A',
+            '🟡 Atenção': '#F59E0B',
+            '🟠 Moderado': '#FB923C',
+            '🔴 Alto': '#DC2626',
+            '⚫ Crítico': '#111827'
         }
         fig = px.pie(
             values=status_counts.values,
             names=status_counts.index,
-            title="📊 Distribuição de Risco dos Laboratórios",
+            title="📊 Distribuição de Risco Diário",
             color=status_counts.index,
             color_discrete_map=cores_map
         )
@@ -875,63 +1014,46 @@ class ChartManager:
         fig.update_layout(
             showlegend=True,
             legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-            height=500,  # Aumentado tamanho
-            margin=dict(l=40, r=40, t=40, b=40)  # Ajustado margens
+            height=500,
+            margin=dict(l=40, r=40, t=40, b=40)
         )
         st.plotly_chart(fig, use_container_width=True)
     @staticmethod
     def criar_grafico_top_labs(df: pd.DataFrame, top_n: int = 10):
-        """Cria gráfico dos laboratórios em risco prioritários - Atualizado layout."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
-        # Filtrar apenas labs em risco (Alto, Médio, Inativo)
-        if 'Status_Risco' in df.columns:
-            labs_risco = df[df['Status_Risco'].isin(['Alto', 'Médio', 'Inativo'])].copy()
-        else:
-            st.warning("⚠️ Coluna 'Status_Risco' não encontrada nos dados.")
+        if 'Risco_Diario' not in df.columns:
+            st.warning("⚠️ Coluna 'Risco_Diario' não encontrada nos dados.")
             return
-     
+        labs_risco = df[df['Risco_Diario'].isin(['🟠 Moderado', '🔴 Alto', '⚫ Crítico'])].copy()
         if labs_risco.empty:
             st.info("✅ Nenhum laboratório em risco encontrado!")
             return
-        # Ordenar por prioridade: Score de risco (se disponível) ou dias sem coleta
-        if 'Score_Risco' in labs_risco.columns:
-            labs_risco = labs_risco.sort_values(['Score_Risco', 'Dias_Sem_Coleta'], ascending=[False, False])
+        # Ordenar por maior queda vs MM7 e menor volume do dia
+        if 'Delta_MM7' in labs_risco.columns:
+            labs_risco = labs_risco.sort_values(['Delta_MM7', 'Vol_Hoje'], ascending=[True, True])
         else:
-            labs_risco = labs_risco.sort_values('Dias_Sem_Coleta', ascending=False)
-     
-        top_labs_risco = labs_risco.head(top_n)
-        cores_map = {
-            'Alto': '#d62728',
-            'Médio': '#ff7f0e',
-            'Baixo': '#2ca02c',
-            'Inativo': '#9467bd'
-        }
-        # Usar dias sem coleta como métrica principal
+            labs_risco = labs_risco.sort_values('Vol_Hoje', ascending=True)
+        cores_map = {'🟠 Moderado': '#FB923C', '🔴 Alto': '#DC2626', '⚫ Crítico': '#111827'}
         fig = px.bar(
-            top_labs_risco,
-            x='Dias_Sem_Coleta',
+            labs_risco.head(top_n),
+            x='Vol_Hoje',
             y='Nome_Fantasia_PCL',
             orientation='h',
-            title=f"🚨 Top {top_n} Laboratórios em Risco",
-            color='Status_Risco',
+            title=f"🚨 Top {top_n} Laboratórios em Risco (Diário)",
+            color='Risco_Diario',
             color_discrete_map=cores_map,
-            text='Dias_Sem_Coleta'
+            text='Delta_MM7'
         )
-        fig.update_traces(
-            texttemplate='%{text:.0f} dias',
-            textposition='outside',
-            hovertemplate='<b>%{y}</b><br>Dias sem coleta: %{x:.0f}<br>Status: %{customdata}<extra></extra>',
-            customdata=top_labs_risco['Status_Risco']
-        )
+        fig.update_traces(texttemplate='%{text:.1f}% vs MM7', textposition='outside')
         fig.update_layout(
             yaxis={'categoryorder': 'total ascending'},
-            xaxis_title="Dias sem Coleta",
+            xaxis_title="Coletas (Hoje)",
             yaxis_title="Laboratório",
             showlegend=True,
-            height=500,  # Aumentado
-            margin=dict(l=40, r=40, t=40, b=100)  # Ajustado para evitar corte
+            height=500,
+            margin=dict(l=40, r=40, t=40, b=100)
         )
         st.plotly_chart(fig, use_container_width=True)
     @staticmethod
@@ -1226,7 +1348,8 @@ class ChartManager:
                 hovertemplate=f"<b>{row['dia']}</b><br>" +
                              f"Coletas: {row['coletas']}<br>" +
                              f"Percentual: {row['percentual']:.1f}% da semana<extra></extra>",
-                showlegend=False
+                showlegend=False,
+                cliponaxis=False
             ))
         
         # Configurar layout
@@ -1235,12 +1358,10 @@ class ChartManager:
             xaxis_title="Dia da Semana",
             yaxis_title="Coletas por Dia",
             height=600,
-            margin=dict(l=60, r=60, t=80, b=60),
+            margin=dict(l=60, r=60, t=100, b=80),
             font=dict(size=14),
             title_font_size=18
         )
-        
-        # Adicionar linha de média diária
         if total_coletas > 0:
             media_diaria = total_coletas / 7
             fig.add_hline(
@@ -1351,7 +1472,8 @@ class ChartManager:
                 texttemplate='%{text:.0f} coletas<br>(%{customdata:.1f}%)',
                 textposition='outside',
                 customdata=df_semana['Percentual'],
-                hovertemplate='<b>%{x}</b><br>Coletas: %{y:.0f}<br>Percentual: %{customdata:.1f}% da semana<extra></extra>'
+                hovertemplate='<b>%{x}</b><br>Coletas: %{y:.0f}<br>Percentual: %{customdata:.1f}% da semana<extra></extra>',
+                cliponaxis=False
             )
             fig.update_layout(
                 xaxis_title="Dia da Semana",
@@ -1359,11 +1481,13 @@ class ChartManager:
                 showlegend=False,
                 coloraxis_showscale=False,
                 height=700,  # Aumentado significativamente para destaque
-                margin=dict(l=60, r=60, t=80, b=60),  # Margens aumentadas
+                margin=dict(l=60, r=60, t=110, b=80),  # Margens aumentadas
                 autosize=True,  # Responsivo
                 font=dict(size=14),  # Fonte maior para melhor legibilidade
                 title_font_size=18  # Título maior
             )
+            if df_semana['Coletas_Reais'].max() > 0:
+                fig.update_yaxes(range=[0, df_semana['Coletas_Reais'].max() * 1.2])
             # Adicionar linha de referência da média diária
             if media_diaria > 0:
                 fig.add_hline(
@@ -1527,36 +1651,42 @@ class UIManager:
         """Renderiza cards de KPIs modernos - Atualizado rótulo total labs."""
         col1, col2, col3, col4 = st.columns(4)
         with col1:
+            risco_total_txt = f"Risco total: {metrics.labs_em_risco:,}" if metrics.labs_em_risco else "Risco total: 0"
+            recuperacao_txt = f"Recuperação: {metrics.labs_recuperando:,}" if metrics.labs_recuperando else "Recuperação: 0"
+            delta_text = f"{risco_total_txt} | {recuperacao_txt}"
             st.markdown(f"""
             <div class="metric-card">
                 <div class="metric-value">{metrics.total_labs:,}</div>
-                <div class="metric-label">Labs com coleta nos últimos 90 dias</div>
-                <div class="metric-delta">&nbsp;</div>
+                <div class="metric-label">Labs monitorados (≤90 dias)</div>
+                <div class="metric-delta">{delta_text}</div>
             </div>
             """, unsafe_allow_html=True)
         with col2:
+            delta_text = f"D-1: {metrics.vol_d1_total:,} | YTD: {metrics.total_coletas:,}"
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-value">{metrics.total_coletas:,}</div>
-                <div class="metric-label">Total de Coletas</div>
-                <div class="metric-delta">&nbsp;</div>
+                <div class="metric-value">{metrics.vol_hoje_total:,}</div>
+                <div class="metric-label">Coletas Hoje</div>
+                <div class="metric-delta">{delta_text}</div>
             </div>
             """, unsafe_allow_html=True)
         with col3:
+            delta_text = f"⚫ Críticos: {metrics.labs_critico:,}"
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-value">{metrics.labs_em_risco:,}</div>
-                <div class="metric-label">Labs em Risco</div>
-                <div class="metric-delta">&nbsp;</div>
+                <div class="metric-value">{metrics.labs_alto_risco:,}</div>
+                <div class="metric-label">Labs 🔴 & ⚫ (Alto + Crítico)</div>
+                <div class="metric-delta">{delta_text}</div>
             </div>
             """, unsafe_allow_html=True)
         with col4:
-            delta_class = "positive" if metrics.ativos_7d > 80 else "negative"
+            delta_class = "positive" if metrics.ativos_7d >= 80 else "negative"
+            ativos_label = f"Ativos 7D: {metrics.ativos_7d:.1f}% ({metrics.ativos_7d_count}/{metrics.total_labs})" if metrics.total_labs else "Ativos 7D: --"
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-value">{metrics.ativos_7d:.1f}%</div>
-                <div class="metric-label">Ativos 7D</div>
-                <div class="metric-delta {delta_class}">{"↗️" if metrics.ativos_7d > 80 else "↘️"}</div>
+                <div class="metric-value">{metrics.labs_sem_coleta_48h:,}</div>
+                <div class="metric-label">Sem Coleta (48h)</div>
+                <div class="metric-delta {delta_class}">{ativos_label}</div>
             </div>
             """, unsafe_allow_html=True)
 class MetricasAvancadas:
@@ -1601,16 +1731,32 @@ class MetricasAvancadas:
             cronico = "Declínio"
         else:
             cronico = "Estável"
+
+        vol_hoje = lab.get('Vol_Hoje', 0)
+        vol_hoje = int(vol_hoje) if pd.notna(vol_hoje) else 0
+        vol_d1 = lab.get('Vol_D1', 0)
+        vol_d1 = int(vol_d1) if pd.notna(vol_d1) else 0
+        delta_mm7_val = lab.get('Delta_MM7', None)
+        delta_mm7 = round(float(delta_mm7_val), 1) if pd.notna(delta_mm7_val) else None
+        delta_d1_val = lab.get('Delta_D1', None)
+        delta_d1 = round(float(delta_d1_val), 1) if pd.notna(delta_d1_val) else None
+        risco_diario = lab.get('Risco_Diario', 'N/A')
+        if pd.isna(risco_diario):
+            risco_diario = 'N/A'
      
         return {
             'total_coletas': int(total_coletas_2025),
             'media_3_meses': round(media_3_meses, 1),
             'media_diaria': round(media_diaria, 1),
+            'vol_hoje': vol_hoje,
+            'vol_d1': vol_d1,
+            'delta_mm7': delta_mm7,
+            'delta_d1': delta_d1,
             'agudo': agudo,
             'cronico': cronico,
             'dias_sem_coleta': int(dias_sem_coleta),
             'variacao_percentual': round(variacao, 1),
-            'score_risco': 'Métrica a definir'  # Atualizado conforme solicitação
+            'risco_diario': risco_diario
         }
     @staticmethod
     def calcular_metricas_evolucao(df: pd.DataFrame, lab_nome: str) -> dict:
@@ -1678,58 +1824,12 @@ class AnaliseInteligente:
             else 'Estável', axis=1
         )
      
-        # Score de risco (0-100) - Atualizado para métrica a definir onde necessário
-        df_insights['Score_Risco'] = df_insights.apply(
-            lambda row: AnaliseInteligente._calcular_score_risco(row), axis=1
-        )
-     
         # Insights automáticos
         df_insights['Insights_Automaticos'] = df_insights.apply(
             lambda row: AnaliseInteligente._gerar_insights(row), axis=1
         )
      
         return df_insights
- 
-    @staticmethod
-    def _calcular_score_risco(row) -> int:
-        """Calcula score de risco de 0-100."""
-        score = 0
-     
-        # Dias sem coleta (peso 40%)
-        dias_sem = row.get('Dias_Sem_Coleta', 0)
-        if dias_sem > 90:
-            score += 40
-        elif dias_sem > 60:
-            score += 30
-        elif dias_sem > 30:
-            score += 20
-        elif dias_sem > 15:
-            score += 10
-     
-        # Variação percentual (peso 30%)
-        variacao = row.get('Variacao_Percentual', 0)
-        if variacao < -80:
-            score += 30
-        elif variacao < -50:
-            score += 25
-        elif variacao < -20:
-            score += 15
-        elif variacao < 0:
-            score += 10
-     
-        # Volume atual vs histórico (peso 30%)
-        volume_atual = row.get('Volume_Atual_2025', 0)
-        volume_max = row.get('Volume_Maximo_2024', 1)
-        if volume_max > 0:
-            ratio = volume_atual / volume_max
-            if ratio < 0.2:
-                score += 30
-            elif ratio < 0.5:
-                score += 20
-            elif ratio < 0.8:
-                score += 10
-     
-        return min(score, 100)
  
     @staticmethod
     def _gerar_insights(row) -> str:
@@ -1975,81 +2075,231 @@ def main():
         tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Resumo", "📈 Tendências", "📊 Distribuição", "🚨 Alto Risco", "🏆 Top 100 PCLs"])
         with tab1:
             st.subheader("📊 Resumo Geral")
+            st.markdown("### 🚨 Alertas Prioritários")
+            if df_filtrado.empty:
+                st.info("📊 Nenhum dado disponível para avaliar alertas.")
+            else:
+                if 'Risco_Diario' in df_filtrado.columns:
+                    criticos = df_filtrado[df_filtrado['Risco_Diario'] == '⚫ Crítico'].copy()
+                    if not criticos.empty:
+                        st.error(f"⚠️ {len(criticos)} laboratório(s) em risco **CRÍTICO** — intervenção imediata necessária.")
+                        colunas_alerta = ['Nome_Fantasia_PCL', 'Estado', 'Vol_Hoje', 'Vol_D1', 'Delta_MM7', 'Dias_Sem_Coleta']
+                        colunas_alerta = [c for c in colunas_alerta if c in criticos.columns]
+                        if colunas_alerta:
+                            st.dataframe(
+                                criticos[colunas_alerta].sort_values('Vol_Hoje', ascending=True).head(10),
+                                use_container_width=True,
+                                column_config={
+                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
+                                    "Estado": st.column_config.TextColumn("UF"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
+                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias sem Coleta")
+                                },
+                                hide_index=True
+                            )
+                    else:
+                        st.success("Nenhum laboratório classificado como ⚫ Crítico hoje.")
+                else:
+                    st.warning("⚠️ Coluna 'Risco_Diario' ausente — impossível gerar alertas prioritários.")
+
+                if {'Delta_MM7', 'Risco_Diario'}.issubset(df_filtrado.columns):
+                    quedas_relevantes = df_filtrado[
+                        (df_filtrado['Delta_MM7'] <= -50) &
+                        (df_filtrado['Risco_Diario'].isin(['🟠 Moderado', '🔴 Alto']))
+                    ].copy()
+                    if not quedas_relevantes.empty:
+                        st.warning(
+                            f"🔻 {len(quedas_relevantes)} laboratório(s) com queda ≥50% vs MM7 e risco elevado — priorize contato de recuperação."
+                        )
+                        colunas_queda = ['Nome_Fantasia_PCL', 'Estado', 'Vol_Hoje', 'Vol_D1', 'Delta_MM7', 'Risco_Diario', 'Recuperacao']
+                        colunas_queda = [c for c in colunas_queda if c in quedas_relevantes.columns]
+                        if colunas_queda:
+                            st.dataframe(
+                                quedas_relevantes[colunas_queda].sort_values(['Delta_MM7', 'Vol_Hoje']).head(15),
+                                use_container_width=True,
+                                column_config={
+                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
+                                    "Estado": st.column_config.TextColumn("UF"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
+                                    "Risco_Diario": st.column_config.TextColumn("Risco"),
+                                    "Recuperacao": st.column_config.CheckboxColumn("Em Recuperação")
+                                },
+                                hide_index=True
+                            )
+
+                if {'Vol_Hoje', 'Vol_D1'}.issubset(df_filtrado.columns):
+                    dois_dias_sem_coleta = df_filtrado[(df_filtrado['Vol_Hoje'] == 0) & (df_filtrado['Vol_D1'] == 0)].copy()
+                    if not dois_dias_sem_coleta.empty:
+                        st.error(
+                            f"🛑 {len(dois_dias_sem_coleta)} laboratório(s) com **dois dias seguidos sem coleta** — alinhar com operações/logística."
+                        )
+                        colunas_zero = ['Nome_Fantasia_PCL', 'Estado', 'Risco_Diario', 'Vol_D1', 'Dias_Sem_Coleta']
+                        colunas_zero = [c for c in colunas_zero if c in dois_dias_sem_coleta.columns]
+                        if colunas_zero:
+                            st.dataframe(
+                                dois_dias_sem_coleta[colunas_zero].head(15),
+                                use_container_width=True,
+                                column_config={
+                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
+                                    "Estado": st.column_config.TextColumn("UF"),
+                                    "Risco_Diario": st.column_config.TextColumn("Risco"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
+                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias sem Coleta")
+                                },
+                                hide_index=True
+                            )
+
+            st.markdown("---")
+            with st.expander("ℹ️ Legenda das métricas diárias"):
+                st.markdown("""
+- **Vol_Hoje**: total de coletas registradas na data de referência (dia mais recente da série diária).
+- **Vol_D1**: volume de coletas do dia imediatamente anterior ao atual.
+- **MM7 / MM30 / MM90**: médias móveis de 7, 30 e 90 dias da série diária, incluindo dias sem coleta (zero).
+- **Δ vs MM7 / MM30 / MM90**: variação percentual do volume de hoje em relação às respectivas médias móveis.
+- **Δ vs D-1**: variação percentual do volume de hoje comparado ao dia anterior.
+- **DOW_Media**: média de coletas para o mesmo dia da semana (ex.: todas as segundas) nos últimos 90 dias.
+- **Risco_Diario**: classificação gerada pelo RiskEngine considerando os limiares de volume, médias e quedas consecutivas.
+- **Recuperacao**: indica que o laboratório voltou a operar acima da MM7 após período de queda.
+- **Sem Coleta (48h)**: quantidade de laboratórios com dois dias consecutivos sem registrar coletas (Vol_Hoje = 0 e Vol_D1 = 0).
+                """)
+
             # Adicionar métricas adicionais aqui
         with tab2:
-            st.subheader("📈 Tendências e Variações")
-            if 'Variacao_Percentual' in df_filtrado.columns:
+            st.subheader("📈 Tendências e Variações (Diário)")
+            if df_filtrado.empty:
+                st.info("📊 Nenhum dado disponível para esta análise.")
+            else:
                 col1, col2 = st.columns(2)
+
                 with col1:
-                    st.subheader("📉 Maiores Quedas")
-                    top_quedas = df_filtrado.nsmallest(10, 'Variacao_Percentual')[
-                        ['Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']
-                    ].copy()
-                    # Adicionar coluna de ranking explícita
-                    top_quedas['Ranking'] = range(1, len(top_quedas) + 1)
-                    # Reordenar colunas para mostrar ranking primeiro
-                    top_quedas = top_quedas[['Ranking', 'Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']]
-                    st.dataframe(
-                        top_quedas, 
-                        use_container_width=True,
-                        column_config={
-                            "Ranking": st.column_config.NumberColumn("🏆", width="small", help="Posição no ranking"),
-                            "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome do laboratório"),
-                            "Variacao_Percentual": st.column_config.NumberColumn("Variação %", format="%.2f%%", help="Variação percentual"),
-                            "Estado": st.column_config.TextColumn("Estado", help="Estado do laboratório")
-                        },
-                        hide_index=True
-                    )
+                    st.markdown("#### 📉 Maiores Quedas vs MM7")
+                    if {'Delta_MM7', 'Vol_Hoje', 'MM7'}.issubset(df_filtrado.columns):
+                        quedas_diarias = df_filtrado[df_filtrado['Delta_MM7'].notna()].copy()
+                        if not quedas_diarias.empty:
+                            quedas_diarias = quedas_diarias.sort_values('Delta_MM7').head(10)
+                            colunas_quedas = [
+                                'Nome_Fantasia_PCL', 'Estado', 'Vol_Hoje', 'Vol_D1', 'MM7',
+                                'Delta_MM7', 'Delta_D1', 'Risco_Diario', 'Dias_Sem_Coleta'
+                            ]
+                            colunas_quedas = [c for c in colunas_quedas if c in quedas_diarias.columns]
+                            st.dataframe(
+                                quedas_diarias[colunas_quedas],
+                                use_container_width=True,
+                                column_config={
+                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
+                                    "Estado": st.column_config.TextColumn("UF"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.1f"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
+                                    "Risco_Diario": st.column_config.TextColumn("Risco"),
+                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta")
+                                },
+                                hide_index=True
+                            )
+                        else:
+                            st.success("Nenhuma queda relevante detectada hoje.")
+                    else:
+                        st.warning("⚠️ Colunas necessárias para a análise de quedas (Δ vs MM7) não encontradas.")
+
                 with col2:
-                    st.subheader("📈 Maiores Recuperações")
-                    top_recuperacoes = df_filtrado.nlargest(10, 'Variacao_Percentual')[
-                        ['Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']
-                    ].copy()
-                    # Adicionar coluna de ranking explícita
-                    top_recuperacoes['Ranking'] = range(1, len(top_recuperacoes) + 1)
-                    # Reordenar colunas para mostrar ranking primeiro
-                    top_recuperacoes = top_recuperacoes[['Ranking', 'Nome_Fantasia_PCL', 'Variacao_Percentual', 'Estado']]
-                    st.dataframe(
-                        top_recuperacoes, 
-                        use_container_width=True,
-                        column_config={
-                            "Ranking": st.column_config.NumberColumn("🏆", width="small", help="Posição no ranking"),
-                            "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome do laboratório"),
-                            "Variacao_Percentual": st.column_config.NumberColumn("Variação %", format="%.2f%%", help="Variação percentual"),
-                            "Estado": st.column_config.TextColumn("Estado", help="Estado do laboratório")
-                        },
-                        hide_index=True
-                    )
+                    st.markdown("#### 📈 Altas vs MM7")
+                    if {'Delta_MM7', 'Vol_Hoje', 'MM7'}.issubset(df_filtrado.columns):
+                        altas_diarias = df_filtrado[df_filtrado['Delta_MM7'].notna()].copy()
+                        altas_diarias = altas_diarias[altas_diarias['Delta_MM7'] > 0]
+                        if not altas_diarias.empty:
+                            altas_diarias = altas_diarias.sort_values('Delta_MM7', ascending=False).head(10)
+                            colunas_altas = [
+                                'Nome_Fantasia_PCL', 'Estado', 'Vol_Hoje', 'Vol_D1', 'MM7',
+                                'Delta_MM7', 'Delta_D1', 'Risco_Diario', 'Recuperacao'
+                            ]
+                            colunas_altas = [c for c in colunas_altas if c in altas_diarias.columns]
+                            st.dataframe(
+                                altas_diarias[colunas_altas],
+                                use_container_width=True,
+                                column_config={
+                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
+                                    "Estado": st.column_config.TextColumn("UF"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.1f"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
+                                    "Risco_Diario": st.column_config.TextColumn("Risco"),
+                                    "Recuperacao": st.column_config.CheckboxColumn("Recuperação")
+                                },
+                                hide_index=True
+                            )
+                        else:
+                            st.info("Nenhum crescimento significativo vs MM7 identificado hoje.")
+                    else:
+                        st.warning("⚠️ Colunas necessárias para a análise de altas (Δ vs MM7) não encontradas.")
+
+                st.markdown("#### 🔁 Recuperações em Andamento")
+                if 'Recuperacao' in df_filtrado.columns:
+                    recuperacoes = df_filtrado[(df_filtrado['Recuperacao'] == True) & df_filtrado['Delta_MM7'].notna()].copy()
+                    if not recuperacoes.empty:
+                        recuperacoes = recuperacoes.sort_values('Delta_MM7', ascending=False)
+                        colunas_recuperacao = [
+                            'Nome_Fantasia_PCL', 'Estado', 'Vol_Hoje', 'Vol_D1', 'MM7',
+                            'Delta_MM7', 'Delta_D1', 'Risco_Diario', 'Dias_Sem_Coleta'
+                        ]
+                        colunas_recuperacao = [c for c in colunas_recuperacao if c in recuperacoes.columns]
+                        st.dataframe(
+                            recuperacoes[colunas_recuperacao].head(10),
+                            use_container_width=True,
+                            column_config={
+                                "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
+                                "Estado": st.column_config.TextColumn("UF"),
+                                "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
+                                "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
+                                "MM7": st.column_config.NumberColumn("MM7", format="%.1f"),
+                                "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
+                                "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
+                                "Risco_Diario": st.column_config.TextColumn("Risco"),
+                                "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta")
+                            },
+                            hide_index=True
+                        )
+                    else:
+                        st.info("Nenhuma recuperação consistente detectada (labs com Δ vs MM7 positivo e flag de recuperação).")
+                else:
+                    st.warning("⚠️ Coluna 'Recuperacao' não encontrada nos dados.")
         with tab3:
             st.subheader("📊 Distribuição por Status")
             ChartManager.criar_grafico_distribuicao_risco(df_filtrado)
         with tab4:
             st.subheader("🚨 Labs em Risco")
             ChartManager.criar_grafico_top_labs(df_filtrado, top_n=10)
-            # Lista de alto risco
-            if 'Status_Risco' in df_filtrado.columns:
-                labs_alto_risco = df_filtrado[df_filtrado['Status_Risco'] == 'Alto']
+            if 'Risco_Diario' in df_filtrado.columns:
+                labs_em_risco = df_filtrado[df_filtrado['Risco_Diario'].isin(['🟠 Moderado', '🔴 Alto', '⚫ Crítico'])]
             else:
-                st.warning("⚠️ Coluna 'Status_Risco' não encontrada nos dados.")
-                labs_alto_risco = pd.DataFrame()
-            if not labs_alto_risco.empty:
+                st.warning("⚠️ Coluna 'Risco_Diario' não encontrada nos dados.")
+                labs_em_risco = pd.DataFrame()
+            if not labs_em_risco.empty:
                 colunas_resumo = ['Nome_Fantasia_PCL', 'Estado', 'Representante_Nome',
-                                 'Dias_Sem_Coleta', 'Motivo_Risco']
+                                  'Vol_Hoje', 'Delta_MM7', 'Risco_Diario']
                 st.dataframe(
-                    labs_alto_risco[colunas_resumo],
+                    labs_em_risco[colunas_resumo],
                     use_container_width=True,
                     height=300,
                     column_config={
-                        "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome do laboratório"),
-                        "Estado": st.column_config.TextColumn("Estado", help="Estado do laboratório"),
-                        "Representante_Nome": st.column_config.TextColumn("Representante", help="Nome do representante"),
-                        "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias Sem Coleta", help="Dias sem coleta"),
-                        "Motivo_Risco": st.column_config.TextColumn("Motivo Risco", help="Motivo do risco")
+                        "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
+                        "Estado": st.column_config.TextColumn("UF"),
+                        "Representante_Nome": st.column_config.TextColumn("Representante"),
+                        "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
+                        "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
+                        "Risco_Diario": st.column_config.TextColumn("Risco Diário")
                     },
                     hide_index=True
                 )
             else:
-                st.success("✅ Nenhum laboratório em alto risco encontrado!")
+                st.success("✅ Nenhum laboratório em risco encontrado!")
         with tab5:
             st.subheader("🏆 Top 100 PCLs - Maiores Coletas")
             
@@ -2503,7 +2753,7 @@ def main():
                             st.markdown(f"""
                             <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #28a745;">
                                 <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">PERFORMANCE 2025</div>
-                                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; text-align: center;">
+                                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; text-align: center;">
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666;">Total Coletas</div>
                                         <div style="font-size: 1.3rem; font-weight: bold; color: #28a745;">{metricas['total_coletas']:,}</div>
@@ -2516,29 +2766,37 @@ def main():
                                         <div style="font-size: 0.8rem; color: #666;">Média Diária</div>
                                         <div style="font-size: 1.3rem; font-weight: bold; color: #28a745;">{metricas['media_diaria']:.1f}</div>
                                     </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Coletas (Hoje)</div>
+                                        <div style="font-size: 1.3rem; font-weight: bold; color: #28a745;">{metricas['vol_hoje']:,}</div>
+                                    </div>
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
                             # Status e Risco
                             status_color = "#28a745" if metricas['agudo'] == "Ativo" else "#dc3545"
                             risco_color = "#28a745" if metricas['dias_sem_coleta'] <= 7 else "#ffc107" if metricas['dias_sem_coleta'] <= 30 else "#dc3545"
-                            
-                            # Calcular cor do score de risco
-                            score_risco = metricas.get('score_risco', 0)
-                            if isinstance(score_risco, (int, float)) and score_risco != 'Métrica a definir':
-                                if score_risco < 30:
-                                    score_color = "#28a745"
-                                elif score_risco < 70:
-                                    score_color = "#ffc107"
-                                else:
-                                    score_color = "#dc3545"
+                            risco_diario = metricas.get('risco_diario', 'N/A')
+                            cores_risco = {
+                                '🟢 Normal': '#16A34A',
+                                '🟡 Atenção': '#F59E0B',
+                                '🟠 Moderado': '#FB923C',
+                                '🔴 Alto': '#DC2626',
+                                '⚫ Crítico': '#111827'
+                            }
+                            risco_diario_color = cores_risco.get(risco_diario, "#6c757d")
+                            delta_mm7 = metricas.get('delta_mm7')
+                            if isinstance(delta_mm7, (int, float)):
+                                delta_mm7_color = "#28a745" if delta_mm7 >= 0 else "#dc3545"
+                                delta_mm7_display = f"{delta_mm7:.1f}%"
                             else:
-                                score_color = "#6c757d"  # Cinza para "Métrica a definir"
+                                delta_mm7_color = "#6c757d"
+                                delta_mm7_display = "--"
                          
                             st.markdown(f"""
                             <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid {risco_color};">
                                 <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">STATUS & RISCO</div>
-                                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; text-align: center;">
+                                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; text-align: center;">
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666;">Status Atual</div>
                                         <div style="font-size: 1.1rem; font-weight: bold; color: {status_color};">{metricas['agudo']}</div>
@@ -2548,8 +2806,12 @@ def main():
                                         <div style="font-size: 1.1rem; font-weight: bold; color: {risco_color};">{metricas['dias_sem_coleta']}</div>
                                     </div>
                                     <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Score Risco</div>
-                                        <div style="font-size: 1.1rem; font-weight: bold; color: {score_color};">{metricas.get('score_risco', 'Métrica a definir')}</div>
+                                        <div style="font-size: 0.8rem; color: #666;">Risco Diário</div>
+                                        <div style="font-size: 1.1rem; font-weight: bold; color: {risco_diario_color};">{risco_diario}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666;">Δ vs MM7</div>
+                                        <div style="font-size: 1.1rem; font-weight: bold; color: {delta_mm7_color};">{delta_mm7_display}</div>
                                     </div>
                                 </div>
                             </div>
@@ -2754,7 +3016,10 @@ def main():
                 'total_labs': len(df_tabela_filtrada),
                 'volume_total': df_tabela_filtrada['Volume_Total_2025'].sum() if 'Volume_Total_2025' in df_tabela_filtrada.columns else 0,
                 'media_volume': df_tabela_filtrada['Volume_Total_2025'].mean() if 'Volume_Total_2025' in df_tabela_filtrada.columns else 0,
-                'labs_risco_alto': len(df_tabela_filtrada[df_tabela_filtrada['Status_Risco'] == 'Alto']) if 'Status_Risco' in df_tabela_filtrada.columns else 0,
+                'labs_risco_alto': (
+                    df_tabela_filtrada['Risco_Diario'].isin(['🔴 Alto', '⚫ Crítico']).sum()
+                    if 'Risco_Diario' in df_tabela_filtrada.columns else 0
+                ),
                 'labs_ativos': len(df_tabela_filtrada[df_tabela_filtrada['Dias_Sem_Coleta'] <= 30]) if 'Dias_Sem_Coleta' in df_tabela_filtrada.columns else 0
             }
             st.markdown(f"""
@@ -2788,8 +3053,10 @@ def main():
         # Configurar colunas da tabela
         colunas_principais = [
             'CNPJ_PCL', 'Nome_Fantasia_PCL', 'Estado', 'Cidade', 'Representante_Nome',
-            'Status_Risco', 'Dias_Sem_Coleta', 'Variacao_Percentual',
-            'Volume_Atual_2025', 'Volume_Maximo_2024', 'Tendencia_Volume'
+            'Risco_Diario', 'Dias_Sem_Coleta', 'Variacao_Percentual',
+            'Volume_Atual_2025', 'Volume_Maximo_2024', 'Tendencia_Volume',
+            'Vol_Hoje', 'Vol_D1', 'MM7', 'MM30', 'MM90',
+            'Delta_D1', 'Delta_MM7', 'Delta_MM30', 'Delta_MM90'
         ]
 
         # Adicionar colunas de coletas mensais (2024 e 2025)
@@ -2840,9 +3107,13 @@ def main():
                     "🏙️ Cidade",
                     help="Cidade do laboratório"
                 ),
-                "Status_Risco": st.column_config.TextColumn(
-                    "Status de Risco",
-                    help="Classificação de risco do laboratório"
+                "Representante_Nome": st.column_config.TextColumn(
+                    "👤 Representante",
+                    help="Nome do representante responsável"
+                ),
+                "Risco_Diario": st.column_config.TextColumn(
+                    "Risco Diário",
+                    help="Classificação de risco diária pela nova régua"
                 ),
                 "Dias_Sem_Coleta": st.column_config.NumberColumn(
                     "Dias Sem Coleta",
@@ -2866,6 +3137,18 @@ def main():
                     help="Tendência de volume (Crescimento/Declínio/Estável)"
                 )
             }
+
+            column_config.update({
+                "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
+                "Vol_D1": st.column_config.NumberColumn("D-1"),
+                "MM7": st.column_config.NumberColumn("MM7"),
+                "MM30": st.column_config.NumberColumn("MM30"),
+                "MM90": st.column_config.NumberColumn("MM90"),
+                "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
+                "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
+                "Delta_MM30": st.column_config.NumberColumn("Δ vs MM30", format="%.1f%%"),
+                "Delta_MM90": st.column_config.NumberColumn("Δ vs MM90", format="%.1f%%")
+            })
             
             # Adicionar configurações para colunas mensais de 2024
             for col in cols_2024:
@@ -2914,12 +3197,22 @@ def main():
             rename_dict.update({
                 "CNPJ_PCL": "CNPJ",
                 "Nome_Fantasia_PCL": "Nome Fantasia",
-                "Status_Risco": "Status de Risco",
+                "Representante_Nome": "Representante",
+                "Risco_Diario": "Risco Diário",
                 "Dias_Sem_Coleta": "Dias Sem Coleta",
                 "Variacao_Percentual": "Variação %",
                 "Volume_Atual_2025": "Volume Atual 2025",
                 "Volume_Maximo_2024": "Volume Máximo 2024",
                 "Tendencia_Volume": "Tendência",
+                "Vol_Hoje": "Coletas (Hoje)",
+                "Vol_D1": "D-1",
+                "MM7": "MM7",
+                "MM30": "MM30",
+                "MM90": "MM90",
+                "Delta_D1": "Δ vs D-1",
+                "Delta_MM7": "Δ vs MM7",
+                "Delta_MM30": "Δ vs MM30",
+                "Delta_MM90": "Δ vs MM90",
                 "Ranking_Rede": "Ranking Rede"
             })
             
@@ -3075,17 +3368,15 @@ def main():
                 # Remover duplicatas baseado no CNPJ antes da contagem
                 df_sem_duplicatas_rede = df_rede_filtrado.drop_duplicates(subset=['CNPJ_PCL'], keep='first')
                 # Estatísticas expandidas por rede
-                rede_stats = df_sem_duplicatas_rede.groupby('Rede').agg({
-                    'Nome_Fantasia_PCL': 'count',
-                    'Volume_Total_2025': ['sum', 'mean', 'std'],
-                    'Score_Risco': 'mean',
-                    'Estado': lambda x: x.mode().iloc[0] if not x.mode().empty else 'N/A', # Estado mais comum
-                    'Cidade': 'nunique', # Número de cidades únicas
-                    'Status_Risco': lambda x: (x.isin(['Inativo', 'Alto'])).sum(), # Número de labs em churn (Inativo + Alto)
-                }).reset_index()
-                # Achatar colunas multi-índice
-                rede_stats.columns = ['Rede', 'Qtd_Labs', 'Volume_Total', 'Volume_Medio', 'Volume_Std',
-                                    'Score_Medio_Risco', 'Estado_Principal', 'Cidades_Unicas', 'Labs_Churn']
+                rede_stats = df_sem_duplicatas_rede.groupby('Rede').agg(
+                    Qtd_Labs=('Nome_Fantasia_PCL', 'count'),
+                    Volume_Total=('Volume_Total_2025', 'sum'),
+                    Volume_Medio=('Volume_Total_2025', 'mean'),
+                    Volume_Std=('Volume_Total_2025', 'std'),
+                    Estado_Principal=('Estado', lambda x: x.mode().iloc[0] if not x.mode().empty else 'N/A'),
+                    Cidades_Unicas=('Cidade', 'nunique'),
+                    Labs_Churn=('Risco_Diario', lambda x: x.isin(['🟠 Moderado', '🔴 Alto', '⚫ Crítico']).sum())
+                ).reset_index()
                 # Adicionar mais métricas calculadas
                 rede_stats['Taxa_Churn'] = (rede_stats['Labs_Churn'] / rede_stats['Qtd_Labs'] * 100).round(1)
                 rede_stats['Volume_por_Lab'] = (rede_stats['Volume_Total'] / rede_stats['Qtd_Labs']).round(0)
@@ -3301,91 +3592,92 @@ def main():
                         )
                 elif tipo_analise == "Por Risco":
                     st.subheader("⚠️ Análise de Risco por Rede")
-                    if 'Score_Risco' in df_rede_filtrado.columns:
-                        # Risco por rede
-                        risco_rede = df_rede_filtrado.groupby('Rede').agg({
-                            'Score_Risco': ['mean', 'max', 'count'],
-                            'Volume_Total_2025': 'sum'
-                        }).reset_index()
-                        risco_rede.columns = ['Rede', 'Score_Medio', 'Score_Max', 'Qtd_Labs', 'Volume_Total']
-                        risco_rede = risco_rede.sort_values('Score_Medio', ascending=False)
-                        # Distribuição de risco
-                        fig_risco = px.bar(
-                            risco_rede.head(10),
+                    if 'Risco_Diario' not in df_rede_filtrado.columns:
+                        st.warning("⚠️ Coluna 'Risco_Diario' não encontrada nos dados.")
+                    else:
+                        df_risco = df_rede_filtrado.drop_duplicates(subset=['CNPJ_PCL'], keep='first')
+                        labs_risco = df_risco[df_risco['Risco_Diario'].isin(['🟠 Moderado', '🔴 Alto', '⚫ Crítico'])]
+                        cores_map = {
+                            '🟢 Normal': '#16A34A',
+                            '🟡 Atenção': '#F59E0B',
+                            '🟠 Moderado': '#FB923C',
+                            '🔴 Alto': '#DC2626',
+                            '⚫ Crítico': '#111827'
+                        }
+                        if labs_risco.empty:
+                            st.success("✅ Nenhuma rede com laboratórios em risco elevado.")
+                        else:
+                            resumo_rede = labs_risco.groupby('Rede').agg(
+                                Labs_Risco=('CNPJ_PCL', 'count'),
+                                Vol_Hoje_Medio=('Vol_Hoje', 'mean'),
+                                Delta_MM7_Medio=('Delta_MM7', 'mean'),
+                                Recuperando=('Recuperacao', lambda x: x.sum())
+                            ).reset_index()
+                            resumo_rede['Delta_MM7_Medio'] = resumo_rede['Delta_MM7_Medio'].round(1)
+                            resumo_rede['Vol_Hoje_Medio'] = resumo_rede['Vol_Hoje_Medio'].round(1)
+                            resumo_rede = resumo_rede.sort_values(['Labs_Risco', 'Delta_MM7_Medio'], ascending=[False, True])
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                fig_top = px.bar(
+                                    resumo_rede.head(10),
+                                    x='Labs_Risco',
+                                    y='Rede',
+                                    orientation='h',
+                                    title="🚨 Redes com Mais Labs em Risco",
+                                    color='Delta_MM7_Medio',
+                                    color_continuous_scale='Reds',
+                                    text='Labs_Risco'
+                                )
+                                fig_top.update_traces(texttemplate='%{text}', textposition='outside')
+                                fig_top.update_layout(xaxis_title="Laboratórios em risco", yaxis_title="Rede",
+                                                      height=500, margin=dict(l=40, r=40, t=40, b=40))
+                                st.plotly_chart(fig_top, use_container_width=True)
+                            with col2:
+                                resumo_rede_delta = resumo_rede.sort_values('Delta_MM7_Medio')
+                                fig_delta = px.bar(
+                                    resumo_rede_delta.head(10),
+                                    x='Delta_MM7_Medio',
+                                    y='Rede',
+                                    orientation='h',
+                                    title="📉 Redes com Maior Queda vs MM7",
+                                    color='Labs_Risco',
+                                    color_continuous_scale='Reds',
+                                    text='Delta_MM7_Medio'
+                                )
+                                fig_delta.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+                                fig_delta.update_layout(xaxis_title="Δ vs MM7 (%)", yaxis_title="Rede",
+                                                        height=500, margin=dict(l=40, r=40, t=40, b=40))
+                                st.plotly_chart(fig_delta, use_container_width=True)
+                            st.dataframe(
+                                resumo_rede,
+                                use_container_width=True,
+                                column_config={
+                                    "Rede": st.column_config.TextColumn("🏢 Rede"),
+                                    "Labs_Risco": st.column_config.NumberColumn("🚨 Labs em Risco"),
+                                    "Vol_Hoje_Medio": st.column_config.NumberColumn("📦 Vol. Médio (Hoje)", format="%.1f"),
+                                    "Delta_MM7_Medio": st.column_config.NumberColumn("Δ Médio vs MM7", format="%.1f%%"),
+                                    "Recuperando": st.column_config.NumberColumn("🔁 Em Recuperação")
+                                },
+                                hide_index=True
+                            )
+                        risco_status = df_risco.groupby(['Rede', 'Risco_Diario']).size().reset_index(name='Qtd')
+                        fig_status = px.bar(
+                            risco_status,
                             x='Rede',
-                            y='Score_Medio',
-                            title="⚠️ Top 10 Redes por Score de Risco",
-                            color='Score_Medio',
-                            color_continuous_scale='Reds',
-                            text='Score_Medio'
+                            y='Qtd',
+                            color='Risco_Diario',
+                            title="📊 Distribuição de Risco Diário por Rede",
+                            color_discrete_map=cores_map,
+                            barmode='stack'
                         )
-                        fig_risco.update_traces(texttemplate='%{text:.1f}', textposition='outside')
-                        fig_risco.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
-                        st.plotly_chart(fig_risco, use_container_width=True)
-                        # Distribuição de labs por nível de risco e rede
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            # Labs de alto risco por rede
-                            alto_risco = df_rede_filtrado[df_rede_filtrado['Score_Risco'] > 70].groupby('Rede').size().reset_index(name='Qtd_Alto_Risco')
-                            alto_risco = alto_risco.sort_values('Qtd_Alto_Risco', ascending=False)
-                            fig_alto = px.bar(
-                                alto_risco.head(10),
-                                x='Rede',
-                                y='Qtd_Alto_Risco',
-                                title="🚨 Labs de Alto Risco por Rede",
-                                color='Qtd_Alto_Risco',
-                                color_continuous_scale='Reds'
-                            )
-                            fig_alto.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
-                            st.plotly_chart(fig_alto, use_container_width=True)
-                        with col2:
-                            # Status de risco por rede
-                            risco_status = df_rede_filtrado.groupby(['Rede', 'Status_Risco']).size().reset_index(name='Qtd')
-                            fig_status = px.bar(
-                                risco_status,
-                                x='Rede',
-                                y='Qtd',
-                                color='Status_Risco',
-                                title="📊 Status de Risco por Rede",
-                                color_discrete_map={'Alto': '#d62728', 'Médio': '#ff7f0e', 'Baixo': '#2ca02c', 'Inativo': '#9467bd'}
-                            )
-                            fig_status.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
-                            st.plotly_chart(fig_status, use_container_width=True)
-                        # Adicionar indicadores de risco às redes de alto risco
-                        risco_rede_display = risco_rede.copy()
-                        # Função para indicadores de risco em análise por risco
-                        def adicionar_indicador_risco_alto(row):
-                            indicadores = []
-                            # Indicador crítico para score máximo > 80
-                            if row['Score_Max'] > 80:
-                                indicadores.append("🚨")
-                            elif row['Score_Max'] > 60:
-                                indicadores.append("⚠️")
-                            # Indicador de rede com muitos labs em risco
-                            if row['Qtd_Labs'] > row['Qtd_Labs'] * 0.5: # Mais de 50% dos labs com score alto
-                                indicadores.append("🔴")
-                            return ' '.join(indicadores) if indicadores else "⚡"
-                        risco_rede_display['🚨 Prioridade'] = risco_rede_display.apply(adicionar_indicador_risco_alto, axis=1)
-                        # Tabela de risco detalhada com indicadores
-                        st.dataframe(
-                            risco_rede_display.round(2),
-                            use_container_width=True,
-                            column_config={
-                                "🚨 Prioridade": st.column_config.TextColumn("🚨 Prioridade", width="small", help="Nível de prioridade para intervenção"),
-                                "Rede": st.column_config.TextColumn("🏢 Rede"),
-                                "Score_Medio": st.column_config.NumberColumn("⚠️ Score Médio", format="%.1f"),
-                                "Score_Max": st.column_config.NumberColumn("🚨 Score Máximo", format="%.1f"),
-                                "Qtd_Labs": st.column_config.NumberColumn("🏥 Qtd Labs"),
-                                "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f")
-                            },
-                            hide_index=True
-                        )
-                        # Alertas críticos
-                        redes_criticas = risco_rede_display[risco_rede_display['🚨 Prioridade'].str.contains('🚨')]
+                        fig_status.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
+                        st.plotly_chart(fig_status, use_container_width=True)
+                        # Destaques de risco crítico
+                        redes_criticas = labs_risco[labs_risco['Risco_Diario'] == '⚫ Crítico']['Rede'].value_counts()
                         if not redes_criticas.empty:
-                            st.error(f"🚨 **ATENÇÃO CRÍTICA:** {len(redes_criticas)} rede(s) com score máximo > 80 requerem intervenção imediata!")
-                            for _, rede in redes_criticas.iterrows():
-                                st.write(f"• **{rede['Rede']}**: Score máximo de {rede['Score_Max']:.1f}")
+                            st.error("🚨 Redes com laboratórios em risco crítico detectadas!")
+                            for rede, qtd in redes_criticas.items():
+                                st.write(f"• **{rede}**: {qtd} laboratório(s) crítico(s)")
                 elif tipo_analise == "🔄 Comparação de Redes":
                     st.subheader("🔄 Comparação Direta de Redes")
                     # Seletor de redes para comparação (máximo 5 para legibilidade)
@@ -3428,11 +3720,11 @@ def main():
                                     f"{menor_churn['Rede'][:15]}..."
                                 )
                             with col4:
-                                maior_score = redes_comparacao.loc[redes_comparacao['Score_Medio_Risco'].idxmax()]
+                                maior_risco = redes_comparacao.loc[redes_comparacao['Labs_Churn'].idxmax()]
                                 st.metric(
-                                    "⚠️ Maior Risco",
-                                    f"{maior_score['Score_Medio_Risco']:.1f}",
-                                    f"{maior_score['Rede'][:15]}..."
+                                    "⚠️ Mais Labs em Risco",
+                                    f"{int(maior_risco['Labs_Churn'])}",
+                                    f"{maior_risco['Rede'][:15]}..."
                                 )
                             # ========================================
                             # GRÁFICOS COMPARATIVOS
@@ -3484,7 +3776,7 @@ def main():
                             # Reordenar colunas para melhor visualização
                             cols_comparacao = [
                                 'Rede', 'Categoria_Rede', 'Qtd_Labs', 'Labs_Churn', 'Taxa_Churn',
-                                'Volume_Total', 'Volume_Medio', 'Volume_por_Lab', 'Score_Medio_Risco'
+                                'Volume_Total', 'Volume_Medio', 'Volume_por_Lab'
                             ]
                             # Adicionar indicadores visuais de risco
                             redes_comparacao_display = redes_comparacao[cols_comparacao].copy()
@@ -3498,10 +3790,11 @@ def main():
                                     indicadores.append("🟠")
                                 else:
                                     indicadores.append("🟢")
-                                # Indicador de alto risco
-                                if row['Score_Medio_Risco'] > 70:
+                                # Indicador de concentração de labs em risco
+                                proporcao_risco = (row['Labs_Churn'] / row['Qtd_Labs']) if row['Qtd_Labs'] else 0
+                                if proporcao_risco >= 0.5:
                                     indicadores.append("⚠️")
-                                elif row['Score_Medio_Risco'] > 40:
+                                elif proporcao_risco >= 0.3:
                                     indicadores.append("⚡")
                                 # Indicador de baixa eficiência (volume por lab)
                                 media_geral = redes_comparacao['Volume_por_Lab'].mean()
@@ -3524,8 +3817,7 @@ def main():
                                     "Taxa_Churn": st.column_config.NumberColumn("📉 % Churn", format="%.1f%%"),
                                     "Volume_Total": st.column_config.NumberColumn("📦 Vol. Total", format="%.0f"),
                                     "Volume_Medio": st.column_config.NumberColumn("📊 Vol. Médio", format="%.0f"),
-                                    "Volume_por_Lab": st.column_config.NumberColumn("💰 Vol/Lab", format="%.0f"),
-                                    "Score_Medio_Risco": st.column_config.NumberColumn("⚠️ Score Risco", format="%.1f")
+                                    "Volume_por_Lab": st.column_config.NumberColumn("💰 Vol/Lab", format="%.0f")
                                 },
                                 hide_index=True
                             )
@@ -3548,10 +3840,10 @@ def main():
                                     st.write(f"{medal} {row['Rede'][:20]}...: {row['Volume_por_Lab']:,.0f}")
                             with col3:
                                 st.subheader("🥇 Por Menor Risco")
-                                ranking_risco = redes_comparacao.sort_values('Score_Medio_Risco', ascending=True)[['Rede', 'Score_Medio_Risco']]
+                                ranking_risco = redes_comparacao.sort_values('Taxa_Churn', ascending=True)[['Rede', 'Taxa_Churn']]
                                 for idx, row in ranking_risco.iterrows():
                                     medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else "📊"
-                                    st.write(f"{medal} {row['Rede'][:20]}...: {row['Score_Medio_Risco']:.1f}")
+                                    st.write(f"{medal} {row['Rede'][:20]}...: {row['Taxa_Churn']:.1f}%")
                         else:
                             st.warning("⚠️ Nenhuma rede encontrada com os critérios selecionados.")
                     else:

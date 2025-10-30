@@ -311,6 +311,45 @@ CSS_STYLES = """
         animation: spin 1s linear infinite;
         margin: 0 auto 1rem;
     }
+    .overlay-loader {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.92);
+        backdrop-filter: blur(4px);
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .overlay-loader__content {
+        text-align: center;
+        color: #f8fafc;
+        max-width: 480px;
+        padding: 2.5rem;
+        border-radius: 20px;
+        background: rgba(17, 24, 39, 0.55);
+        box-shadow: 0 20px 45px rgba(15, 23, 42, 0.45);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    .overlay-loader__spinner {
+        border: 6px solid rgba(148, 163, 184, 0.3);
+        border-top: 6px solid var(--secondary-color);
+        border-radius: 50%;
+        width: 90px;
+        height: 90px;
+        animation: spin 1s linear infinite;
+        margin: 0 auto 1.5rem;
+    }
+    .overlay-loader__title {
+        font-size: 1.6rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+    }
+    .overlay-loader__subtitle {
+        font-size: 1rem;
+        opacity: 0.85;
+        line-height: 1.5;
+    }
     @keyframes spin {
         0% { transform: rotate(0deg); }
         100% { transform: rotate(360deg); }
@@ -2021,13 +2060,28 @@ def main():
     # Renderizar header do dashboard
     UIManager.renderizar_header()
     # Carregar e preparar dados
-    with st.spinner("🔄 Carregando dados..."):
+    loader_placeholder = st.empty()
+    loader_placeholder.markdown(
+        """
+        <div class="overlay-loader">
+            <div class="overlay-loader__content">
+                <div class="overlay-loader__spinner"></div>
+                <div class="overlay-loader__title">Carregando dados atualizados...</div>
+                <div class="overlay-loader__subtitle">Estamos sincronizando as coletas mais recentes. Isso pode levar alguns segundos.</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    try:
         df_raw = DataManager.carregar_dados_churn()
         if df_raw is None:
             st.error("❌ Não foi possível carregar os dados. Execute o gerador de dados primeiro.")
             return
         df = DataManager.preparar_dados(df_raw)
         show_toast_once(f"✅ Dados carregados: {len(df):,} laboratórios", "dados_carregados")
+    finally:
+        loader_placeholder.empty()
     # Indicador de última atualização
     if not df.empty and 'Data_Analise' in df.columns:
         ultima_atualizacao = df['Data_Analise'].max()
@@ -3872,52 +3926,6 @@ def main():
                             st.warning("⚠️ Nenhuma rede encontrada com os critérios selecionados.")
                     else:
                         st.info("ℹ️ Selecione pelo menos uma rede para iniciar a comparação.")
-                # Análise de relacionamentos (quem pertence a quem)
-                st.markdown("---")
-                st.subheader("🔗 Análise de Relacionamentos")
-                # Mostrar hierarquia Rede -> Ranking -> Labs
-                if 'Ranking' in df_rede_filtrado.columns and 'Ranking Rede' in df_rede_filtrado.columns:
-                    # Criar tabela hierárquica - garantir que cada laboratório seja contado apenas uma vez
-                    # Remover duplicatas baseado no CNPJ antes da contagem
-                    df_sem_duplicatas = df_rede_filtrado.drop_duplicates(subset=['CNPJ_PCL'], keep='first')
-                 
-                    hierarquia = df_sem_duplicatas.groupby(['Rede', 'Ranking', 'Ranking Rede']).agg({
-                        'Nome_Fantasia_PCL': 'count',
-                        'Volume_Total_2025': 'sum'
-                    }).reset_index()
-                    hierarquia.columns = ['Rede', 'Ranking', 'Ranking_Rede', 'Qtd_Labs', 'Volume_Total']
-                    hierarquia = hierarquia.sort_values(['Rede', 'Ranking', 'Ranking_Rede'])
-                    st.dataframe(
-                        hierarquia,
-                        use_container_width=True,
-                        column_config={
-                            "Rede": st.column_config.TextColumn("🏢 Rede"),
-                            "Ranking": st.column_config.TextColumn("🏆 Ranking"),
-                            "Ranking_Rede": st.column_config.TextColumn("🏅 Ranking Rede"),
-                            "Qtd_Labs": st.column_config.NumberColumn("🏥 Qtd Labs"),
-                            "Volume_Total": st.column_config.NumberColumn("📦 Volume Total", format="%.0f")
-                        },
-                        hide_index=True
-                    )
-                    # Gráfico de sunburst para hierarquia
-                    if len(hierarquia) > 0:
-                        # Filtrar apenas dados com volume positivo para evitar erro de normalização
-                        hierarquia_plot = hierarquia[hierarquia['Volume_Total'] > 0].copy()
-                        if not hierarquia_plot.empty:
-                            # Garantir que não há valores zero ou negativos
-                            hierarquia_plot['Volume_Total'] = hierarquia_plot['Volume_Total'].clip(lower=0.1)
-                            fig_sunburst = px.sunburst(
-                                hierarquia_plot,
-                                path=['Rede', 'Ranking', 'Ranking_Rede'],
-                                values='Volume_Total',
-                                title="🌅 Hierarquia: Rede → Ranking → Ranking Rede",
-                                color='Qtd_Labs',
-                                color_continuous_scale='Blues'
-                            )
-                            fig_sunburst.update_layout(height=500, margin=dict(l=40, r=40, t=40, b=40))
-                            st.plotly_chart(fig_sunburst, use_container_width=True)
-                        else:
-                            st.info("ℹ️ Não há dados suficientes com volume positivo para gerar o gráfico hierárquico.")
             else:
                 st.warning("⚠️ Nenhum dado encontrado com os filtros aplicados.")
         else:

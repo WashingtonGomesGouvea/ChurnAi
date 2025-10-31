@@ -681,7 +681,28 @@ class DataManager:
     def carregar_laboratories() -> Optional[pd.DataFrame]:
         """Carrega dados de laboratories.csv com cache inteligente."""
         try:
-            # Tentar arquivo local primeiro
+            # PRIMEIRO: Tentar baixar do SharePoint/OneDrive
+            arquivo_labs_remoto = "Data Analysis/Churn PCLs/laboratories.csv"
+            arquivo_sharepoint = baixar_sharepoint(arquivo_remoto=arquivo_labs_remoto)
+            
+            if arquivo_sharepoint and os.path.exists(arquivo_sharepoint):
+                try:
+                    df_labs = pd.read_csv(arquivo_sharepoint, encoding=ENCODING, low_memory=False)
+                    
+                    # Normalizar CNPJ para permitir matching
+                    if 'cnpj' in df_labs.columns:
+                        df_labs['cnpj'] = df_labs['cnpj'].astype(str)
+                        df_labs['CNPJ_Normalizado'] = df_labs['cnpj'].apply(DataManager.normalizar_cnpj)
+                    elif 'CNPJ' in df_labs.columns:
+                        df_labs['CNPJ'] = df_labs['CNPJ'].astype(str)
+                        df_labs['CNPJ_Normalizado'] = df_labs['CNPJ'].apply(DataManager.normalizar_cnpj)
+                    
+                    return df_labs
+                except Exception as e:
+                    # Erro silencioso - será tratado onde a função é chamada
+                    pass
+            
+            # FALLBACK: Tentar arquivo local
             arquivo_labs = os.path.join(OUTPUT_DIR, LABORATORIES_FILE)
             if os.path.exists(arquivo_labs):
                 df_labs = pd.read_csv(arquivo_labs, encoding=ENCODING, low_memory=False)

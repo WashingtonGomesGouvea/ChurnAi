@@ -760,8 +760,17 @@ class RiskEngine:
         if s.empty:
             return dict(MM7=0, MM30=0, MM90=0, D1=0, DOW=0, HOJE=0, zeros_consec=0, quedas50_consec=0)
         s = s.sort_index()
+        
+        # Se ref_date não existe na série, expandir até ref_date com zeros
         if ref_date not in s.index:
-            ref_date = s.index.max()
+            # Se ref_date é posterior aos dados, expandir série até ref_date
+            if ref_date > s.index.max():
+                full_idx = pd.date_range(s.index.min(), ref_date, freq="D")
+                s = s.reindex(full_idx).fillna(0)
+            else:
+                # Se ref_date é anterior aos dados, retornar zeros
+                return dict(MM7=0, MM30=0, MM90=0, D1=0, DOW=0, HOJE=0, zeros_consec=0, quedas50_consec=0)
+        
         hoje = float(s.loc[ref_date])
         d1 = float(s.shift(1).loc[ref_date]) if ref_date - pd.Timedelta(days=1) in s.index else 0.0
         mm7 = float(s.loc[:ref_date].tail(7).mean())
@@ -789,7 +798,8 @@ class RiskEngine:
         s = RiskEngine._serie_diaria_from_json(row.get("Dados_Diarios_2025", "{}"))
         if s.empty:
             return {}
-        ref_date = s.index.max()
+        # CORREÇÃO CRÍTICA: usar data atual, não último dia da série
+        ref_date = pd.Timestamp.today().normalize()
         m = RiskEngine._rolling_means(s, ref_date)
         hoje, d1 = m["HOJE"], m["D1"]
         mm7, mm30, mm90, dow = m["MM7"], m["MM30"], m["MM90"], m["DOW"]

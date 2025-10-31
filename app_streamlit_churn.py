@@ -1314,7 +1314,7 @@ class FilterManager:
         self.filtros = {}
     def renderizar_sidebar_filtros(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Renderiza filtros otimizados na sidebar."""
-        st.sidebar.markdown('<div class="sidebar-header"><h3>🔧 Filtros</h3></div>', unsafe_allow_html=True)
+        st.sidebar.markdown('<div class="sidebar-header" style="font-size: 1rem; font-weight: 600; color: var(--primary-color);">🔧 Filtros</div>', unsafe_allow_html=True)
         filtros = {}
         # Filtro VIP com opção de alternar
         filtros['apenas_vip'] = st.sidebar.toggle(
@@ -2626,7 +2626,7 @@ def main():
         st.toast("✅ Cache limpo! Os dados serão recarregados automaticamente.")
     # Seção de relatórios na sidebar
     st.sidebar.markdown("---")
-    st.sidebar.markdown('<div class="sidebar-header"><h3>📅 Relatórios</h3></div>', unsafe_allow_html=True)
+    st.sidebar.markdown('<div class="sidebar-header" style="font-size: 1rem; font-weight: 600; color: var(--primary-color);">📅 Relatórios</div>', unsafe_allow_html=True)
     tipo_relatorio = st.sidebar.selectbox(
         "Tipo de Relatório",
         ["Semanal", "Mensal"],
@@ -3543,8 +3543,8 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                             licencas_map = {
                                 'clt': 'CLT', 'cnh': 'CNH', 'cltCnh': 'CLT/CNH',
                                 'other': 'Outros', 'online': 'Online',
-                                'civilService': 'Serviço Público', 
-                                'civilServiceAnalysis50': 'Serviço Público (50)',
+                                'civilService': 'Concurso Público', 
+                                'civilServiceAnalysis50': 'Concurso Público (50)',
                                 'otherAnalysis50': 'Outros (50)'
                             }
                             licencas_formatadas = [licencas_map.get(l, l) for l in licensed_list] if licensed_list else []

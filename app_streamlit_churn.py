@@ -779,7 +779,7 @@ class RiskEngine:
             recuperacao = True
         return {
             "Vol_Hoje": int(hoje), "Vol_D1": int(d1),
-            "MM7": round(mm7, 1), "MM30": round(mm30, 1), "MM90": round(mm90, 1), "DOW_Media": round(dow, 1),
+            "MM7": round(mm7, 3), "MM30": round(mm30, 3), "MM90": round(mm90, 3), "DOW_Media": round(dow, 1),
             "Delta_D1": round(d_vs_d1, 1), "Delta_MM7": round(d_vs_mm7, 1),
             "Delta_MM30": round(d_vs_mm30, 1), "Delta_MM90": round(d_vs_mm90, 1),
             "Risco_Diario": risco, "Recuperacao": recuperacao
@@ -2171,8 +2171,9 @@ def main():
                         st.error(f"⚠️ {len(criticos)} laboratório(s) em risco **CRÍTICO** — intervenção imediata necessária.")
                         colunas_alerta = [
                             'Nome_Fantasia_PCL', 'Estado',
-                            'Vol_Hoje', 'Delta_MM7', 'MM7',
+                            'Vol_Hoje',
                             'Vol_D1', 'Delta_D1',
+                            'MM7', 'Delta_MM7',
                             'Dias_Sem_Coleta'
                         ]
                         colunas_alerta = [c for c in colunas_alerta if c in criticos.columns]
@@ -2185,6 +2186,8 @@ def main():
                                     "Estado": st.column_config.TextColumn("UF"),
                                     "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
                                     "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f"),
                                     "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
                                     "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias sem Coleta")
                                 },
@@ -2206,8 +2209,9 @@ def main():
                         )
                         colunas_queda = [
                             'Nome_Fantasia_PCL', 'Estado',
-                            'Vol_Hoje', 'Delta_MM7', 'MM7',
+                            'Vol_Hoje',
                             'Vol_D1', 'Delta_D1',
+                            'MM7', 'Delta_MM7',
                             'Risco_Diario', 'Recuperacao'
                         ]
                         colunas_queda = [c for c in colunas_queda if c in quedas_relevantes.columns]
@@ -2220,6 +2224,43 @@ def main():
                                     "Estado": st.column_config.TextColumn("UF"),
                                     "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
                                     "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
+                                    "Risco_Diario": st.column_config.TextColumn("Risco"),
+                                    "Recuperacao": st.column_config.CheckboxColumn("Em Recuperação")
+                                },
+                                hide_index=True
+                            )
+
+                if {'Delta_D1', 'Risco_Diario'}.issubset(df_filtrado.columns):
+                    quedas_d1_relevantes = df_filtrado[
+                        (df_filtrado['Delta_D1'] <= -40) &
+                        (df_filtrado['Risco_Diario'].isin(['🟠 Moderado', '🔴 Alto']))
+                    ].copy()
+                    if not quedas_d1_relevantes.empty:
+                        st.error(
+                            f"📉 {len(quedas_d1_relevantes)} laboratório(s) com queda ≥40% vs D-1 e risco elevado — atenção imediata necessária."
+                        )
+                        colunas_queda_d1 = [
+                            'Nome_Fantasia_PCL', 'Estado',
+                            'Vol_Hoje',
+                            'Vol_D1', 'Delta_D1',
+                            'MM7', 'Delta_MM7',
+                            'Risco_Diario', 'Recuperacao'
+                        ]
+                        colunas_queda_d1 = [c for c in colunas_queda_d1 if c in quedas_d1_relevantes.columns]
+                        if colunas_queda_d1:
+                            st.dataframe(
+                                _formatar_df_exibicao(quedas_d1_relevantes[colunas_queda_d1].sort_values(['Delta_D1', 'Vol_Hoje']).head(15)),
+                                use_container_width=True,
+                                column_config={
+                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
+                                    "Estado": st.column_config.TextColumn("UF"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f"),
                                     "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
                                     "Risco_Diario": st.column_config.TextColumn("Risco"),
                                     "Recuperacao": st.column_config.CheckboxColumn("Em Recuperação")
@@ -2237,8 +2278,9 @@ def main():
                         st.caption("Ordenado por maior queda percentual (ΔMM7) e limitado aos 10 piores casos.")
                         colunas_moderado = [
                             'Nome_Fantasia_PCL', 'Estado',
-                            'Vol_Hoje', 'Delta_MM7', 'MM7',
+                            'Vol_Hoje',
                             'Vol_D1', 'Delta_D1',
+                            'MM7', 'Delta_MM7',
                             'MM30', 'Delta_MM30',
                             'Dias_Sem_Coleta'
                         ]
@@ -2252,9 +2294,10 @@ def main():
                                     "Estado": st.column_config.TextColumn("UF"),
                                     "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
                                     "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
-                                    "MM7": st.column_config.NumberColumn("MM7", format="%.1f"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f"),
                                     "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
                                     "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
+                                    "MM30": st.column_config.NumberColumn("MM30", format="%.3f"),
                                     "Delta_MM30": st.column_config.NumberColumn("Δ vs MM30", format="%.1f%%"),
                                     "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta")
                                 },
@@ -2286,13 +2329,29 @@ def main():
             st.markdown("---")
             with st.expander("ℹ️ Legenda das métricas diárias"):
                 st.markdown("""
+#### 📊 Métricas Principais
 - **Vol_Hoje**: total de coletas registradas na data de referência (dia mais recente da série diária).
 - **Vol_D1**: volume de coletas do dia imediatamente anterior ao atual.
-- **MM7 / MM30 / MM90**: médias móveis de 7, 30 e 90 dias da série diária, incluindo dias sem coleta (zero).
-- **Δ vs MM7 / MM30 / MM90**: variação percentual do volume de hoje em relação às respectivas médias móveis.
+- **MM7 / MM30 / MM90**: médias móveis de 7, 30 e 90 dias da série diária, incluindo dias sem coleta (zero). Exibidas com 3 casas decimais para máxima transparência nos cálculos de variação.
+- **Δ vs MM7 / MM30 / MM90**: variação percentual do volume de hoje em relação às respectivas médias móveis (calculada com valores não arredondados).
 - **Δ vs D-1**: variação percentual do volume de hoje comparado ao dia anterior.
 - **DOW_Media**: média de coletas para o mesmo dia da semana (ex.: todas as segundas) nos últimos 90 dias.
-- **Risco_Diario**: classificação gerada pelo RiskEngine considerando os limiares de volume, médias e quedas consecutivas.
+
+#### 🚨 Classificação de Risco Diário
+A classificação de risco segue uma régua hierárquica baseada em múltiplos critérios:
+
+**🟢 Normal**: Volume dentro dos padrões esperados (90-120% da MM7 ou 100-120% do D-1).
+**🟡 Atenção**: Volume abaixo do normal mas ainda recuperável (70-90% da MM7 ou 70-100% do D-1).
+**🟠 Moderado**: Volume significativamente reduzido (50-70% da MM7 ou 60-70% do D-1).
+**🔴 Alto**: Volume crítico com necessidade de intervenção (abaixo de 50% da MM7 ou 60% do D-1).
+**⚫ Crítico**: Situações extremas (7+ dias sem coleta ou 3+ quedas consecutivas de 50%+).
+
+#### ⚠️ Regras de Alerta Específicas
+- **🔻 Queda ≥50% vs MM7**: Laboratórios com queda estrutural significativa + risco moderado/alto.
+- **📉 Queda ≥40% vs D-1**: Laboratórios com queda brusca recente + risco moderado/alto.
+
+#### 🔄 Outros Indicadores
+- **Risco_Diario**: classificação automática baseada nos limiares acima.
 - **Recuperacao**: indica que o laboratório voltou a operar acima da MM7 após período de queda.
 - **Sem Coleta (48h)**: quantidade de laboratórios com dois dias consecutivos sem registrar coletas (Vol_Hoje = 0 e Vol_D1 = 0).
                 """)
@@ -2313,8 +2372,9 @@ def main():
                             quedas_diarias = quedas_diarias.sort_values('Delta_MM7').head(10)
                             colunas_quedas = [
                                 'Nome_Fantasia_PCL', 'Estado',
-                                'Vol_Hoje', 'Delta_MM7', 'MM7',
+                                'Vol_Hoje',
                                 'Vol_D1', 'Delta_D1',
+                                'MM7', 'Delta_MM7',
                                 'Risco_Diario', 'Dias_Sem_Coleta'
                             ]
                             colunas_quedas = [c for c in colunas_quedas if c in quedas_diarias.columns]
@@ -2326,7 +2386,7 @@ def main():
                                     "Estado": st.column_config.TextColumn("UF"),
                                     "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
                                     "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
-                                    "MM7": st.column_config.NumberColumn("MM7", format="%.1f"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f"),
                                     "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
                                     "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
                                     "Risco_Diario": st.column_config.TextColumn("Risco"),
@@ -2348,8 +2408,9 @@ def main():
                             altas_diarias = altas_diarias.sort_values('Delta_MM7', ascending=False).head(10)
                             colunas_altas = [
                                 'Nome_Fantasia_PCL', 'Estado',
-                                'Vol_Hoje', 'Delta_MM7', 'MM7',
+                                'Vol_Hoje',
                                 'Vol_D1', 'Delta_D1',
+                                'MM7', 'Delta_MM7',
                                 'Risco_Diario', 'Recuperacao'
                             ]
                             colunas_altas = [c for c in colunas_altas if c in altas_diarias.columns]
@@ -2361,7 +2422,7 @@ def main():
                                     "Estado": st.column_config.TextColumn("UF"),
                                     "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
                                     "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
-                                    "MM7": st.column_config.NumberColumn("MM7", format="%.1f"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f"),
                                     "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
                                     "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
                                     "Risco_Diario": st.column_config.TextColumn("Risco"),
@@ -2381,21 +2442,18 @@ def main():
                         # Recalcular Δ vs MM7 para garantir fórmula consistente: (Hoje - MM7) / MM7
                         for col in ['Vol_Hoje', 'MM7']:
                             recuperacoes[col] = pd.to_numeric(recuperacoes[col], errors='coerce')
-                        delta_mm7_calc = (
-                            (recuperacoes['Vol_Hoje'] - recuperacoes['MM7'])
-                            .where(recuperacoes['MM7'].notna() & (recuperacoes['MM7'] != 0))
-                        )
-                        recuperacoes['Delta_MM7'] = (
-                            (delta_mm7_calc / recuperacoes['MM7'])
-                            .mul(100)
-                            .round(1)
-                            .fillna(recuperacoes['Delta_MM7'])
-                        )
+
+                        # Função para calcular percentual igual à do RiskEngine
+                        def pct_safe(a, b):
+                            return ((a - b) / b * 100).where(b.notna() & (b != 0), 0.0)
+
+                        recuperacoes['Delta_MM7'] = pct_safe(recuperacoes['Vol_Hoje'], recuperacoes['MM7']).round(1)
                         recuperacoes = recuperacoes.sort_values('Delta_MM7', ascending=False)
                         colunas_recuperacao = [
                             'Nome_Fantasia_PCL', 'Estado',
-                            'Vol_Hoje', 'Delta_MM7', 'MM7',
+                            'Vol_Hoje',
                             'Vol_D1', 'Delta_D1',
+                            'MM7', 'Delta_MM7',
                             'Risco_Diario', 'Dias_Sem_Coleta'
                         ]
                         colunas_recuperacao = [c for c in colunas_recuperacao if c in recuperacoes.columns]
@@ -2419,6 +2477,76 @@ def main():
                         st.info("Nenhuma recuperação consistente detectada (labs com Δ vs MM7 positivo e flag de recuperação).")
                 else:
                     st.warning("⚠️ Coluna 'Recuperacao' não encontrada nos dados.")
+
+            st.markdown("---")
+            with st.expander("📊 Como Funcionam os Cálculos desta Aba"):
+                st.markdown("""
+#### 🔢 **Fórmulas Básicas dos Indicadores**
+
+**Médias Móveis (MM7, MM30, MM90):**
+- **MM7**: Média aritmética simples dos últimos 7 dias
+- **MM30**: Média aritmética simples dos últimos 30 dias
+- **MM90**: Média aritmética simples dos últimos 90 dias
+- *Nota: Inclui dias sem coleta (contados como zero)*
+
+**Variações Percentuais (Deltas):**
+- **Δ vs MM7** = `(Vol_Hoje - MM7) / MM7 × 100`
+- **Δ vs D-1** = `(Vol_Hoje - Vol_D1) / Vol_D1 × 100`
+- **Δ vs MM30** = `(Vol_Hoje - MM30) / MM30 × 100`
+- *Nota: Calculados com valores não arredondados para máxima precisão*
+
+#### 📊 **Lógica de Cada Tabela**
+
+**1. 📉 Maiores Quedas vs MM7**
+- **Filtro**: `Delta_MM7.notna()` (todos com dados disponíveis)
+- **Ordenação**: Por `Delta_MM7` (maior queda primeiro)
+- **Limite**: Top 10 laboratórios
+- **Objetivo**: Identificar maiores declínios estruturais
+
+**2. 📈 Altas vs MM7**
+- **Filtro**: `Delta_MM7 > 0` (apenas crescimentos)
+- **Ordenação**: Por `Delta_MM7` decrescente (maior alta primeiro)
+- **Limite**: Top 10 laboratórios
+- **Objetivo**: Identificar recuperações expressivas
+
+**3. 🔁 Recuperações em Andamento**
+- **Filtro**: `Recuperacao == True AND Delta_MM7.notna()`
+- **Ordenação**: Por `Delta_MM7` decrescente (maior recuperação primeiro)
+- **Limite**: Top 10 laboratórios
+- **Objetivo**: Labs que voltaram acima da MM7 após queda
+
+#### 🎯 **Exemplo Prático do Cálculo**
+
+Dados do laboratório: `Vol_Hoje = 3`, `MM7 = 0.429`
+```
+Δ vs MM7 = (3 - 0.429) / 0.429 × 100
+          = 2.571 / 0.429 × 100
+          = 6.00 × 100
+          = 600%
+```
+
+**Por que 600%?** Porque o laboratório coletou ~7 vezes mais que sua média semanal!
+
+#### ⚠️ **Alertas e Regras de Priorização**
+
+- **🔻 Quedas ≥50% vs MM7 + Risco Moderado/Alto**: Prioridade máxima
+- **📉 Quedas ≥40% vs D-1 + Risco Moderado/Alto**: Atenção imediata
+- **Laboratórios sem coleta por 48h**: Seguir protocolo operacional
+
+#### 🔍 **Dicas para Análise**
+- **MM7 próxima de zero**: Valores percentuais podem parecer "inflados", mas são matematicamente corretos
+- **Compare tendências**: Olhe tanto quedas quanto altas para contexto completo
+- **Risco vs Performance**: Laboratório pode ter alto crescimento mas ainda estar em risco se abaixo dos benchmarks
+
+#### 💡 **Como Interpretar Valores Altos de Percentual**
+- **0-100%**: Crescimento normal/recuperação
+- **100-300%**: Crescimento expressivo
+- **300%+**: Laboratório voltou a operar após período de inatividade
+- **Sempre compare com o valor absoluto**: 600% com MM7=0.429 significa apenas ~3 coletas vs. média de ~0.429
+
+#### 📈 **Contexto Executivo**
+Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), registrar 3 coletas hoje representa um crescimento de 600% vs. sua média histórica. Isso indica recuperação de operação, não necessariamente "superperformance".
+                """)
         with tab3:
             st.subheader("📊 Distribuição por Status")
             ChartManager.criar_grafico_distribuicao_risco(df_filtrado)
@@ -3221,13 +3349,12 @@ def main():
             'CNPJ_PCL', 'Nome_Fantasia_PCL', 'Estado', 'Cidade', 'Representante_Nome',
             'Risco_Diario', 'Dias_Sem_Coleta',
             'Volume_Atual_2025', 'Volume_Maximo_2024', 'Tendencia_Volume',
-            # Pares encadeados: Hoje + ΔHoje vs MM7 (+ MM7 como referência ao lado)
-            'Vol_Hoje', 'Delta_MM7', 'MM7',
-            # Pares encadeados: D-1 + ΔD-1
+            # Ordem lógica: (Hoje), (D-1, ΔD-1), (MM7, ΔMM7), (MM30, ΔMM30)
+            'Vol_Hoje',
             'Vol_D1', 'Delta_D1',
-            # Pares encadeados: MM30 + ΔMM30
+            'MM7', 'Delta_MM7',
             'MM30', 'Delta_MM30',
-            # Pares encadeados: MM90 + ΔMM90
+            # Médias móveis adicionais no final
             'MM90', 'Delta_MM90'
         ]
 
@@ -3265,57 +3392,91 @@ def main():
             column_config = {
                 "CNPJ_PCL": st.column_config.TextColumn(
                     "📄 CNPJ",
-                    help="CNPJ do laboratório"
+                    help="CNPJ (Cadastro Nacional de Pessoa Jurídica) do laboratório. Identificador único para busca e identificação"
                 ),
                 "Nome_Fantasia_PCL": st.column_config.TextColumn(
                     "🏥 Nome Fantasia",
-                    help="Nome fantasia do laboratório"
+                    help="Nome comercial/fantasia do laboratório. Use para busca rápida por nome"
                 ),
                 "Estado": st.column_config.TextColumn(
                     "🗺️ Estado",
-                    help="Estado do laboratório"
+                    help="Estado (UF) onde o laboratório está localizado. Permite filtrar e agrupar por região geográfica"
                 ),
                 "Cidade": st.column_config.TextColumn(
                     "🏙️ Cidade",
-                    help="Cidade do laboratório"
+                    help="Cidade onde o laboratório está localizado. Permite análise mais granular por localização"
                 ),
                 "Representante_Nome": st.column_config.TextColumn(
                     "👤 Representante",
-                    help="Nome do representante responsável"
+                    help="Nome do representante comercial responsável pelo laboratório. Útil para contato direto e gestão de relacionamento"
                 ),
                 "Risco_Diario": st.column_config.TextColumn(
                     "Risco Diário",
-                    help="Classificação de risco diária pela nova régua"
+                    help="Classificação de risco diária: 🟢 Normal, 🟡 Atenção, 🟠 Moderado, 🔴 Alto, ⚫ Crítico. Baseado em volume atual vs. médias móveis e padrões históricos"
                 ),
                 "Dias_Sem_Coleta": st.column_config.NumberColumn(
                     "Dias Sem Coleta",
-                    help="Número de dias sem coleta"
+                    help="Número consecutivo de dias sem registrar coletas. Valores altos indicam possível inatividade do laboratório"
                 ),
                 # Removido da tabela principal: Variação %
                 "Volume_Atual_2025": st.column_config.NumberColumn(
                     "Volume Atual 2025",
-                    help="Volume atual de coletas em 2025"
+                    help="Soma total de coletas em 2025 até o momento (todos os meses disponíveis até hoje)"
                 ),
                 "Volume_Maximo_2024": st.column_config.NumberColumn(
-                    "Máximo mensal 2024",
-                    help="Maior volume mensal de coletas em 2024 (máximo por mês)"
+                    "Maior Mês 2024",
+                    help="Maior volume mensal de coletas em 2024 (melhor mês individual do ano)"
                 ),
                 "Tendencia_Volume": st.column_config.TextColumn(
                     "Tendência",
-                    help="Tendência de volume (Crescimento/Declínio/Estável)"
+                    help="Tendência de volume calculada comparando Volume Atual 2025 vs. Maior Mês 2024: Crescimento (>100%), Declínio (<50%), Estável (50-100%)"
                 )
             }
 
             column_config.update({
-                "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
-                "Vol_D1": st.column_config.NumberColumn("D-1"),
-                "MM7": st.column_config.NumberColumn("MM7"),
-                "MM30": st.column_config.NumberColumn("MM30"),
-                "MM90": st.column_config.NumberColumn("MM90"),
-                "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
-                "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
-                "Delta_MM30": st.column_config.NumberColumn("Δ vs MM30", format="%.1f%%"),
-                "Delta_MM90": st.column_config.NumberColumn("Δ vs MM90", format="%.1f%%")
+                "Vol_Hoje": st.column_config.NumberColumn(
+                    "Coletas (Hoje)",
+                    help="Total de coletas registradas na data de referência (dia mais recente da série diária)"
+                ),
+                "Vol_D1": st.column_config.NumberColumn(
+                    "Coletas (D-1)",
+                    help="Volume de coletas do dia imediatamente anterior ao atual"
+                ),
+                "MM7": st.column_config.NumberColumn(
+                    "MM7",
+                    format="%.3f",
+                    help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"
+                ),
+                "MM30": st.column_config.NumberColumn(
+                    "MM30",
+                    format="%.3f",
+                    help="Média móvel de 30 dias - média aritmética simples dos últimos 30 dias (inclui dias sem coleta como zero)"
+                ),
+                "MM90": st.column_config.NumberColumn(
+                    "MM90",
+                    format="%.3f",
+                    help="Média móvel de 90 dias - média aritmética simples dos últimos 90 dias (inclui dias sem coleta como zero)"
+                ),
+                "Delta_D1": st.column_config.NumberColumn(
+                    "Δ vs D-1",
+                    format="%.1f%%",
+                    help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia anterior"
+                ),
+                "Delta_MM7": st.column_config.NumberColumn(
+                    "Δ vs MM7",
+                    format="%.1f%%",
+                    help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Indica performance vs. média semanal dos últimos 7 dias"
+                ),
+                "Delta_MM30": st.column_config.NumberColumn(
+                    "Δ vs MM30",
+                    format="%.1f%%",
+                    help="Variação percentual: (Vol_Hoje - MM30) / MM30 × 100. Indica performance vs. média mensal dos últimos 30 dias"
+                ),
+                "Delta_MM90": st.column_config.NumberColumn(
+                    "Δ vs MM90",
+                    format="%.1f%%",
+                    help="Variação percentual: (Vol_Hoje - MM90) / MM90 × 100. Indica performance vs. média trimestral dos últimos 90 dias"
+                )
             })
             
             # Adicionar configurações para colunas mensais de 2024
@@ -3326,7 +3487,7 @@ def main():
                     # Usar configuração mais simples
                     column_config[col] = st.column_config.NumberColumn(
                         f"{mes_nome}/24",
-                        help=f"Número de coletas em {mes_nome} de 2024"
+                        help=f"Total de coletas realizadas em {mes_nome} de 2024. Permite análise de sazonalidade e comparação ano a ano"
                     )
             
             # Adicionar configurações para colunas mensais de 2025
@@ -3337,24 +3498,24 @@ def main():
                     # Usar configuração mais simples
                     column_config[col] = st.column_config.NumberColumn(
                         f"{mes_nome}/25",
-                        help=f"Número de coletas em {mes_nome} de 2025"
+                        help=f"Total de coletas realizadas em {mes_nome} de 2025. Permite acompanhamento do desempenho mensal atual"
                     )
             
             # Adicionar colunas de rede se disponível
             if 'Rede' in df_exibicao.columns:
                 column_config["Rede"] = st.column_config.TextColumn(
                     "🏢 Rede",
-                    help="Rede à qual o laboratório pertence"
+                    help="Nome da rede à qual o laboratório pertence. Permite agrupar e comparar laboratórios da mesma rede"
                 )
             if 'Ranking' in df_exibicao.columns:
                 column_config["Ranking"] = st.column_config.TextColumn(
                     "🏆 Ranking",
-                    help="Ranking individual do laboratório"
+                    help="Posição do laboratório no ranking geral por volume de coletas. Ranking 1 = maior volume"
                 )
             if 'Ranking_Rede' in df_exibicao.columns:
                 column_config["Ranking_Rede"] = st.column_config.TextColumn(
                     "🏅 Ranking Rede",
-                    help="Ranking da rede do laboratório"
+                    help="Posição do laboratório no ranking dentro de sua própria rede. Permite identificar líderes regionais por rede"
                 )
             
             # Renomear as colunas diretamente no dataframe para exibir nomes completos dos meses
@@ -3369,7 +3530,7 @@ def main():
                 "Risco_Diario": "Risco Diário",
                 "Dias_Sem_Coleta": "Dias Sem Coleta",
                 "Volume_Atual_2025": "Volume Atual 2025",
-                "Volume_Maximo_2024": "Máximo mensal 2024",
+                "Volume_Maximo_2024": "Maior Mês 2024",
                 "Tendencia_Volume": "Tendência",
                 "Vol_Hoje": "Coletas (Hoje)",
                 "Vol_D1": "D-1",
@@ -3399,13 +3560,23 @@ def main():
             
             df_exibicao_renamed = df_exibicao_renamed.rename(columns=rename_dict)
             
+            # Atualizar column_config com os nomes renomeados
+            column_config_renamed = {}
+            for col_original, config in column_config.items():
+                if col_original in rename_dict:
+                    col_nomeada = rename_dict[col_original]
+                    column_config_renamed[col_nomeada] = config
+                elif col_original in df_exibicao_renamed.columns:
+                    column_config_renamed[col_original] = config
+            
             # Mostrar tabela com contador
             st.markdown(f"**Mostrando {len(df_exibicao_renamed)} laboratórios**")
             st.dataframe(
                 df_exibicao_renamed,
                 use_container_width=True,
                 height=500,
-                hide_index=True
+                hide_index=True,
+                column_config=column_config_renamed
             )
             
             # Botões de download

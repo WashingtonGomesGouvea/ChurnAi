@@ -1718,7 +1718,7 @@ class UIManager:
             recuperacao_txt = f"Recuperação: {metrics.labs_recuperando:,}" if metrics.labs_recuperando else "Recuperação: 0"
             delta_text = f"{risco_total_txt} | {recuperacao_txt}"
             st.markdown(f"""
-            <div class="metric-card">
+            <div class="metric-card" title="Total de laboratórios ativos nos últimos 90 dias. Risco total: laboratórios em risco (🟠 Moderado + 🔴 Alto + ⚫ Crítico). Recuperação: laboratórios que voltaram a operar acima da MM7 após período de queda.">
                 <div class="metric-value">{metrics.total_labs:,}</div>
                 <div class="metric-label">Labs monitorados (≤90 dias)</div>
                 <div class="metric-delta">{delta_text}</div>
@@ -1727,7 +1727,7 @@ class UIManager:
         with col2:
             delta_text = f"D-1: {metrics.vol_d1_total:,} | YTD: {metrics.total_coletas:,}"
             st.markdown(f"""
-            <div class="metric-card">
+            <div class="metric-card" title="Total de coletas registradas na data de referência (dia mais recente). D-1: volume de coletas do dia anterior. YTD (Year To Date): soma total de coletas em 2025 até o momento (todos os meses disponíveis até hoje).">
                 <div class="metric-value">{metrics.vol_hoje_total:,}</div>
                 <div class="metric-label">Coletas Hoje</div>
                 <div class="metric-delta">{delta_text}</div>
@@ -1736,7 +1736,7 @@ class UIManager:
         with col3:
             delta_text = f"⚫ Críticos: {metrics.labs_critico:,}"
             st.markdown(f"""
-            <div class="metric-card">
+            <div class="metric-card" title="Laboratórios em risco alto ou crítico: soma de labs com classificação 🔴 Alto (volume abaixo de 50% da MM7 ou 60% do D-1) + ⚫ Crítico (7+ dias sem coleta ou 3+ quedas consecutivas de 50%+). Críticos: laboratórios em situação extrema que necessitam intervenção imediata.">
                 <div class="metric-value">{metrics.labs_alto_risco:,}</div>
                 <div class="metric-label">Labs 🔴 & ⚫ (Alto + Crítico)</div>
                 <div class="metric-delta">{delta_text}</div>
@@ -1746,7 +1746,7 @@ class UIManager:
             delta_class = "positive" if metrics.ativos_7d >= 80 else "negative"
             ativos_label = f"Ativos 7D: {metrics.ativos_7d:.1f}% ({metrics.ativos_7d_count}/{metrics.total_labs})" if metrics.total_labs else "Ativos 7D: --"
             st.markdown(f"""
-            <div class="metric-card">
+            <div class="metric-card" title="Laboratórios com dois dias consecutivos sem registrar coletas (Vol_Hoje = 0 e Vol_D1 = 0). Ativos 7D: percentual de laboratórios que registraram pelo menos uma coleta nos últimos 7 dias. Valores abaixo de 80% indicam necessidade de atenção operacional.">
                 <div class="metric-value">{metrics.labs_sem_coleta_48h:,}</div>
                 <div class="metric-label">Sem Coleta (48h)</div>
                 <div class="metric-delta {delta_class}">{ativos_label}</div>

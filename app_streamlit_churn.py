@@ -676,6 +676,30 @@ class DataManager:
         except Exception as e:
             st.warning(f"Erro ao carregar arquivo VIP: {e}")
             return None
+    @staticmethod
+    @st.cache_data(ttl=CACHE_TTL)
+    def carregar_laboratories() -> Optional[pd.DataFrame]:
+        """Carrega dados de laboratories.csv com cache inteligente."""
+        try:
+            # Tentar arquivo local primeiro
+            arquivo_labs = os.path.join(OUTPUT_DIR, LABORATORIES_FILE)
+            if os.path.exists(arquivo_labs):
+                df_labs = pd.read_csv(arquivo_labs, encoding=ENCODING, low_memory=False)
+                
+                # Normalizar CNPJ para permitir matching
+                if 'cnpj' in df_labs.columns:
+                    df_labs['cnpj'] = df_labs['cnpj'].astype(str)
+                    df_labs['CNPJ_Normalizado'] = df_labs['cnpj'].apply(DataManager.normalizar_cnpj)
+                elif 'CNPJ' in df_labs.columns:
+                    df_labs['CNPJ'] = df_labs['CNPJ'].astype(str)
+                    df_labs['CNPJ_Normalizado'] = df_labs['CNPJ'].apply(DataManager.normalizar_cnpj)
+                
+                return df_labs
+            
+            return None
+        except Exception as e:
+            # Erro silencioso - será tratado onde a função é chamada
+            return None
 
 
 class RiskEngine:
@@ -790,7 +814,7 @@ class VIPManager:
     """Gerenciador de dados VIP."""
     @staticmethod
     def buscar_info_vip(cnpj: str, df_vip: pd.DataFrame) -> Optional[dict]:
-        """Busca informações VIP para um CNPJ."""
+        """Busca informações VIP para um CNPJ (apenas ranking e rede, sem contato)."""
         if df_vip is None or df_vip.empty or not cnpj:
             return None
      
@@ -805,12 +829,452 @@ class VIPManager:
             return {
                 'ranking': row.get('Ranking', ''),
                 'ranking_rede': row.get('Ranking Rede', ''),
-                'rede': row.get('Rede', ''),
-                'contato': row.get('Contato PCL', ''),
-                'telefone': row.get('Whatsapp/telefone', ''),
-                'email': row.get('Email', '')
+                'rede': row.get('Rede', '')
+                # Campos de contato removidos - agora vêm de laboratories.csv
             }
         return None
+    
+    @staticmethod
+    def buscar_info_laboratory(cnpj: str, df_labs: pd.DataFrame) -> Optional[dict]:
+        """Busca informações de contato do laboratories.csv por CNPJ."""
+        if df_labs is None or df_labs.empty or not cnpj:
+            return None
+        
+        cnpj_normalizado = DataManager.normalizar_cnpj(cnpj)
+        if not cnpj_normalizado:
+            return None
+        
+        # Buscar match no DataFrame de laboratories
+        match = df_labs[df_labs['CNPJ_Normalizado'] == cnpj_normalizado]
+        if match.empty:
+            return None
+        
+        row = match.iloc[0]
+        
+        # Função auxiliar para extrair valores de campos aninhados ou flattenados
+        def extrair_de_dict(valor_dict, chave, subchave=None):
+            """Extrai valor de dict aninhado ou string JSON parseada."""
+            if pd.isna(valor_dict) or valor_dict == '':
+                return ''
+            
+            # Se é string, tentar parsear como JSON
+            if isinstance(valor_dict, str):
+                try:
+                    import json
+                    import re
+                    # Limpar ObjectId e outras strings não-JSON
+                    valor_limpo = re.sub(r'ObjectId\([^)]+\)', 'null', valor_dict)
+                    valor_limpo = valor_limpo.replace("'", '"')
+                    valor_dict = json.loads(valor_limpo)
+                except:
+                    return ''
+            
+            # Se é dict, extrair valor
+            if isinstance(valor_dict, dict):
+                if subchave:
+                    # Acessar chave.subchave (ex: contact.telephone)
+                    if chave in valor_dict:
+                        sub_dict = valor_dict.get(chave, {})
+                        if isinstance(sub_dict, dict) and subchave in sub_dict:
+                            valor = sub_dict.get(subchave, '')
+                            return str(valor).strip() if valor else ''
+                else:
+                    # Acessar chave diretamente
+                    if chave in valor_dict:
+                        valor = valor_dict.get(chave, '')
+                        return str(valor).strip() if valor else ''
+            
+            return ''
+        
+        # Extrair nome do contato (preferência: director.name, fallback: manager.name)
+        contato = ''
+        
+        # Tentar director.name
+        if 'director' in df_labs.columns:
+            director_data = row.get('director', '')
+            contato = extrair_de_dict(director_data, 'name')
+        
+        # Tentar manager.name como fallback
+        if not contato and 'manager' in df_labs.columns:
+            manager_data = row.get('manager', '')
+            contato = extrair_de_dict(manager_data, 'name')
+        
+        # Tentar colunas flattenadas (caso o CSV tenha sido flattenado)
+        if not contato and 'director.name' in df_labs.columns:
+            contato = str(row.get('director.name', '')).strip()
+        if not contato and 'manager.name' in df_labs.columns:
+            contato = str(row.get('manager.name', '')).strip()
+        
+        # Extrair telefone de contact.telephone
+        telefone = ''
+        if 'contact' in df_labs.columns:
+            contact_data = row.get('contact', '')
+            telefone = extrair_de_dict(contact_data, 'telephone')
+        
+        # Tentar coluna flattenada
+        if not telefone and 'contact.telephone' in df_labs.columns:
+            telefone = str(row.get('contact.telephone', '')).strip()
+        
+        # Extrair email de contact.email
+        email = ''
+        if 'contact' in df_labs.columns:
+            contact_data = row.get('contact', '')
+            email = extrair_de_dict(contact_data, 'email')
+        
+        # Tentar coluna flattenada
+        if not email and 'contact.email' in df_labs.columns:
+            email = str(row.get('contact.email', '')).strip()
+        
+        # Função auxiliar para extrair array de strings
+        def extrair_array(campo_dict, chave_array):
+            """Extrai array de strings de um dict aninhado ou string JSON."""
+            if pd.isna(campo_dict) or campo_dict == '':
+                return []
+            
+            # Se é string, tentar parsear como JSON
+            if isinstance(campo_dict, str):
+                try:
+                    import json
+                    import re
+                    valor_limpo = re.sub(r'ObjectId\([^)]+\)', 'null', campo_dict)
+                    valor_limpo = valor_limpo.replace("'", '"')
+                    campo_dict = json.loads(valor_limpo)
+                except:
+                    return []
+            
+            # Se é dict, extrair array
+            if isinstance(campo_dict, dict):
+                if chave_array in campo_dict:
+                    array_data = campo_dict.get(chave_array, [])
+                    if isinstance(array_data, list):
+                        return [str(item).strip() for item in array_data if item]
+                    elif isinstance(array_data, str):
+                        try:
+                            import json
+                            return json.loads(array_data)
+                        except:
+                            return [array_data] if array_data else []
+            
+            return []
+        
+        # Função auxiliar para extrair campos booleanos True
+        def extrair_booleanos(campo_dict, prefixo):
+            """Extrai lista de chaves onde valor é True."""
+            lista = []
+            if pd.isna(campo_dict) or campo_dict == '':
+                return lista
+            
+            # Se é string, tentar parsear como JSON
+            if isinstance(campo_dict, str):
+                try:
+                    import json
+                    import re
+                    valor_limpo = re.sub(r'ObjectId\([^)]+\)', 'null', campo_dict)
+                    valor_limpo = valor_limpo.replace("'", '"')
+                    campo_dict = json.loads(valor_limpo)
+                except:
+                    return lista
+            
+            # Se é dict, extrair booleanos True
+            if isinstance(campo_dict, dict):
+                for chave, valor in campo_dict.items():
+                    if valor is True or (isinstance(valor, str) and valor.lower() == 'true'):
+                        lista.append(chave)
+            
+            return lista
+        
+        # Extrair endereço completo (address)
+        endereco_completo = {
+            'postalCode': '',
+            'address': '',
+            'addressComplement': '',
+            'number': '',
+            'neighbourhood': '',
+            'city': '',
+            'state_code': '',
+            'state_name': ''
+        }
+        
+        if 'address' in df_labs.columns:
+            address_data = row.get('address', '')
+            
+            # Extrair campos do endereço usando função auxiliar
+            campos_endereco = ['postalCode', 'address', 'addressComplement', 'number', 'neighbourhood', 'city']
+            for campo in campos_endereco:
+                valor = extrair_de_dict(address_data, campo)
+                if valor:
+                    endereco_completo[campo] = valor
+            
+            # Tentar colunas flattenadas
+            for campo in campos_endereco:
+                coluna_flatten = f'address.{campo}'
+                if coluna_flatten in df_labs.columns and not endereco_completo[campo]:
+                    valor = str(row.get(coluna_flatten, '')).strip()
+                    if valor and valor.lower() != 'nan':
+                        endereco_completo[campo] = valor
+            
+            # Extrair state (objeto aninhado)
+            if isinstance(address_data, str):
+                try:
+                    import json
+                    import re
+                    valor_limpo = re.sub(r'ObjectId\([^)]+\)', 'null', address_data)
+                    valor_limpo = valor_limpo.replace("'", '"')
+                    address_dict = json.loads(valor_limpo)
+                    if isinstance(address_dict, dict) and 'state' in address_dict:
+                        state_data = address_dict.get('state', {})
+                        if isinstance(state_data, dict):
+                            endereco_completo['state_code'] = str(state_data.get('code', '')).strip()
+                            endereco_completo['state_name'] = str(state_data.get('name', '')).strip()
+                except:
+                    pass
+            elif isinstance(address_data, dict) and 'state' in address_data:
+                state_data = address_data.get('state', {})
+                if isinstance(state_data, dict):
+                    endereco_completo['state_code'] = str(state_data.get('code', '')).strip()
+                    endereco_completo['state_name'] = str(state_data.get('name', '')).strip()
+            
+            # Tentar colunas flattenadas para state
+            if 'address.state.code' in df_labs.columns and not endereco_completo['state_code']:
+                endereco_completo['state_code'] = str(row.get('address.state.code', '')).strip()
+            if 'address.state.name' in df_labs.columns and not endereco_completo['state_name']:
+                endereco_completo['state_name'] = str(row.get('address.state.name', '')).strip()
+        
+        # Extrair dados de logistic (days, openingHours, comments)
+        logistic_data = {
+            'days': [],
+            'openingHours': '',
+            'comments': ''
+        }
+        
+        # Tentar colunas flattenadas primeiro
+        if 'logistic.days' in df_labs.columns:
+            days_data = row.get('logistic.days', '')
+            if isinstance(days_data, list):
+                logistic_data['days'] = [str(item).strip() for item in days_data if item]
+            elif isinstance(days_data, str) and days_data:
+                try:
+                    import json
+                    parsed = json.loads(days_data)
+                    if isinstance(parsed, list):
+                        logistic_data['days'] = [str(item).strip() for item in parsed if item]
+                except:
+                    logistic_data['days'] = [days_data.strip()] if days_data.strip() else []
+        
+        if 'logistic.openingHours' in df_labs.columns:
+            valor = row.get('logistic.openingHours', '')
+            if pd.notna(valor) and str(valor).strip() != '' and str(valor).strip().lower() != 'nan':
+                logistic_data['openingHours'] = str(valor).strip()
+        
+        if 'logistic.comments' in df_labs.columns:
+            valor = row.get('logistic.comments', '')
+            if pd.notna(valor) and str(valor).strip() != '' and str(valor).strip().lower() != 'nan':
+                logistic_data['comments'] = str(valor).strip()
+        
+        # Fallback: tentar objeto aninhado
+        if 'logistic' in df_labs.columns:
+            logistic_dict = row.get('logistic', '')
+            
+            if isinstance(logistic_dict, str) and logistic_dict:
+                try:
+                    import json
+                    import re
+                    valor_limpo = re.sub(r'ObjectId\([^)]+\)', 'null', logistic_dict)
+                    valor_limpo = valor_limpo.replace("'", '"')
+                    logistic_dict = json.loads(valor_limpo)
+                except:
+                    pass
+            
+            if isinstance(logistic_dict, dict):
+                if not logistic_data['days'] and 'days' in logistic_dict:
+                    days_val = logistic_dict.get('days', [])
+                    if isinstance(days_val, list):
+                        logistic_data['days'] = [str(item).strip() for item in days_val if item]
+                
+                if not logistic_data['openingHours'] and 'openingHours' in logistic_dict:
+                    opening_val = logistic_dict.get('openingHours', '')
+                    if opening_val:
+                        logistic_data['openingHours'] = str(opening_val).strip()
+                
+                if not logistic_data['comments'] and 'comments' in logistic_dict:
+                    comments_val = logistic_dict.get('comments', '')
+                    if comments_val:
+                        logistic_data['comments'] = str(comments_val).strip()
+        
+        # Extrair licensed (booleanos) - tentar todas as possibilidades
+        licensed_list = []
+        campos_licensed = ['clt', 'cnh', 'cltCnh', 'other', 'online', 'civilService', 'civilServiceAnalysis50', 'otherAnalysis50']
+        
+        def valor_eh_true(valor):
+            """Verifica se um valor deve ser considerado True."""
+            if pd.isna(valor) or valor == '':
+                return False
+            if valor is True:
+                return True
+            if isinstance(valor, bool):
+                return valor
+            if isinstance(valor, str):
+                return valor.lower() in ['true', '1', 'yes', 't', 'y']
+            if isinstance(valor, (int, float)):
+                return valor != 0 and valor != 0.0
+            return False
+        
+        # Primeiro: tentar colunas flattenadas com ponto
+        for campo in campos_licensed:
+            coluna_flatten = f'licensed.{campo}'
+            if coluna_flatten in df_labs.columns:
+                valor = row.get(coluna_flatten, False)
+                if valor_eh_true(valor):
+                    licensed_list.append(campo)
+        
+        # Segundo: tentar sem ponto (caso já esteja flattenado no CSV)
+        if not licensed_list:
+            for campo in campos_licensed:
+                if campo in df_labs.columns:
+                    valor = row.get(campo, False)
+                    if valor_eh_true(valor):
+                        licensed_list.append(campo)
+        
+        # Terceiro: tentar objeto aninhado (dict ou string JSON)
+        # Verificar se coluna licensed existe
+        if 'licensed' in df_labs.columns and not licensed_list:
+            licensed_dict = row.get('licensed', '')
+            
+            # Se é string, tentar parsear
+            if isinstance(licensed_dict, str) and licensed_dict and licensed_dict.strip():
+                try:
+                    import json
+                    import re
+                    import ast
+                    # Tentar parsear como JSON
+                    valor_limpo = re.sub(r'ObjectId\([^)]+\)', 'null', licensed_dict)
+                    valor_limpo = valor_limpo.replace("'", '"')
+                    licensed_dict = json.loads(valor_limpo)
+                except:
+                    try:
+                        # Tentar ast.literal_eval (mais seguro que eval)
+                        licensed_dict = ast.literal_eval(licensed_dict)
+                    except:
+                        try:
+                            # Última tentativa: eval (menos seguro, mas necessário em alguns casos)
+                            licensed_dict = eval(licensed_dict)
+                        except:
+                            pass
+            
+            # Se é dict, extrair booleanos True
+            if isinstance(licensed_dict, dict):
+                for campo in campos_licensed:
+                    if campo in licensed_dict:
+                        valor = licensed_dict.get(campo, False)
+                        if valor_eh_true(valor):
+                            if campo not in licensed_list:
+                                licensed_list.append(campo)
+        
+        # Quarto: tentar verificar todas as colunas que contenham "licensed" no nome
+        if not licensed_list:
+            for col in df_labs.columns:
+                if 'licensed' in str(col).lower():
+                    # Tentar extrair valor da coluna
+                    valor_col = row.get(col, '')
+                    # Se a coluna contém um dict/string, tentar parsear
+                    if isinstance(valor_col, str) and valor_col and '{' in valor_col:
+                        try:
+                            import ast
+                            valor_col = ast.literal_eval(valor_col)
+                        except:
+                            pass
+                    # Se agora é dict, processar
+                    if isinstance(valor_col, dict):
+                        for campo in campos_licensed:
+                            if campo in valor_col and valor_eh_true(valor_col.get(campo)):
+                                if campo not in licensed_list:
+                                    licensed_list.append(campo)
+        
+        # Extrair allowedMethods (booleanos) - tentar todas as possibilidades
+        allowed_methods_list = []
+        campos_methods = ['cash', 'credit', 'debit', 'billing_laboratory', 'billing_company', 'billing', 'bank_billet', 'eCredit', 'pix']
+        
+        # Primeiro: tentar colunas flattenadas com ponto
+        for campo in campos_methods:
+            coluna_flatten = f'allowedMethods.{campo}'
+            if coluna_flatten in df_labs.columns:
+                valor = row.get(coluna_flatten, False)
+                if valor_eh_true(valor):
+                    allowed_methods_list.append(campo)
+        
+        # Segundo: tentar sem ponto (caso já esteja flattenado no CSV)
+        if not allowed_methods_list:
+            for campo in campos_methods:
+                if campo in df_labs.columns:
+                    valor = row.get(campo, False)
+                    if valor_eh_true(valor):
+                        allowed_methods_list.append(campo)
+        
+        # Terceiro: tentar objeto aninhado (dict ou string JSON)
+        # Verificar se coluna allowedMethods existe
+        if 'allowedMethods' in df_labs.columns and not allowed_methods_list:
+            allowed_methods_dict = row.get('allowedMethods', '')
+            
+            # Se é string, tentar parsear
+            if isinstance(allowed_methods_dict, str) and allowed_methods_dict and allowed_methods_dict.strip():
+                try:
+                    import json
+                    import re
+                    import ast
+                    # Tentar parsear como JSON
+                    valor_limpo = re.sub(r'ObjectId\([^)]+\)', 'null', allowed_methods_dict)
+                    valor_limpo = valor_limpo.replace("'", '"')
+                    allowed_methods_dict = json.loads(valor_limpo)
+                except:
+                    try:
+                        # Tentar ast.literal_eval (mais seguro que eval)
+                        allowed_methods_dict = ast.literal_eval(allowed_methods_dict)
+                    except:
+                        try:
+                            # Última tentativa: eval (menos seguro, mas necessário em alguns casos)
+                            allowed_methods_dict = eval(allowed_methods_dict)
+                        except:
+                            pass
+            
+            # Se é dict, extrair booleanos True
+            if isinstance(allowed_methods_dict, dict):
+                for campo in campos_methods:
+                    if campo in allowed_methods_dict:
+                        valor = allowed_methods_dict.get(campo, False)
+                        if valor_eh_true(valor):
+                            if campo not in allowed_methods_list:
+                                allowed_methods_list.append(campo)
+        
+        # Quarto: tentar verificar todas as colunas que contenham "allowedmethods" ou "allowed_methods" no nome
+        if not allowed_methods_list:
+            for col in df_labs.columns:
+                col_lower = str(col).lower()
+                if 'allowedmethods' in col_lower or 'allowed_methods' in col_lower:
+                    # Tentar extrair valor da coluna
+                    valor_col = row.get(col, '')
+                    # Se a coluna contém um dict/string, tentar parsear
+                    if isinstance(valor_col, str) and valor_col and '{' in valor_col:
+                        try:
+                            import ast
+                            valor_col = ast.literal_eval(valor_col)
+                        except:
+                            pass
+                    # Se agora é dict, processar
+                    if isinstance(valor_col, dict):
+                        for campo in campos_methods:
+                            if campo in valor_col and valor_eh_true(valor_col.get(campo)):
+                                if campo not in allowed_methods_list:
+                                    allowed_methods_list.append(campo)
+        
+        return {
+            'contato': contato if contato else '',
+            'telefone': telefone if telefone else '',
+            'email': email if email else '',
+            'endereco': endereco_completo,
+            'logistic': logistic_data,
+            'licensed': licensed_list,
+            'allowedMethods': allowed_methods_list
+        }
 def _formatar_df_exibicao(df: pd.DataFrame) -> pd.DataFrame:
     """Padroniza exibição: números sem NaN/None (0), textos como '—'."""
     if df is None or df.empty:
@@ -2957,16 +3421,123 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                             cnpj_raw = str(lab_info.get('CNPJ_PCL', ''))
                             cnpj_formatado = f"{cnpj_raw[:2]}.{cnpj_raw[2:5]}.{cnpj_raw[5:8]}/{cnpj_raw[8:12]}-{cnpj_raw[12:14]}" if len(cnpj_raw) == 14 else cnpj_raw
                          
-                            # Usar dados do Excel VIP se disponível, senão usar dados do laboratório
-                            telefone = info_vip.get('telefone', '') if info_vip else lab_info.get('Telefone', 'N/A')
-                            email = info_vip.get('email', '') if info_vip else lab_info.get('Email', 'N/A')
-                            contato = info_vip.get('contato', '') if info_vip else 'N/A'
+                            # Carregar dados de laboratories.csv
+                            df_labs = DataManager.carregar_laboratories()
+                            info_lab = None
+                            if df_labs is not None and not df_labs.empty:
+                                info_lab = VIPManager.buscar_info_laboratory(cnpj_raw, df_labs)
+                            
+                            # Prioridade: 1) laboratories.csv, 2) matriz VIP (legado), 3) dados do laboratório
+                            contato = ''
+                            telefone = ''
+                            email = ''
+                            
+                            if info_lab:
+                                contato = info_lab.get('contato', '')
+                                telefone = info_lab.get('telefone', '')
+                                email = info_lab.get('email', '')
+                            
+                            # Fallback para dados VIP (legado) se não encontrado no laboratories.csv
+                            if not contato and info_vip:
+                                contato = info_vip.get('contato', '')
+                            if not telefone and info_vip:
+                                telefone = info_vip.get('telefone', '')
+                            if not email and info_vip:
+                                email = info_vip.get('email', '')
+                            
+                            # Último fallback: dados do lab_info
+                            # Nota: lab_info pode não ter campo 'Contato' separado, então apenas telefone/email
+                            if not telefone:
+                                telefone = lab_info.get('Telefone', 'N/A')
+                            if not email:
+                                email = lab_info.get('Email', 'N/A')
+                            # Se contato ainda estiver vazio, deixar como 'N/A' (não há fallback no lab_info)
+                            
                             representante = lab_info.get('Representante_Nome', 'N/A')
+                            
                             # Limpar dados vazios
-                            telefone = telefone if telefone and telefone != 'N/A' else 'N/A'
-                            email = email if email and email != 'N/A' else 'N/A'
-                            contato = contato if contato else 'N/A'
+                            telefone = telefone if telefone and telefone != 'N/A' and telefone != '' else 'N/A'
+                            email = email if email and email != 'N/A' and email != '' else 'N/A'
+                            contato = contato if contato and contato != '' else 'N/A'
                             representante = representante if representante and representante != 'N/A' else 'N/A'
+                            
+                            # Extrair novos dados do info_lab
+                            endereco_completo = info_lab.get('endereco', {}) if info_lab else {}
+                            logistic_data = info_lab.get('logistic', {}) if info_lab else {}
+                            licensed_list = info_lab.get('licensed', []) if info_lab else []
+                            allowed_methods_list = info_lab.get('allowedMethods', []) if info_lab else []
+                            
+                            # Mapear dias da semana para português
+                            dias_semana_map = {
+                                'mon': 'Segunda', 'tue': 'Terça', 'wed': 'Quarta', 
+                                'thu': 'Quinta', 'fri': 'Sexta', 'sat': 'Sábado', 'sun': 'Domingo'
+                            }
+                            
+                            # Formatar dias de funcionamento
+                            dias_funcionamento = []
+                            if logistic_data.get('days'):
+                                for dia in logistic_data.get('days', []):
+                                    dias_funcionamento.append(dias_semana_map.get(dia.lower(), dia.capitalize()))
+                            dias_funcionamento_str = ', '.join(dias_funcionamento) if dias_funcionamento else 'N/A'
+                            horario_funcionamento = logistic_data.get('openingHours', '') if logistic_data.get('openingHours') else 'N/A'
+                            
+                            # Formatar endereço completo
+                            endereco_linha1 = ''
+                            endereco_linha2 = ''
+                            cep_formatado = 'N/A'
+                            if endereco_completo:
+                                endereco_parts = []
+                                if endereco_completo.get('address'):
+                                    endereco_parts.append(endereco_completo.get('address', ''))
+                                if endereco_completo.get('number'):
+                                    endereco_parts.append(f"nº {endereco_completo.get('number', '')}")
+                                if endereco_completo.get('addressComplement'):
+                                    endereco_parts.append(endereco_completo.get('addressComplement', ''))
+                                endereco_linha1 = ', '.join(endereco_parts) if endereco_parts else 'N/A'
+                                
+                                endereco_parts2 = []
+                                if endereco_completo.get('neighbourhood'):
+                                    endereco_parts2.append(endereco_completo.get('neighbourhood', ''))
+                                if endereco_completo.get('city'):
+                                    endereco_parts2.append(endereco_completo.get('city', ''))
+                                if endereco_completo.get('state_code'):
+                                    endereco_parts2.append(endereco_completo.get('state_code', ''))
+                                endereco_linha2 = ' - '.join(endereco_parts2) if endereco_parts2 else 'N/A'
+                                
+                                # Formatar CEP
+                                if endereco_completo.get('postalCode'):
+                                    cep_raw = str(endereco_completo.get('postalCode', '')).strip()
+                                    if len(cep_raw) == 8:
+                                        cep_formatado = f"{cep_raw[:5]}-{cep_raw[5:]}"
+                                    else:
+                                        cep_formatado = cep_raw
+                            
+                            # Fallback para dados do lab_info se endereço completo não disponível
+                            if not endereco_linha1 or endereco_linha1 == 'N/A':
+                                endereco_linha1 = 'N/A'
+                            if not endereco_linha2 or endereco_linha2 == 'N/A':
+                                endereco_linha2 = f"{lab_info.get('Cidade', 'N/A')} - {lab_info.get('Estado', 'N/A')}"
+                            
+                            # Formatar licenças
+                            licencas_map = {
+                                'clt': 'CLT', 'cnh': 'CNH', 'cltCnh': 'CLT/CNH',
+                                'other': 'Outros', 'online': 'Online',
+                                'civilService': 'Serviço Público', 
+                                'civilServiceAnalysis50': 'Serviço Público (50)',
+                                'otherAnalysis50': 'Outros (50)'
+                            }
+                            licencas_formatadas = [licencas_map.get(l, l) for l in licensed_list] if licensed_list else []
+                            licencas_str = ', '.join(licencas_formatadas) if licencas_formatadas else 'N/A'
+                            
+                            # Formatar métodos de pagamento
+                            metodos_map = {
+                                'cash': 'Dinheiro', 'credit': 'Crédito', 'debit': 'Débito',
+                                'billing_laboratory': 'Faturamento Lab', 'billing_company': 'Faturamento Empresa',
+                                'billing': 'Faturamento', 'bank_billet': 'Boleto',
+                                'eCredit': 'e-Crédito', 'pix': 'PIX'
+                            }
+                            metodos_formatados = [metodos_map.get(m, m) for m in allowed_methods_list] if allowed_methods_list else []
+                            metodos_str = ', '.join(metodos_formatados) if metodos_formatados else 'N/A'
                          
                             st.markdown(f"""
                             <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #6c757d;">
@@ -2975,6 +3546,15 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">CNPJ</div>
                                         <div style="font-size: 1rem; font-weight: bold; color: #495057;">{cnpj_formatado}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">CEP</div>
+                                        <div style="font-size: 1rem; font-weight: bold; color: #495057;">{cep_formatado}</div>
+                                    </div>
+                                    <div style="grid-column: 1 / -1;">
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">Endereço</div>
+                                        <div style="font-size: 1rem; font-weight: bold; color: #495057;">{endereco_linha1}</div>
+                                        <div style="font-size: 0.9rem; color: #6c757d; margin-top: 0.2rem;">{endereco_linha2}</div>
                                     </div>
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">Localização</div>
@@ -2995,6 +3575,22 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">Representante</div>
                                         <div style="font-size: 1rem; font-weight: bold; color: #495057;">{representante}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">Dias de Funcionamento</div>
+                                        <div style="font-size: 1rem; font-weight: bold; color: #495057;">{dias_funcionamento_str}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">Horário</div>
+                                        <div style="font-size: 1rem; font-weight: bold; color: #495057;">{horario_funcionamento}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">Licenças</div>
+                                        <div style="font-size: 1rem; font-weight: bold; color: #495057;">{licencas_str}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">Métodos de Pagamento</div>
+                                        <div style="font-size: 1rem; font-weight: bold; color: #495057;">{metodos_str}</div>
                                     </div>
                                 </div>
                             </div>
@@ -3221,19 +3817,6 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                     with tab_coletas_dia:
                         st.subheader("📈 Coletas por Dia do Mês")
                         ChartManager.criar_grafico_coletas_por_dia(df_filtrado, lab_final)
-
-        # Seção organizada com tabs para melhor visualização
-        st.markdown("""
-        <div style="background: white; border-radius: 12px; padding: 1.5rem;
-                    box-shadow: 0 4px 15px rgba(0,0,0,0.08); margin-bottom: 2rem;
-                    border: 1px solid #f0f0f0;">
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem;">
-                <div style="display: flex; align-items: center;">
-                    <span style="font-size: 1.5rem; margin-right: 0.5rem;">📋</span>
-                    <h3 style="margin: 0; color: #2c3e50; font-weight: 600;">Dados Completos dos Laboratórios</h3>
-                </div>
-            </div>
-        """, unsafe_allow_html=True)
 
         # Conteúdo único da análise detalhada
         # Carregar dados VIP para análise de rede

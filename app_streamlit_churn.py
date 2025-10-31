@@ -2182,14 +2182,14 @@ def main():
                                 _formatar_df_exibicao(criticos[colunas_alerta].sort_values('Vol_Hoje', ascending=True).head(10)),
                                 use_container_width=True,
                                 column_config={
-                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
-                                    "Estado": st.column_config.TextColumn("UF"),
-                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
-                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
-                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
-                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f"),
-                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
-                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias sem Coleta")
+                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório em risco crítico"),
+                                    "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual"),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia anterior"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Indica performance vs. média semanal dos últimos 7 dias"),
+                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias sem Coleta", help="Número consecutivo de dias sem registrar coletas. Valores altos indicam possível inatividade")
                                 },
                                 hide_index=True
                             )
@@ -2220,15 +2220,15 @@ def main():
                                 _formatar_df_exibicao(quedas_relevantes[colunas_queda].sort_values(['Delta_MM7', 'Vol_Hoje']).head(15)),
                                 use_container_width=True,
                                 column_config={
-                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
-                                    "Estado": st.column_config.TextColumn("UF"),
-                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
-                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
-                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
-                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f"),
-                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
-                                    "Risco_Diario": st.column_config.TextColumn("Risco"),
-                                    "Recuperacao": st.column_config.CheckboxColumn("Em Recuperação")
+                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com queda ≥50% vs MM7"),
+                                    "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual"),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia anterior"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Valores ≤ -50% indicam queda estrutural significativa"),
+                                    "Risco_Diario": st.column_config.TextColumn("Risco", help="Classificação de risco: 🟢 Normal, 🟡 Atenção, 🟠 Moderado, 🔴 Alto, ⚫ Crítico"),
+                                    "Recuperacao": st.column_config.CheckboxColumn("Em Recuperação", help="Indica que o laboratório voltou a operar acima da MM7 após período de queda")
                                 },
                                 hide_index=True
                             )
@@ -2255,15 +2255,15 @@ def main():
                                 _formatar_df_exibicao(quedas_d1_relevantes[colunas_queda_d1].sort_values(['Delta_D1', 'Vol_Hoje']).head(15)),
                                 use_container_width=True,
                                 column_config={
-                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
-                                    "Estado": st.column_config.TextColumn("UF"),
-                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
-                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
-                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
-                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f"),
-                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
-                                    "Risco_Diario": st.column_config.TextColumn("Risco"),
-                                    "Recuperacao": st.column_config.CheckboxColumn("Em Recuperação")
+                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com queda ≥40% vs D-1"),
+                                    "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual"),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Valores ≤ -40% indicam queda brusca recente"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Indica performance vs. média semanal dos últimos 7 dias"),
+                                    "Risco_Diario": st.column_config.TextColumn("Risco", help="Classificação de risco: 🟢 Normal, 🟡 Atenção, 🟠 Moderado, 🔴 Alto, ⚫ Crítico"),
+                                    "Recuperacao": st.column_config.CheckboxColumn("Em Recuperação", help="Indica que o laboratório voltou a operar acima da MM7 após período de queda")
                                 },
                                 hide_index=True
                             )
@@ -2290,16 +2290,16 @@ def main():
                                 _formatar_df_exibicao(moderados[colunas_moderado]),
                                 use_container_width=True,
                                 column_config={
-                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
-                                    "Estado": st.column_config.TextColumn("UF"),
-                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
-                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
-                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f"),
-                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
-                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
-                                    "MM30": st.column_config.NumberColumn("MM30", format="%.3f"),
-                                    "Delta_MM30": st.column_config.NumberColumn("Δ vs MM30", format="%.1f%%"),
-                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta")
+                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com risco moderado"),
+                                    "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Indica performance vs. média semanal dos últimos 7 dias"),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia anterior"),
+                                    "MM30": st.column_config.NumberColumn("MM30", format="%.3f", help="Média móvel de 30 dias - média aritmética simples dos últimos 30 dias (inclui dias sem coleta como zero)"),
+                                    "Delta_MM30": st.column_config.NumberColumn("Δ vs MM30", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM30) / MM30 × 100. Indica performance vs. média mensal dos últimos 30 dias"),
+                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta", help="Número consecutivo de dias sem registrar coletas. Valores altos indicam possível inatividade")
                                 },
                                 hide_index=True
                             )
@@ -2317,11 +2317,11 @@ def main():
                                 _formatar_df_exibicao(dois_dias_sem_coleta[colunas_zero].head(15)),
                                 use_container_width=True,
                                 column_config={
-                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
-                                    "Estado": st.column_config.TextColumn("UF"),
-                                    "Risco_Diario": st.column_config.TextColumn("Risco"),
-                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
-                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias sem Coleta")
+                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com dois dias consecutivos sem coleta"),
+                                    "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
+                                    "Risco_Diario": st.column_config.TextColumn("Risco", help="Classificação de risco: 🟢 Normal, 🟡 Atenção, 🟠 Moderado, 🔴 Alto, ⚫ Crítico"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual (mostra zero para estes casos)"),
+                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias sem Coleta", help="Número consecutivo de dias sem registrar coletas. ⚠️ Valores ≥ 2 indicam necessidade de alinhamento operacional")
                                 },
                                 hide_index=True
                             )
@@ -2382,15 +2382,15 @@ A classificação de risco segue uma régua hierárquica baseada em múltiplos c
                                 _formatar_df_exibicao(quedas_diarias[colunas_quedas]),
                                 use_container_width=True,
                                 column_config={
-                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
-                                    "Estado": st.column_config.TextColumn("UF"),
-                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
-                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
-                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f"),
-                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
-                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
-                                    "Risco_Diario": st.column_config.TextColumn("Risco"),
-                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta")
+                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com maiores quedas vs MM7"),
+                                    "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Ordenado por maior queda (valores mais negativos primeiro)"),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia anterior"),
+                                    "Risco_Diario": st.column_config.TextColumn("Risco", help="Classificação de risco: 🟢 Normal, 🟡 Atenção, 🟠 Moderado, 🔴 Alto, ⚫ Crítico"),
+                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta", help="Número consecutivo de dias sem registrar coletas. Valores altos indicam possível inatividade")
                                 },
                                 hide_index=True
                             )
@@ -2418,15 +2418,15 @@ A classificação de risco segue uma régua hierárquica baseada em múltiplos c
                                 _formatar_df_exibicao(altas_diarias[colunas_altas]),
                                 use_container_width=True,
                                 column_config={
-                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
-                                    "Estado": st.column_config.TextColumn("UF"),
-                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
-                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
-                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f"),
-                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
-                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
-                                    "Risco_Diario": st.column_config.TextColumn("Risco"),
-                                    "Recuperacao": st.column_config.CheckboxColumn("Recuperação")
+                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com maiores altas vs MM7"),
+                                    "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Ordenado por maior crescimento (valores mais positivos primeiro)"),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia anterior"),
+                                    "Risco_Diario": st.column_config.TextColumn("Risco", help="Classificação de risco: 🟢 Normal, 🟡 Atenção, 🟠 Moderado, 🔴 Alto, ⚫ Crítico"),
+                                    "Recuperacao": st.column_config.CheckboxColumn("Recuperação", help="Indica que o laboratório voltou a operar acima da MM7 após período de queda")
                                 },
                                 hide_index=True
                             )
@@ -2461,15 +2461,15 @@ A classificação de risco segue uma régua hierárquica baseada em múltiplos c
                             _formatar_df_exibicao(recuperacoes[colunas_recuperacao].head(10)),
                             use_container_width=True,
                             column_config={
-                                "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
-                                "Estado": st.column_config.TextColumn("UF"),
-                                "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
-                                "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)"),
-                                "MM7": st.column_config.NumberColumn("MM7", format="%.1f"),
-                                "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
-                                "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%"),
-                                "Risco_Diario": st.column_config.TextColumn("Risco"),
-                                "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta")
+                                "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório em recuperação"),
+                                "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
+                                "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
+                                "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual"),
+                                "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"),
+                                "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Ordenado por maior recuperação (valores mais positivos primeiro)"),
+                                "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia anterior"),
+                                "Risco_Diario": st.column_config.TextColumn("Risco", help="Classificação de risco: 🟢 Normal, 🟡 Atenção, 🟠 Moderado, 🔴 Alto, ⚫ Crítico"),
+                                "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta", help="Número consecutivo de dias sem registrar coletas. Valores altos indicam possível inatividade")
                             },
                             hide_index=True
                         )
@@ -2566,12 +2566,12 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                     use_container_width=True,
                     height=300,
                     column_config={
-                        "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
-                        "Estado": st.column_config.TextColumn("UF"),
-                        "Representante_Nome": st.column_config.TextColumn("Representante"),
-                        "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)"),
-                        "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%"),
-                        "Risco_Diario": st.column_config.TextColumn("Risco Diário")
+                        "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório em risco"),
+                        "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
+                        "Representante_Nome": st.column_config.TextColumn("Representante", help="Nome do representante comercial responsável pelo laboratório"),
+                        "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
+                        "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Indica performance vs. média semanal dos últimos 7 dias"),
+                        "Risco_Diario": st.column_config.TextColumn("Risco Diário", help="Classificação de risco: 🟢 Normal, 🟡 Atenção, 🟠 Moderado, 🔴 Alto, ⚫ Crítico")
                     },
                     hide_index=True
                 )
@@ -2697,39 +2697,39 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                         column_config={
                             "Ranking": st.column_config.NumberColumn(
                                 "Ranking",
-                                help="Posição no ranking",
+                                help="Posição do laboratório no ranking geral por volume de coletas em 2025. Ranking 1 = maior volume",
                                 format="%d",
                                 width="small"
                             ),
                             "CNPJ": st.column_config.TextColumn(
                                 "CNPJ",
-                                help="CNPJ do laboratório",
+                                help="CNPJ (Cadastro Nacional de Pessoa Jurídica) do laboratório. Identificador único",
                                 width="medium"
                             ),
                             "Laboratório": st.column_config.TextColumn(
                                 "Laboratório",
-                                help="Nome fantasia do laboratório",
+                                help="Nome comercial/fantasia do laboratório. Top 100 laboratórios por volume total de coletas em 2025",
                                 width="large"
                             ),
                             "Coletas": st.column_config.NumberColumn(
                                 "Coletas",
-                                help="Total de coletas em 2025",
+                                help="Soma total de coletas em 2025 até o momento (todos os meses disponíveis até hoje). Ordenação por este valor (maior para menor)",
                                 format="%d",
                                 width="small"
                             ),
                             "Representante": st.column_config.TextColumn(
                                 "Representante",
-                                help="Nome do representante",
+                                help="Nome do representante comercial responsável pelo laboratório",
                                 width="medium"
                             ),
                             "Estado": st.column_config.TextColumn(
                                 "Estado",
-                                help="Estado do laboratório",
+                                help="Estado (UF) onde o laboratório está localizado. Permite filtrar e agrupar por região geográfica",
                                 width="small"
                             ),
                             "Cidade": st.column_config.TextColumn(
                                 "Cidade",
-                                help="Cidade do laboratório",
+                                help="Cidade onde o laboratório está localizado. Permite análise mais granular por localização",
                                 width="medium"
                             )
                         },

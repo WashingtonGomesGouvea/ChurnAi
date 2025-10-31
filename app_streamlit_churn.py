@@ -163,16 +163,16 @@ st.set_page_config(
 # CSS moderno e profissional - Atualizado com melhorias de layout
 CSS_STYLES = """
 <style>
-    /* Tema profissional atualizado */
+    /* Tema profissional atualizado - Synvia */
     :root {
-        --primary-color: #1f77b4;
-        --secondary-color: #ff7f0e;
-        --success-color: #2ca02c;
-        --warning-color: #ff7f0e;
-        --danger-color: #d62728;
-        --info-color: #17a2b8;
-        --light-bg: #f8f9fa;
-        --dark-bg: #343a40;
+        --primary-color: #6BBF47;
+        --secondary-color: #52B54B;
+        --success-color: #6BBF47;
+        --warning-color: #F59E0B;
+        --danger-color: #DC2626;
+        --info-color: #3B82F6;
+        --light-bg: #F5F7FA;
+        --dark-bg: #262730;
         --border-radius: 12px; /* Aumentado para visual mais moderno */
         --shadow: 0 4px 8px rgba(0,0,0,0.1); /* Sombra mais suave */
         --transition: all 0.3s ease;
@@ -1663,7 +1663,7 @@ class ChartManager:
             y=medias_diarias,
             title=f"📊 Média Diária Real por Mês - {lab_selecionado}<br><sup>Baseado em dias com coleta real</sup>",
             color=medias_diarias,
-            color_continuous_scale='Blues',
+            color_continuous_scale='Greens',
             text=[f"{val:.1f}" for val in medias_diarias]
         )
      
@@ -1845,7 +1845,7 @@ class ChartManager:
         # NOVA IMPLEMENTAÇÃO - Criar dados de forma mais simples e direta
         dias_semana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
         cores_dias = {
-            'Segunda': '#1f77b4', 'Terça': '#ff7f0e', 'Quarta': '#2ca02c', 'Quinta': '#d62728',
+            'Segunda': '#6BBF47', 'Terça': '#ff7f0e', 'Quarta': '#52B54B', 'Quinta': '#d62728',
             'Sexta': '#9467bd', 'Sábado': '#8c564b', 'Domingo': '#e377c2'
         }
         
@@ -1966,9 +1966,9 @@ class ChartManager:
             # Converter dados para DataFrame
             dias_semana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
             cores_dias = {
-                'Segunda': '#1f77b4', # Azul
+                'Segunda': '#6BBF47', # Verde Synvia
                 'Terça': '#ff7f0e', # Laranja
-                'Quarta': '#2ca02c', # Verde
+                'Quarta': '#52B54B', # Verde Synvia Escuro
                 'Quinta': '#d62728', # Vermelho
                 'Sexta': '#9467bd', # Roxo
                 'Sábado': '#8c564b', # Marrom
@@ -2130,11 +2130,11 @@ class ChartManager:
                 )
              
                 # Cores personalizadas
-                fig.data[0].line.color = '#1f77b4' # Azul para 2025
+                fig.data[0].line.color = '#6BBF47' # Verde Synvia para 2025
                 fig.data[1].line.color = '#ff7f0e' # Laranja para 2024
-                fig.data[2].line.color = '#1f77b4' # Azul claro para média 2025
+                fig.data[2].line.color = '#6BBF47' # Verde Synvia para média 2025
                 fig.data[2].line.dash = 'dash'
-                fig.data[3].line.color = '#ff7f0e' # Laranja claro para média 2024
+                fig.data[3].line.color = '#ff7f0e' # Laranja para média 2024
                 fig.data[3].line.dash = 'dash'
                 # Ajustar textos de hover para diferenciar coletas x médias
                 fig.data[0].hovertemplate = '<b>Mês:</b> %{x}<br><b>Coletas 2025:</b> %{y:.0f}<extra></extra>'
@@ -3128,7 +3128,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                         margin-top: 1rem;
                     }
                     .ranking-table th {
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        background: linear-gradient(135deg, #6BBF47 0%, #52B54B 100%);
                         color: white;
                         padding: 12px 8px;
                         text-align: left;
@@ -3144,12 +3144,12 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                         background-color: #f8f9fa;
                     }
                     .ranking-table tr:hover {
-                        background-color: #e3f2fd;
+                        background-color: #e8f5e9;
                         transition: background-color 0.2s;
                     }
                     .ranking-number {
                         font-weight: bold;
-                        color: #667eea;
+                        color: #6BBF47;
                         text-align: center;
                     }
                     .coletas-number {
@@ -3299,7 +3299,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
         st.header("📋 Análise Detalhada")
         # Filtros avançados com design moderno
         st.markdown("""
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        <div style="background: linear-gradient(135deg, #6BBF47 0%, #52B54B 100%);
                     color: white; padding: 1.5rem; border-radius: 10px;
                     margin-bottom: 1rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
             <h3 style="margin: 0; font-size: 1.3rem;">🔍 Busca Inteligente de Laboratórios</h3>
@@ -3409,7 +3409,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                         info_vip = VIPManager.buscar_info_vip(cnpj_lab, df_vip)
                     # Container principal para informações do laboratório
                     st.markdown(f"""
-                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        <div style="background: linear-gradient(135deg, #6BBF47 0%, #52B54B 100%);
                                     color: white; padding: 2rem; border-radius: 15px;
                                     margin-bottom: 2rem; box-shadow: 0 8px 25px rgba(0,0,0,0.15);">
                             <div style="display: flex; align-items: center;">
@@ -3429,7 +3429,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                     st.markdown("""
                         <div style="background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem;
                                     border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                            <h3 style="margin: 0 0 1rem 0; color: #2c3e50; font-weight: 600; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">
+                            <h3 style="margin: 0 0 1rem 0; color: #2c3e50; font-weight: 600; border-bottom: 2px solid #6BBF47; padding-bottom: 0.5rem;">
                                 📋 Ficha Técnica Comercial
                             </h3>
                         """, unsafe_allow_html=True)
@@ -3619,7 +3619,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                     # Informações VIP se disponível
                     if info_vip:
                         st.markdown(f"""
-                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #007bff;">
+                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #6BBF47;">
                                 <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; text-align: center;">
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">RANKING GERAL</div>
@@ -3631,7 +3631,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                                     </div>
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.3rem;">REDE</div>
-                                        <div style="font-size: 1.1rem; font-weight: bold; color: #007bff;">{info_vip.get('rede', 'N/A')}</div>
+                                        <div style="font-size: 1.1rem; font-weight: bold; color: #6BBF47;">{info_vip.get('rede', 'N/A')}</div>
                                     </div>
                                 </div>
                             </div>
@@ -3776,7 +3776,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                                 </div>
                                 <div>
                                     <div style="font-size: 0.8rem; color: #666;">Total 2025</div>
-                                    <div style="font-size: 1.4rem; font-weight: bold; color: #007bff;">{metricas_evolucao['total_coletas_2025']:,}</div>
+                                    <div style="font-size: 1.4rem; font-weight: bold; color: #6BBF47;">{metricas_evolucao['total_coletas_2025']:,}</div>
                                 </div>
                             </div>
                         </div>
@@ -3816,7 +3816,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                     st.markdown("""
                         <div style="background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem;
                                     border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                            <h3 style="margin: 0 0 1rem 0; color: #2c3e50; font-weight: 600; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">
+                            <h3 style="margin: 0 0 1rem 0; color: #2c3e50; font-weight: 600; border-bottom: 2px solid #6BBF47; padding-bottom: 0.5rem;">
                                 📊 Análise Visual Detalhada
                             </h3>
                         """, unsafe_allow_html=True)
@@ -3882,8 +3882,8 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                 rede_filtro = rede_padrao
                 # Mostrar indicador de filtro automático
                 st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #e8f5e8, #f1f8e9); border-radius: 6px; padding: 0.8rem; margin-bottom: 1rem;">
-                    <span style="color: #2e7d32; font-size: 0.9rem;">🎯 <strong>Filtro automático ativo:</strong> mostrando apenas laboratórios da rede <strong>"{rede_padrao}"</strong></span>
+                <div style="background: linear-gradient(135deg, #e8f5e9, #f1f8f1); border-radius: 6px; padding: 0.8rem; margin-bottom: 1rem;">
+                    <span style="color: #52B54B; font-size: 0.9rem;">🎯 <strong>Filtro automático ativo:</strong> mostrando apenas laboratórios da rede <strong>"{rede_padrao}"</strong></span>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -3921,19 +3921,19 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                 'labs_ativos': len(df_tabela_filtrada[df_tabela_filtrada['Dias_Sem_Coleta'] <= 30]) if 'Dias_Sem_Coleta' in df_tabela_filtrada.columns else 0
             }
             st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #e3f2fd, #f3e5f5); border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
-                <h4 style="margin: 0 0 0.5rem 0; color: #1976d2;">📊 Estatísticas da Rede: {rede_filtro}</h4>
+            <div style="background: linear-gradient(135deg, #e8f5e9, #f1f8f1); border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
+                <h4 style="margin: 0 0 0.5rem 0; color: #52B54B;">📊 Estatísticas da Rede: {rede_filtro}</h4>
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem;">
                     <div style="text-align: center;">
-                        <div style="font-size: 1.5rem; font-weight: bold; color: #1976d2;">{stats_rede['total_labs']}</div>
+                        <div style="font-size: 1.5rem; font-weight: bold; color: #6BBF47;">{stats_rede['total_labs']}</div>
                         <div style="font-size: 0.8rem; color: #666;">Laboratórios</div>
                     </div>
                     <div style="text-align: center;">
-                        <div style="font-size: 1.5rem; font-weight: bold; color: #1976d2;">{stats_rede['volume_total']:,.0f}</div>
+                        <div style="font-size: 1.5rem; font-weight: bold; color: #6BBF47;">{stats_rede['volume_total']:,.0f}</div>
                         <div style="font-size: 0.8rem; color: #666;">Volume Total</div>
                     </div>
                     <div style="text-align: center;">
-                        <div style="font-size: 1.5rem; font-weight: bold; color: #1976d2;">{stats_rede['media_volume']:.0f}</div>
+                        <div style="font-size: 1.5rem; font-weight: bold; color: #6BBF47;">{stats_rede['media_volume']:.0f}</div>
                         <div style="font-size: 0.8rem; color: #666;">Média por Lab</div>
                     </div>
                     <div style="text-align: center;">
@@ -4232,7 +4232,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
             )
             # Filtros específicos para ranking de rede
             st.markdown("""
-            <div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            <div style="background: linear-gradient(135deg, #6BBF47 0%, #52B54B 100%);
                         color: white; padding: 1rem; border-radius: 8px;
                         margin: 1rem 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                 <h4 style="margin: 0;">🔍 Filtros Gerais de Redes</h4>
@@ -4358,7 +4358,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                     # CARDS DE LOCALIDADE E VOLUMES
                     # ========================================
                     st.markdown("""
-                    <div style="background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%);
+                    <div style="background: linear-gradient(135deg, #6BBF47 0%, #8FD968 100%);
                                 color: white; padding: 1rem; border-radius: 8px;
                                 margin: 1rem 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                         <h4 style="margin: 0;">📍 Distribuição por Localidade</h4>
@@ -4811,7 +4811,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
     elif st.session_state.page == "🔧 Manutenção VIPs":
         st.header("🔧 Manutenção de Dados VIP")
         st.markdown("""
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        <div style="background: linear-gradient(135deg, #6BBF47 0%, #52B54B 100%);
                     color: white; padding: 1rem; border-radius: 8px; margin-bottom: 2rem;">
             <h3 style="margin: 0; color: white;">Gerenciamento de Laboratórios VIP</h3>
             <p style="margin: 0.5rem 0 0 0; opacity: 0.9;">Adicione, edite e gerencie laboratórios VIP com validação completa e histórico de alterações.</p>

@@ -11,10 +11,10 @@ enableXsrfProtection = true  # Habilitado para segurança com autenticação
 gatherUsageStats = false
 
 [theme]
-primaryColor = "#0078d4"  # Cor Microsoft
+primaryColor = "#6BBF47"  # Verde Synvia
 backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f0f2f6"
-textColor = "#262730"
+secondaryBackgroundColor = "#F5F7FA"  # Cinza claro Synvia
+textColor = "#262730"  # Preto Synvia
 
 [client]
 showSidebarNavigation = true

@@ -1540,6 +1540,106 @@ class ChartManager:
         meses_limite = meses_ordem[:limite_mes]
         sufixo = str(ano)[-2:]
         return [m for m in meses_limite if f'N_Coletas_{m}_{sufixo}' in df.columns]
+    
+    @staticmethod
+    def _obter_ultimo_mes_fechado(df: pd.DataFrame, dia_corte: int = 5) -> dict:
+        """
+        Retorna informações sobre o último mês fechado disponível.
+        
+        Se estamos antes do dia 'dia_corte' do mês atual, considera o mês anterior.
+        Pode retornar dados de 2024 se não houver dados de 2025.
+        
+        Args:
+            df: DataFrame com os dados de coletas
+            dia_corte: Dia do mês a partir do qual considera o mês atual válido (default: 5)
+        
+        Returns:
+            dict com:
+                - 'mes': código do mês (ex: 'Out')
+                - 'ano': ano (ex: 2025)
+                - 'sufixo': sufixo de 2 dígitos do ano (ex: '25')
+                - 'coluna': nome da coluna no DataFrame (ex: 'N_Coletas_Out_25')
+                - 'display': string para exibição (ex: 'Out/2025')
+                - 'ano_comparacao': ano a ser usado para comparações
+        """
+        meses_ordem = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+        hoje = pd.Timestamp.today()
+        dia_atual = hoje.day
+        mes_atual = hoje.month
+        ano_atual = hoje.year
+        
+        # Determinar qual mês considerar baseado no dia de corte
+        if dia_atual < dia_corte:
+            # Se estamos antes do dia de corte, usar o mês anterior
+            if mes_atual == 1:
+                # Se estamos em janeiro, voltar para dezembro do ano anterior
+                mes_referencia = 12
+                ano_referencia = ano_atual - 1
+            else:
+                mes_referencia = mes_atual - 1
+                ano_referencia = ano_atual
+        else:
+            # Usar o mês atual
+            mes_referencia = mes_atual
+            ano_referencia = ano_atual
+        
+        # Tentar encontrar coluna começando pelo ano de referência
+        mes_codigo = meses_ordem[mes_referencia - 1]
+        sufixo_ref = str(ano_referencia)[-2:]
+        coluna_ref = f'N_Coletas_{mes_codigo}_{sufixo_ref}'
+        
+        # Verificar se a coluna existe no DataFrame
+        if coluna_ref in df.columns:
+            return {
+                'mes': mes_codigo,
+                'ano': ano_referencia,
+                'sufixo': sufixo_ref,
+                'coluna': coluna_ref,
+                'display': f'{mes_codigo}/{ano_referencia}',
+                'ano_comparacao': ano_referencia
+            }
+        
+        # Se não encontrou, tentar buscar o último mês disponível retroativamente
+        # Tentar meses anteriores no mesmo ano
+        for mes_idx in range(mes_referencia - 1, 0, -1):
+            mes_codigo = meses_ordem[mes_idx - 1]
+            coluna_teste = f'N_Coletas_{mes_codigo}_{sufixo_ref}'
+            if coluna_teste in df.columns:
+                return {
+                    'mes': mes_codigo,
+                    'ano': ano_referencia,
+                    'sufixo': sufixo_ref,
+                    'coluna': coluna_teste,
+                    'display': f'{mes_codigo}/{ano_referencia}',
+                    'ano_comparacao': ano_referencia
+                }
+        
+        # Se não encontrou no ano atual/referência, tentar ano anterior
+        ano_anterior = ano_referencia - 1
+        sufixo_anterior = str(ano_anterior)[-2:]
+        for mes_idx in range(12, 0, -1):
+            mes_codigo = meses_ordem[mes_idx - 1]
+            coluna_teste = f'N_Coletas_{mes_codigo}_{sufixo_anterior}'
+            if coluna_teste in df.columns:
+                return {
+                    'mes': mes_codigo,
+                    'ano': ano_anterior,
+                    'sufixo': sufixo_anterior,
+                    'coluna': coluna_teste,
+                    'display': f'{mes_codigo}/{ano_anterior}',
+                    'ano_comparacao': ano_anterior
+                }
+        
+        # Se não encontrou nenhuma coluna, retornar vazio
+        return {
+            'mes': None,
+            'ano': None,
+            'sufixo': None,
+            'coluna': None,
+            'display': 'N/A',
+            'ano_comparacao': ano_atual
+        }
+    
     @staticmethod
     def criar_grafico_distribuicao_risco(df: pd.DataFrame):
         if df.empty:
@@ -2354,14 +2454,26 @@ class MetricasAvancadas:
         media_2024 = total_coletas_2024 / len(colunas_2024) if colunas_2024 else 0
         # Média de 2025
         media_2025 = total_coletas_2025 / len(colunas_2025) if colunas_2025 else 0
-        # Último mês (mês mais recente disponível)
-        ultimo_mes_2025 = meses_2025[-1] if meses_2025 else None
-        coluna_ultimo_mes = f'N_Coletas_{ultimo_mes_2025}_25' if ultimo_mes_2025 else None
-        media_ultimo_mes = lab.get(coluna_ultimo_mes, 0)
+        # Último mês fechado (usando lógica de dia de corte)
+        info_ultimo_mes = ChartManager._obter_ultimo_mes_fechado(df)
+        media_ultimo_mes = lab.get(info_ultimo_mes['coluna'], 0) if info_ultimo_mes['coluna'] else 0
+        
         # Máxima histórica 2024
-        max_2024 = max(lab.get(col, 0) for col in colunas_2024)
+        max_2024 = max(lab.get(col, 0) for col in colunas_2024) if colunas_2024 else 0
         # Máxima histórica 2025
-        max_2025 = max(lab.get(col, 0) for col in colunas_2025)
+        max_2025 = max(lab.get(col, 0) for col in colunas_2025) if colunas_2025 else 0
+        
+        # Determinar métricas de comparação baseado no ano do último mês
+        ano_comparacao = info_ultimo_mes['ano_comparacao']
+        if ano_comparacao == 2024:
+            # Se o último mês fechado é de 2024, comparar com métricas de 2024
+            media_comparacao = media_2024
+            max_comparacao = max_2024
+        else:
+            # Se é 2025, usar métricas de 2025
+            media_comparacao = media_2025
+            max_comparacao = max_2025
+        
         return {
             'total_coletas_2024': int(total_coletas_2024),
             'total_coletas_2025': int(total_coletas_2025),
@@ -2369,7 +2481,11 @@ class MetricasAvancadas:
             'media_2025': round(media_2025, 1),
             'media_ultimo_mes': int(media_ultimo_mes),
             'max_2024': int(max_2024),
-            'max_2025': int(max_2025)
+            'max_2025': int(max_2025),
+            'ultimo_mes_display': info_ultimo_mes['display'],
+            'ano_comparacao': ano_comparacao,
+            'media_comparacao': round(media_comparacao, 1),
+            'max_comparacao': int(max_comparacao)
         }
 class AnaliseInteligente:
     """Classe para análises inteligentes e insights automáticos - Atualizado score."""
@@ -2379,11 +2495,10 @@ class AnaliseInteligente:
         """Calcula insights automáticos para cada laboratório."""
         df_insights = df.copy()
      
-        # Volume atual (último mês disponível dinâmico)
-        meses_validos_2025 = ChartManager._meses_ate_hoje(df_insights, 2025)
-        ultima_coluna_2025 = f"N_Coletas_{meses_validos_2025[-1]}_25" if meses_validos_2025 else None
-        if ultima_coluna_2025 and ultima_coluna_2025 in df_insights.columns:
-            df_insights['Volume_Atual_2025'] = df_insights[ultima_coluna_2025].fillna(0)
+        # Volume atual (último mês fechado com lógica de dia de corte)
+        info_ultimo_mes = ChartManager._obter_ultimo_mes_fechado(df_insights)
+        if info_ultimo_mes['coluna'] and info_ultimo_mes['coluna'] in df_insights.columns:
+            df_insights['Volume_Atual_2025'] = df_insights[info_ultimo_mes['coluna']].fillna(0)
         else:
             df_insights['Volume_Atual_2025'] = 0
      
@@ -3802,27 +3917,28 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                         </div>
                         """, unsafe_allow_html=True)
 
-                        variacao_ultimo_vs_media = ((metricas_evolucao['media_ultimo_mes'] - metricas_evolucao['media_2025']) / metricas_evolucao['media_2025'] * 100) if metricas_evolucao['media_2025'] > 0 else 0
-                        percentual_maxima = (metricas_evolucao['media_ultimo_mes'] / metricas_evolucao['max_2025'] * 100) if metricas_evolucao['max_2025'] > 0 else 0
+                        variacao_ultimo_vs_media = ((metricas_evolucao['media_ultimo_mes'] - metricas_evolucao['media_comparacao']) / metricas_evolucao['media_comparacao'] * 100) if metricas_evolucao['media_comparacao'] > 0 else 0
+                        percentual_maxima = (metricas_evolucao['media_ultimo_mes'] / metricas_evolucao['max_comparacao'] * 100) if metricas_evolucao['max_comparacao'] > 0 else 0
                         cor_variacao = "#28a745" if variacao_ultimo_vs_media >= 0 else "#dc3545"
                         cor_percentual = "#28a745" if percentual_maxima >= 80 else "#ffc107" if percentual_maxima >= 50 else "#dc3545"
+                        ano_comp = metricas_evolucao['ano_comparacao']
                         st.markdown(f"""
                         <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #6f42c1;">
                             <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">COMPARATIVOS</div>
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
                                 <div>
-                                    <div style="font-size: 0.8rem; color: #666;">Último Mês vs Média 2025</div>
+                                    <div style="font-size: 0.8rem; color: #666;">Último Mês ({metricas_evolucao['ultimo_mes_display']}) vs Média {ano_comp}</div>
                                     <div style="font-size: 1.2rem; font-weight: bold; color: {cor_variacao};">
                                         {'+' if variacao_ultimo_vs_media >= 0 else ''}{variacao_ultimo_vs_media:.1f}%
                                     </div>
-                                    <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {metricas_evolucao['media_2025']:.1f}</div>
+                                    <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {metricas_evolucao['media_comparacao']:.1f}</div>
                                 </div>
                                 <div>
-                                    <div style="font-size: 0.8rem; color: #666;">Último Mês vs Máxima 2025</div>
+                                    <div style="font-size: 0.8rem; color: #666;">Último Mês ({metricas_evolucao['ultimo_mes_display']}) vs Máxima {ano_comp}</div>
                                     <div style="font-size: 1.2rem; font-weight: bold; color: {cor_percentual};">
                                         {percentual_maxima:.1f}%
                                     </div>
-                                    <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {metricas_evolucao['max_2025']:,}</div>
+                                    <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {metricas_evolucao['max_comparacao']:,}</div>
                                 </div>
                             </div>
                         </div>

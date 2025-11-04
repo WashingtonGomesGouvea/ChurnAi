@@ -3,17 +3,244 @@ Sistema de Autenticação Microsoft para Streamlit
 Implementa login via Azure AD com MSAL
 """
 
-import streamlit as st
+import base64
+import os
+from functools import lru_cache
+from html import escape
+from pathlib import Path
+from typing import Optional, Dict, Any
+
 import msal
 import requests
-import os
-from typing import Optional, Dict, Any
-from urllib.parse import urlparse, parse_qs
+import streamlit as st
 import logging
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Paleta de cores alinhada ao projeto Syntox Churn
+PRIMARY_COLOR = "#6BBF47"
+SECONDARY_COLOR = "#52B54B"
+ACCENT_DARK = "#0F1C16"
+MUTED_TEXT = "#5B6770"
+
+# Estilos dedicados para a tela de login
+LOGIN_PAGE_CSS = f"""
+<style>
+.login-wrapper {{
+    position: relative;
+    min-height: calc(100vh - 6rem);
+    padding: 3.5rem 1.5rem 4.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(160deg, rgba(15, 28, 22, 0.94) 0%, rgba(18, 45, 25, 0.92) 35%, rgba(82, 181, 75, 0.88) 100%);
+    overflow: hidden;
+}}
+.login-wrapper::before {{
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 18% 22%, rgba(107, 191, 71, 0.32), transparent 58%),
+                radial-gradient(circle at 82% 78%, rgba(82, 181, 75, 0.22), transparent 55%);
+    opacity: 0.9;
+    pointer-events: none;
+}}
+.login-inner {{
+    position: relative;
+    width: 100%;
+    max-width: 540px;
+    z-index: 1;
+}}
+.login-card {{
+    background: #ffffff;
+    border-radius: 22px;
+    padding: 2.75rem 3rem;
+    box-shadow: 0 26px 64px rgba(15, 28, 22, 0.22);
+    overflow: hidden;
+}}
+.login-logo {{
+    width: 180px;
+    margin: 0 auto 1.5rem;
+    display: block;
+}}
+.login-logo-placeholder {{
+    width: 100%;
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 1.75rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: {PRIMARY_COLOR};
+    background: rgba(107, 191, 71, 0.1);
+    border-radius: 14px;
+}}
+.login-title {{
+    font-size: 1.9rem;
+    font-weight: 700;
+    color: {ACCENT_DARK};
+    margin-bottom: 0.35rem;
+}}
+.login-subtitle {{
+    font-size: 1.05rem;
+    color: {MUTED_TEXT};
+    margin-bottom: 1.75rem;
+    line-height: 1.6;
+}}
+.login-highlights {{
+    display: grid;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}}
+.highlight-item {{
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.9rem 1rem;
+    border-radius: 14px;
+    background: rgba(107, 191, 71, 0.1);
+    border: 1px solid rgba(82, 181, 75, 0.18);
+}}
+.highlight-icon {{
+    font-size: 1.35rem;
+}}
+.highlight-text strong {{
+    display: block;
+    font-size: 0.98rem;
+    color: {ACCENT_DARK};
+}}
+.highlight-text p {{
+    margin: 0.15rem 0 0;
+    color: {MUTED_TEXT};
+    font-size: 0.92rem;
+    line-height: 1.45;
+}}
+.login-alert {{
+    margin-bottom: 1.25rem;
+    padding: 0.9rem 1rem;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 0.95rem;
+    border: 1px solid rgba(234, 179, 8, 0.35);
+    background: rgba(245, 158, 11, 0.08);
+    color: #9a3412;
+}}
+.login-alert.danger {{
+    border-color: rgba(220, 38, 38, 0.4);
+    background: rgba(248, 113, 113, 0.12);
+    color: #991b1b;
+}}
+.login-button {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.55rem;
+    width: 100%;
+    margin-top: 0.25rem;
+    padding: 1rem 1.25rem;
+    border-radius: 14px;
+    background: linear-gradient(135deg, {PRIMARY_COLOR}, {SECONDARY_COLOR});
+    color: #ffffff;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    text-decoration: none;
+    border: none;
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
+    box-shadow: 0 18px 36px rgba(82, 181, 75, 0.28);
+}}
+.login-button:hover {{
+    transform: translateY(-2px);
+    box-shadow: 0 24px 46px rgba(82, 181, 75, 0.33);
+    text-decoration: none;
+}}
+.login-button-icon {{
+    font-size: 1.25rem;
+    line-height: 1;
+}}
+.login-meta {{
+    margin-top: 1.75rem;
+    text-align: center;
+    color: {MUTED_TEXT};
+    font-size: 0.94rem;
+    line-height: 1.55;
+}}
+.login-badge {{
+    display: inline-block;
+    margin-bottom: 0.65rem;
+    padding: 0.35rem 0.85rem;
+    background: rgba(82, 181, 75, 0.12);
+    color: {SECONDARY_COLOR};
+    border-radius: 999px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}}
+.login-help {{
+    margin-top: 1.75rem;
+    padding-top: 1.4rem;
+    border-top: 1px solid rgba(15, 28, 22, 0.08);
+    color: {MUTED_TEXT};
+    font-size: 0.9rem;
+    line-height: 1.6;
+}}
+.login-help a {{
+    color: {SECONDARY_COLOR};
+    font-weight: 600;
+    text-decoration: none;
+}}
+.login-help a:hover {{
+    text-decoration: underline;
+}}
+@media (max-width: 640px) {{
+    .login-card {{
+        padding: 2.25rem 1.8rem;
+        border-radius: 18px;
+    }}
+    .login-title {{
+        font-size: 1.6rem;
+    }}
+    .login-subtitle {{
+        font-size: 1rem;
+    }}
+}}
+</style>
+"""
+
+
+@lru_cache(maxsize=1)
+def _get_login_logo_base64() -> Optional[str]:
+    """Carrega o logo da Synvia e retorna em base64 para uso inline."""
+    logo_dir = Path(__file__).resolve().parent / "logo"
+    if not logo_dir.exists():
+        logger.warning("Diretório de logos não encontrado para a tela de login")
+        return None
+
+    candidates = [
+        "SYNVIA_CAEPTOX_LOGO_PADRÃO(nome-preto).png",
+        "SYNVIA_CAEPTOX_LOGO_PADRÃO(nome-preto).png",
+        "SYNVIA_CAEPTOX_LOGO_PADRÃO(nome-branco).png",
+        "SYNVIA_CAEPTOX_LOGO_PADRÃO(nome-branco).png",
+    ]
+
+    for candidate in candidates:
+        path_candidate = logo_dir / candidate
+        if path_candidate.exists():
+            try:
+                return base64.b64encode(path_candidate.read_bytes()).decode()
+            except Exception as exc:  # pragma: no cover - leitura de arquivo
+                logger.warning(f"Falha ao carregar logo {candidate}: {exc}")
+
+    # Fallback: primeiro PNG disponível
+    for path_candidate in sorted(logo_dir.glob("*.png")):
+        try:
+            return base64.b64encode(path_candidate.read_bytes()).decode()
+        except Exception as exc:  # pragma: no cover
+            logger.warning(f"Falha ao carregar logo {path_candidate.name}: {exc}")
+
+    return None
 
 class MicrosoftAuth:
     """Classe para gerenciar autenticação Microsoft via Azure AD"""
@@ -356,106 +583,117 @@ def create_login_page(auth: MicrosoftAuth) -> bool:
     if AuthManager.is_authenticated():
         return True
 
-    st.title("🔐 Login Microsoft")
-    st.markdown("---")
+    st.markdown(LOGIN_PAGE_CSS, unsafe_allow_html=True)
 
-    # Layout centralizado
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("""
-        ### Acesso Seguro ao Dashboard Churn
+    # Verificar se há retorno de autenticação na URL
+    query_params = st.query_params
 
-        Faça login com sua conta Microsoft para acessar o sistema de análise de retenção de laboratórios.
-        """)
+    if "code" in query_params:
+        with st.spinner("🔄 Autenticando..."):
+            code = query_params["code"]
+            token_data = auth.get_token_from_code(code)
 
-        # Verificar se há código de autorização na URL
-        query_params = st.query_params
+            if token_data and token_data.get("access_token"):
+                access_token = token_data["access_token"]
+                refresh_token = token_data.get("refresh_token")
+                expires_in = token_data.get("expires_in", 3600)
 
-        if "code" in query_params:
-            # Processar código de autorização
-            with st.spinner("🔄 Autenticando..."):
-                code = query_params["code"]
-                token_data = auth.get_token_from_code(code)
+                user_info = auth.get_user_info(access_token)
+                if user_info:
+                    AuthManager.login(user_info, access_token, refresh_token, expires_in)
+                    st.success("✅ Login realizado com sucesso!")
+                    st.balloons()
+                    st.query_params.clear()
+                    return True
 
-                if token_data and token_data.get("access_token"):
-                    access_token = token_data["access_token"]
-                    refresh_token = token_data.get("refresh_token")
-                    expires_in = token_data.get("expires_in", 3600)
-                    
-                    user_info = auth.get_user_info(access_token)
-                    if user_info:
-                        AuthManager.login(user_info, access_token, refresh_token, expires_in)
-                        st.success("✅ Login realizado com sucesso!")
-                        st.balloons()
-                        # Limpar parâmetros da URL
-                        st.query_params.clear()
-                        return True
-                    else:
-                        AuthManager.increment_login_attempts()
-                        st.error("❌ Erro ao obter informações do usuário")
-                        if AuthManager.get_login_attempts() >= 3:
-                            st.warning("⚠️ Muitas tentativas falharam. Recarregue a página e tente novamente.")
-                        return False
-                else:
-                    AuthManager.increment_login_attempts()
-                    st.error("❌ Falha na autenticação. Verifique suas credenciais.")
-                    if AuthManager.get_login_attempts() >= 3:
-                        st.warning("⚠️ Muitas tentativas falharam. Recarregue a página e tente novamente.")
-                    return False
+                AuthManager.increment_login_attempts()
+                st.error("❌ Erro ao obter informações do usuário. Tente novamente em instantes.")
+            else:
+                AuthManager.increment_login_attempts()
+                st.error("❌ Falha na autenticação. Verifique suas credenciais e tente novamente.")
 
-        elif "error" in query_params:
-            # Tratar erros de autenticação
-            error = query_params.get("error", [""])[0]
-            error_description = query_params.get("error_description", ["Erro desconhecido"])[0]
-            st.error(f"❌ Erro de autenticação: {error}")
-            st.warning(f"Detalhes: {error_description}")
-            return False
+        if AuthManager.get_login_attempts() >= 3:
+            st.warning("⚠️ Muitas tentativas falharam. Atualize a página ou entre em contato com o suporte.")
 
-        else:
-            # Mostrar botão de login
-            st.markdown("### 🔑 Entrar com Microsoft")
+        st.query_params.clear()
 
-            # Informações sobre o domínio
-            st.info("ℹ️ Use sua conta Microsoft corporativa (@synvia.com) para fazer login.")
+    elif "error" in query_params:
+        error = query_params.get("error", [""])[0]
+        error_description = query_params.get("error_description", ["Erro desconhecido"])[0]
+        st.error(f"❌ Erro de autenticação: {error}")
+        st.warning(f"Detalhes: {error_description}")
+        st.query_params.clear()
 
-            # Botão de login estilizado
-            login_url = auth.get_login_url()
+    raw_login_url = auth.get_login_url()
+    login_url = escape(raw_login_url, quote=True)
+    logo_base64 = _get_login_logo_base64()
+    if logo_base64:
+        logo_html = f'<img src="data:image/png;base64,{logo_base64}" alt="Synvia" class="login-logo" />'
+    else:
+        logo_html = '<div class="login-logo-placeholder">SYNTOX CHURN</div>'
 
-            st.markdown(f"""
-            <div style="text-align: center; margin: 20px 0;">
-                <a href="{login_url}" style="
-                    display: inline-block;
-                    padding: 15px 30px;
-                    background: linear-gradient(135deg, #0078d4 0%, #005a9e 100%);
-                    color: white;
-                    text-decoration: none;
-                    border-radius: 8px;
-                    font-weight: bold;
-                    font-size: 16px;
-                    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-                    transition: all 0.3s ease;
-                    border: none;
-                    cursor: pointer;
-                " onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 12px rgba(0,0,0,0.3)'"
-                   onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 8px rgba(0,0,0,0.2)'">
-                    🚀 Entrar com Microsoft
-                </a>
-            </div>
-            """, unsafe_allow_html=True)
+    highlights_html = "\n".join([
+        '<div class="login-highlights">',
+        '<div class="highlight-item">',
+        '<div class="highlight-icon">📊</div>',
+        '<div class="highlight-text">',
+        '<strong>Indicadores atualizados</strong>',
+        '<p>KPIs corporativos em tempo real para prevenir churn e direcionar ações.</p>',
+        '</div>',
+        '</div>',
+        '<div class="highlight-item">',
+        '<div class="highlight-icon">🔒</div>',
+        '<div class="highlight-text">',
+        '<strong>Segurança integrada</strong>',
+        '<p>Autenticação Microsoft garante sigilo e rastreabilidade de acessos.</p>',
+        '</div>',
+        '</div>',
+        '<div class="highlight-item">',
+        '<div class="highlight-icon">🤝</div>',
+        '<div class="highlight-text">',
+        '<strong>Experiência unificada</strong>',
+        '<p>Acesso único aos dados consolidados do ecossistema Synvia.</p>',
+        '</div>',
+        '</div>',
+        '</div>',
+    ])
 
-            # Informações adicionais
-            with st.expander("ℹ️ Sobre a Autenticação"):
-                st.markdown("""
-                **Por que preciso fazer login?**
-                - Acesso seguro aos dados de análise de churn
-                - Controle de permissões por usuário
-                - Auditoria de atividades no sistema
+    attempts = AuthManager.get_login_attempts()
+    attempts_html = ""
+    if attempts >= 3:
+        attempts_html = '<div class="login-alert danger">Muitas tentativas foram detectadas. Atualize a página ou procure o time de Data Analytics.</div>'
+    elif attempts > 0:
+        attempts_html = f'<div class="login-alert">Tentativa {attempts} registrada. Caso o erro persista, limpe o cache do navegador e tente novamente.</div>'
 
-                **Problemas comuns:**
-                - Certifique-se de usar uma conta Microsoft válida
-                - Verifique se o navegador permite pop-ups
-                - Se o login falhar, tente limpar o cache do navegador
-                """)
+    html_parts = [
+        '<div class="login-wrapper">',
+        '<div class="login-inner">',
+        '<div class="login-card">',
+        f'{logo_html}',
+        '<h1 class="login-title">Bem-vindo ao Syntox Churn</h1>',
+        '<p class="login-subtitle">Inteligência para retenção de laboratórios e tomada de decisão baseada em dados.</p>',
+        f'{highlights_html}',
+        attempts_html if attempts_html else '',
+        f'<a class="login-button" href="{login_url}">',
+        '<span>Entrar com Microsoft</span>',
+        '<span class="login-button-icon" aria-hidden="true">&rarr;</span>',
+        '</a>',
+        '<div class="login-meta">',
+        '<span class="login-badge">Acesso restrito Synvia</span>',
+        '<p>Use sua conta Microsoft corporativa <strong>@synvia.com</strong> para continuar.</p>',
+        '</div>',
+        '<div class="login-help">',
+        '<p>Ao acessar, você concorda em manter a confidencialidade das informações exibidas.</p>',
+        '<p>Problemas no login? Libere pop-ups, limpe o cache do navegador ou procure o time de Data Analytics.</p>',
+        '</div>',
+        '</div>',
+        '</div>',
+        '</div>',
+    ]
+
+    html_content = "\n".join(part for part in html_parts if part)
+
+    st.markdown(html_content, unsafe_allow_html=True)
 
     return False
 

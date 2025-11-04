@@ -2691,6 +2691,14 @@ def main():
         if not create_login_page(auth):
             # Se não conseguiu fazer login, parar execução
             return
+        
+        # Verificar e renovar token automaticamente se necessário
+        if not AuthManager.check_and_refresh_token(auth):
+            # Se falhou ao renovar token, forçar novo login
+            st.warning("⚠️ Sua sessão expirou. Por favor, faça login novamente.")
+            st.rerun()
+            return
+        
         # Criar cabeçalho com informações do usuário
         create_user_header()
     except Exception as e:

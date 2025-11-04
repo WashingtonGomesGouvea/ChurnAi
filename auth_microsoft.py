@@ -102,17 +102,19 @@ class MicrosoftAuth:
                 client_credential=self.client_secret
             )
 
+            # MSAL automaticamente solicita offline_access quando usado dessa forma
             auth_url = app.get_authorization_request_url(
                 self.scope,
-                redirect_uri=self.redirect_uri
+                redirect_uri=self.redirect_uri,
+                prompt="select_account"  # Permite seleção de conta
             )
             return auth_url
         except Exception as e:
             logger.error(f"Erro ao gerar URL de login: {e}")
             raise
 
-    def get_token_from_code(self, code: str) -> Optional[str]:
-        """Troca código de autorização por token de acesso"""
+    def get_token_from_code(self, code: str) -> Optional[Dict[str, Any]]:
+        """Troca código de autorização por token de acesso e refresh token"""
         try:
             app = msal.ConfidentialClientApplication(
                 self.client_id,
@@ -120,6 +122,7 @@ class MicrosoftAuth:
                 client_credential=self.client_secret
             )
 
+            # MSAL automaticamente retorna refresh_token quando disponível
             result = app.acquire_token_by_authorization_code(
                 code,
                 scopes=self.scope,
@@ -127,7 +130,11 @@ class MicrosoftAuth:
             )
 
             if "access_token" in result:
-                return result["access_token"]
+                return {
+                    "access_token": result["access_token"],
+                    "refresh_token": result.get("refresh_token"),
+                    "expires_in": result.get("expires_in", 3600)
+                }
 
             if "error" in result:
                 logger.error(f"Erro na autenticação: {result['error_description']}")
@@ -137,6 +144,39 @@ class MicrosoftAuth:
 
         except Exception as e:
             logger.error(f"Erro ao obter token: {e}")
+            return None
+    
+    def refresh_access_token(self, refresh_token: str) -> Optional[Dict[str, Any]]:
+        """Renova o access token usando refresh token"""
+        try:
+            app = msal.ConfidentialClientApplication(
+                self.client_id,
+                authority=self.authority,
+                client_credential=self.client_secret
+            )
+
+            # MSAL automaticamente retorna novo refresh_token
+            result = app.acquire_token_by_refresh_token(
+                refresh_token,
+                scopes=self.scope
+            )
+
+            if "access_token" in result:
+                logger.info("Token renovado com sucesso")
+                return {
+                    "access_token": result["access_token"],
+                    "refresh_token": result.get("refresh_token", refresh_token),
+                    "expires_in": result.get("expires_in", 3600)
+                }
+
+            if "error" in result:
+                logger.error(f"Erro ao renovar token: {result.get('error_description')}")
+                return None
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Erro ao renovar token: {e}")
             return None
 
     def get_user_info(self, token: str) -> Optional[Dict[str, Any]]:
@@ -195,15 +235,22 @@ class AuthManager:
             st.session_state.user_info = None
         if "token" not in st.session_state:
             st.session_state.token = None
+        if "refresh_token" not in st.session_state:
+            st.session_state.refresh_token = None
+        if "token_expiry" not in st.session_state:
+            st.session_state.token_expiry = None
         if "login_attempts" not in st.session_state:
             st.session_state.login_attempts = 0
 
     @staticmethod
-    def login(user_info: Dict[str, Any], token: str):
+    def login(user_info: Dict[str, Any], token: str, refresh_token: str = None, expires_in: int = 3600):
         """Realizar login do usuário"""
+        import datetime
         st.session_state.authenticated = True
         st.session_state.user_info = user_info
         st.session_state.token = token
+        st.session_state.refresh_token = refresh_token
+        st.session_state.token_expiry = datetime.datetime.now() + datetime.timedelta(seconds=expires_in)
         st.session_state.login_attempts = 0
         logger.info(f"Usuário {user_info.get('displayName')} fez login com sucesso")
 
@@ -250,6 +297,52 @@ class AuthManager:
     def get_login_attempts() -> int:
         """Obter número de tentativas de login"""
         return st.session_state.get("login_attempts", 0)
+    
+    @staticmethod
+    def check_and_refresh_token(auth: 'MicrosoftAuth') -> bool:
+        """
+        Verifica se o token está próximo de expirar e renova automaticamente.
+        Retorna True se o token está válido (renovado ou ainda válido).
+        """
+        import datetime
+        
+        if not AuthManager.is_authenticated():
+            return False
+        
+        # Verificar se temos refresh_token
+        refresh_token = st.session_state.get("refresh_token")
+        if not refresh_token:
+            logger.warning("Sem refresh_token disponível. Usuário precisará fazer login novamente.")
+            return True  # Token atual ainda pode estar válido
+        
+        # Verificar expiração do token
+        token_expiry = st.session_state.get("token_expiry")
+        if not token_expiry:
+            return True  # Sem informação de expiração, assumir válido
+        
+        # Renovar token se faltar menos de 5 minutos para expirar
+        time_until_expiry = token_expiry - datetime.datetime.now()
+        if time_until_expiry.total_seconds() < 300:  # 5 minutos
+            logger.info(f"Token expira em {time_until_expiry.total_seconds():.0f}s. Renovando...")
+            
+            # Tentar renovar token
+            new_token_data = auth.refresh_access_token(refresh_token)
+            if new_token_data:
+                # Atualizar session_state com novo token
+                st.session_state.token = new_token_data["access_token"]
+                st.session_state.refresh_token = new_token_data.get("refresh_token", refresh_token)
+                st.session_state.token_expiry = datetime.datetime.now() + datetime.timedelta(
+                    seconds=new_token_data.get("expires_in", 3600)
+                )
+                logger.info("Token renovado com sucesso!")
+                return True
+            else:
+                logger.error("Falha ao renovar token. Usuário precisará fazer login novamente.")
+                # Limpar autenticação se não conseguir renovar
+                AuthManager.logout()
+                return False
+        
+        return True
 
 
 def create_login_page(auth: MicrosoftAuth) -> bool:
@@ -282,12 +375,16 @@ def create_login_page(auth: MicrosoftAuth) -> bool:
             # Processar código de autorização
             with st.spinner("🔄 Autenticando..."):
                 code = query_params["code"]
-                token = auth.get_token_from_code(code)
+                token_data = auth.get_token_from_code(code)
 
-                if token:
-                    user_info = auth.get_user_info(token)
+                if token_data and token_data.get("access_token"):
+                    access_token = token_data["access_token"]
+                    refresh_token = token_data.get("refresh_token")
+                    expires_in = token_data.get("expires_in", 3600)
+                    
+                    user_info = auth.get_user_info(access_token)
                     if user_info:
-                        AuthManager.login(user_info, token)
+                        AuthManager.login(user_info, access_token, refresh_token, expires_in)
                         st.success("✅ Login realizado com sucesso!")
                         st.balloons()
                         # Limpar parâmetros da URL

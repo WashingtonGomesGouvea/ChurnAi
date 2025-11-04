@@ -807,7 +807,17 @@ class RiskEngine:
         def pct(a, b):
             return (a - b) / b * 100 if b and b != 0 else 0.0
 
-        d_vs_d1 = pct(hoje, d1)
+        # Lógica híbrida para Delta D-1: usar MM7 como fallback quando D-1 = 0
+        if d1 > 0:
+            d_vs_d1 = pct(hoje, d1)
+        elif d1 == 0 and hoje == 0:
+            d_vs_d1 = 0.0
+        elif d1 == 0 and hoje > 0:
+            # Fallback: usar MM7 como referência quando D-1 está zerado
+            d_vs_d1 = pct(hoje, mm7) if mm7 > 0 else 0.0
+        else:
+            d_vs_d1 = 0.0
+        
         d_vs_mm7 = pct(hoje, mm7)
         d_vs_mm30 = pct(hoje, mm30)
         d_vs_mm90 = pct(hoje, mm90)

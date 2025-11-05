@@ -1715,21 +1715,35 @@ class ChartManager:
         )
         st.plotly_chart(fig, use_container_width=True)
     @staticmethod
-    def criar_grafico_media_diaria(df: pd.DataFrame, lab_selecionado: str = None):
+    def criar_grafico_media_diaria(
+        df: pd.DataFrame,
+        lab_cnpj: Optional[str] = None,
+        lab_nome: Optional[str] = None
+    ):
         """Cria gráfico de média diária por mês usando dados reais de 2025."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
-        if not lab_selecionado:
+        if not lab_cnpj and not lab_nome:
             st.info("📊 Selecione um laboratório para visualizar a média diária")
             return
-            
-        lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
+
+        df_ref = df
+        if lab_cnpj and 'CNPJ_Normalizado' not in df_ref.columns and 'CNPJ_PCL' in df_ref.columns:
+            df_ref = df_ref.copy()
+            df_ref['CNPJ_Normalizado'] = df_ref['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
+
+        if lab_cnpj and 'CNPJ_Normalizado' in df_ref.columns:
+            lab_data = df_ref[df_ref['CNPJ_Normalizado'] == lab_cnpj]
+        else:
+            lab_data = df_ref[df_ref['Nome_Fantasia_PCL'] == lab_nome]
+
         if lab_data.empty:
             st.info("📊 Laboratório não encontrado")
             return
-            
+
         lab = lab_data.iloc[0]
+        nome_exibicao = lab_nome or lab.get('Nome_Fantasia_PCL') or lab_cnpj
         
         # Verificar se temos dados diários reais de 2025
         if 'Dados_Diarios_2025' not in lab or pd.isna(lab['Dados_Diarios_2025']) or lab['Dados_Diarios_2025'] == '{}':
@@ -1781,7 +1795,7 @@ class ChartManager:
         fig = px.bar(
             x=meses_com_dados,
             y=medias_diarias,
-            title=f"📊 Média Diária Real por Mês - {lab_selecionado}<br><sup>Baseado em dias com coleta real</sup>",
+            title=f"📊 Média Diária Real por Mês - {nome_exibicao}<br><sup>Baseado em dias com coleta real</sup>",
             color=medias_diarias,
             color_continuous_scale='Greens',
             text=[f"{val:.1f}" for val in medias_diarias]
@@ -1820,131 +1834,166 @@ class ChartManager:
             - Comparação mais precisa entre meses
             """)
     @staticmethod
-    def criar_grafico_coletas_por_dia(df: pd.DataFrame, lab_selecionado: str = None):
+    def criar_grafico_coletas_por_dia(
+        df: pd.DataFrame,
+        lab_cnpj: Optional[str] = None,
+        lab_nome: Optional[str] = None
+    ):
         """Cria gráfico de coletas por dia do mês usando dados reais de 2025."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
-        if lab_selecionado:
-            lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
-            if not lab_data.empty:
-                lab = lab_data.iloc[0]
-             
-                # Verificar se temos dados diários reais de 2025
-                if 'Dados_Diarios_2025' not in lab or pd.isna(lab['Dados_Diarios_2025']) or lab['Dados_Diarios_2025'] == '{}':
-                    st.info("📊 Nenhum dado diário disponível para 2025. Use o gerador para atualizar os dados.")
-                    return
-                
-                import json
-                try:
-                    # Carregar dados diários reais
-                    dados_diarios = json.loads(lab['Dados_Diarios_2025'])
-                except (json.JSONDecodeError, TypeError):
-                    st.info("📊 Erro ao carregar dados diários. Use o gerador para atualizar os dados.")
-                    return
-                
-                if not dados_diarios:
-                    st.info("📊 Nenhum dado diário disponível para 2025.")
-                    return
-                
-                # Converter dados para DataFrame
-                dados_grafico = []
-                meses_ordem = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
-                
-                for mes_key, dias_mes in dados_diarios.items():
-                    # Extrair mês do formato "2025-10"
-                    try:
-                        ano, mes_num = mes_key.split('-')
-                        mes_num = int(mes_num)
-                        if mes_num >= 1 and mes_num <= 12:
-                            mes_nome = meses_ordem[mes_num - 1]
-                            
-                            # Adicionar apenas dias com coletas reais
-                            for dia_str, coletas in dias_mes.items():
-                                dia = int(dia_str)
-                                if coletas > 0:  # Só mostrar dias com coletas
-                                    dados_grafico.append({
-                                        'Dia': dia,
-                                        'Mês': mes_nome,
-                                        'Coletas': int(coletas)
-                                    })
-                    except (ValueError, IndexError):
-                        continue
-                
-                if not dados_grafico:
-                    st.info("📊 Nenhuma coleta encontrada nos dados diários de 2025.")
-                    return
-                
-                df_grafico = pd.DataFrame(dados_grafico)
-             
-                # Criar gráfico de linha interativo
-                fig = px.line(
-                    df_grafico,
-                    x='Dia',
-                    y='Coletas',
-                    color='Mês',
-                    title=f"📅 Coletas por Dia do Mês - {lab_selecionado}",
-                    markers=True,
-                    line_shape='linear'
-                )
-             
-                # Configurar tooltip personalizado com nome correto do mês
-                fig.update_traces(
-                    hovertemplate='<b>Dia:</b> %{x}<br><b>Mês:</b> %{fullData.name}<br><b>Coletas:</b> %{y:.0f}<extra></extra>'
-                )
-             
-                fig.update_layout(
-                    xaxis_title="Dia do Mês (1-31)",
-                    yaxis_title="Número de Coletas",
-                    xaxis=dict(tickmode='linear', tick0=1, dtick=5),
-                    legend=dict(
-                        orientation="h",
-                        yanchor="bottom",
-                        y=-0.15,
-                        xanchor="center",
-                        x=0.5,
-                        bgcolor="rgba(255,255,255,0.8)",
-                        bordercolor="rgba(0,0,0,0.2)",
-                        borderwidth=1
-                    ),
-                    height=600,
-                    margin=dict(l=60, r=60, t=80, b=120),  # Margem inferior maior para legenda
-                    autosize=True,
-                    font=dict(size=14),
-                    # Tornar o gráfico mais interativo
-                    hovermode='x unified',
-                    # Melhorar a aparência das linhas
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    paper_bgcolor='rgba(0,0,0,0)'
-                )
-                
-                # Adicionar anotação explicativa (dica persistente)
-                fig.add_annotation(
-                    text="💡 Dica: dê duplo clique no mês na legenda para focar apenas aquela série. Clique simples mostra/oculta linhas.",
-                    xref="paper", yref="paper",
-                    x=0.5, y=-0.25,
-                    showarrow=False,
-                    font=dict(size=12, color="gray"),
-                    xanchor="center"
-                )
-             
-                st.plotly_chart(fig, use_container_width=True)
+        if not lab_cnpj and not lab_nome:
+            st.info("📊 Selecione um laboratório para visualizar as coletas por dia")
+            return
+
+        df_ref = df
+        if lab_cnpj and 'CNPJ_Normalizado' not in df_ref.columns and 'CNPJ_PCL' in df_ref.columns:
+            df_ref = df_ref.copy()
+            df_ref['CNPJ_Normalizado'] = df_ref['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
+
+        if lab_cnpj and 'CNPJ_Normalizado' in df_ref.columns:
+            lab_data = df_ref[df_ref['CNPJ_Normalizado'] == lab_cnpj]
+        else:
+            lab_data = df_ref[df_ref['Nome_Fantasia_PCL'] == lab_nome]
+
+        if lab_data.empty:
+            st.info("📊 Laboratório não encontrado")
+            return
+
+        lab = lab_data.iloc[0]
+        nome_exibicao = lab_nome or lab.get('Nome_Fantasia_PCL') or lab_cnpj
+
+        # Verificar se temos dados diários reais de 2025
+        if 'Dados_Diarios_2025' not in lab or pd.isna(lab['Dados_Diarios_2025']) or lab['Dados_Diarios_2025'] == '{}':
+            st.info("📊 Nenhum dado diário disponível para 2025. Use o gerador para atualizar os dados.")
+            return
+
+        import json
+        try:
+            # Carregar dados diários reais
+            dados_diarios = json.loads(lab['Dados_Diarios_2025'])
+        except (json.JSONDecodeError, TypeError):
+            st.info("📊 Erro ao carregar dados diários. Use o gerador para atualizar os dados.")
+            return
+
+        if not dados_diarios:
+            st.info("📊 Nenhum dado diário disponível para 2025.")
+            return
+
+        # Converter dados para DataFrame
+        dados_grafico = []
+        meses_ordem = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+
+        for mes_key, dias_mes in dados_diarios.items():
+            # Extrair mês do formato "2025-10"
+            try:
+                ano, mes_num = mes_key.split('-')
+                mes_num = int(mes_num)
+                if mes_num >= 1 and mes_num <= 12:
+                    mes_nome = meses_ordem[mes_num - 1]
+
+                    # Adicionar apenas dias com coletas reais
+                    for dia_str, coletas in dias_mes.items():
+                        dia = int(dia_str)
+                        if coletas > 0:  # Só mostrar dias com coletas
+                            dados_grafico.append({
+                                'Dia': dia,
+                                'Mês': mes_nome,
+                                'Coletas': int(coletas)
+                            })
+            except (ValueError, IndexError):
+                continue
+
+        if not dados_grafico:
+            st.info("📊 Nenhuma coleta encontrada nos dados diários de 2025.")
+            return
+
+        df_grafico = pd.DataFrame(dados_grafico)
+
+        # Criar gráfico de linha interativo
+        fig = px.line(
+            df_grafico,
+            x='Dia',
+            y='Coletas',
+            color='Mês',
+            title=f"📅 Coletas por Dia do Mês - {nome_exibicao}",
+            markers=True,
+            line_shape='linear'
+        )
+
+        # Configurar tooltip personalizado com nome correto do mês
+        fig.update_traces(
+            hovertemplate='<b>Dia:</b> %{x}<br><b>Mês:</b> %{fullData.name}<br><b>Coletas:</b> %{y:.0f}<extra></extra>'
+        )
+
+        fig.update_layout(
+            xaxis_title="Dia do Mês (1-31)",
+            yaxis_title="Número de Coletas",
+            xaxis=dict(tickmode='linear', tick0=1, dtick=5),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=-0.15,
+                xanchor="center",
+                x=0.5,
+                bgcolor="rgba(255,255,255,0.8)",
+                bordercolor="rgba(0,0,0,0.2)",
+                borderwidth=1
+            ),
+            height=600,
+            margin=dict(l=60, r=60, t=80, b=120),  # Margem inferior maior para legenda
+            autosize=True,
+            font=dict(size=14),
+            # Tornar o gráfico mais interativo
+            hovermode='x unified',
+            # Melhorar a aparência das linhas
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)'
+        )
+
+        # Adicionar anotação explicativa (dica persistente)
+        fig.add_annotation(
+            text="💡 Dica: dê duplo clique no mês na legenda para focar apenas aquela série. Clique simples mostra/oculta linhas.",
+            xref="paper", yref="paper",
+            x=0.5, y=-0.25,
+            showarrow=False,
+            font=dict(size=12, color="gray"),
+            xanchor="center"
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
     @staticmethod
-    def criar_grafico_media_dia_semana_novo(df: pd.DataFrame, lab_selecionado: str = None, filtros: dict = None):
+    def criar_grafico_media_dia_semana_novo(
+        df: pd.DataFrame,
+        lab_cnpj: Optional[str] = None,
+        lab_nome: Optional[str] = None,
+        filtros: dict = None
+    ):
         """NOVA VERSÃO - Cria gráfico de distribuição de coletas por dia da semana usando dados reais de 2025."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
             return
-        if not lab_selecionado:
+        if not lab_cnpj and not lab_nome:
             st.info("📊 Selecione um laboratório para visualizar a distribuição semanal")
             return
-            
-        lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
+
+        df_ref = df
+        if lab_cnpj and 'CNPJ_Normalizado' not in df_ref.columns and 'CNPJ_PCL' in df_ref.columns:
+            df_ref = df_ref.copy()
+            df_ref['CNPJ_Normalizado'] = df_ref['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
+
+        if lab_cnpj and 'CNPJ_Normalizado' in df_ref.columns:
+            lab_data = df_ref[df_ref['CNPJ_Normalizado'] == lab_cnpj]
+        else:
+            lab_data = df_ref[df_ref['Nome_Fantasia_PCL'] == lab_nome]
+
         if lab_data.empty:
             st.info("📊 Laboratório não encontrado")
             return
-            
+
         lab = lab_data.iloc[0]
+        nome_exibicao = lab_nome or lab.get('Nome_Fantasia_PCL') or lab_cnpj
         
         # Verificar se temos dados semanais reais de 2025
         if 'Dados_Semanais_2025' not in lab or pd.isna(lab['Dados_Semanais_2025']) or lab['Dados_Semanais_2025'] == '{}':
@@ -2014,7 +2063,7 @@ class ChartManager:
         
         # Configurar layout
         fig.update_layout(
-            title=f"📅 Distribuição Real de Coletas por Dia da Semana<br><sup>{lab_selecionado} | Total semanal: {total_coletas} coletas</sup>",
+            title=f"📅 Distribuição Real de Coletas por Dia da Semana<br><sup>{nome_exibicao} | Total semanal: {total_coletas} coletas</sup>",
             xaxis_title="Dia da Semana",
             yaxis_title="Coletas por Dia",
             height=600,
@@ -2199,7 +2248,12 @@ class ChartManager:
                 Dados diários reais forneceriam análise mais precisa.
                 """)
     @staticmethod
-    def criar_grafico_evolucao_mensal(df: pd.DataFrame, lab_selecionado: str = None, chart_key: str = "default"):
+    def criar_grafico_evolucao_mensal(
+        df: pd.DataFrame,
+        lab_cnpj: Optional[str] = None,
+        lab_nome: Optional[str] = None,
+        chart_key: str = "default"
+    ):
         """Cria gráfico de evolução mensal - Atualizado com correções de diferença 2024/2025."""
         if df.empty:
             st.info("📊 Nenhum dado disponível para o gráfico")
@@ -2209,11 +2263,20 @@ class ChartManager:
             st.info("📊 Nenhum mês disponível até a data atual")
             return
         colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses]
-        if lab_selecionado:
+        if lab_cnpj or lab_nome:
             # Gráfico para laboratório específico
-            lab_data = df[df['Nome_Fantasia_PCL'] == lab_selecionado]
+            df_ref = df
+            if lab_cnpj and 'CNPJ_Normalizado' not in df_ref.columns and 'CNPJ_PCL' in df_ref.columns:
+                df_ref = df_ref.copy()
+                df_ref['CNPJ_Normalizado'] = df_ref['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
+
+            if lab_cnpj and 'CNPJ_Normalizado' in df_ref.columns:
+                lab_data = df_ref[df_ref['CNPJ_Normalizado'] == lab_cnpj]
+            else:
+                lab_data = df_ref[df_ref['Nome_Fantasia_PCL'] == lab_nome]
             if not lab_data.empty:
                 lab = lab_data.iloc[0]
+                nome_exibicao = lab_nome or lab.get('Nome_Fantasia_PCL') or lab_cnpj
                 valores_2025 = [lab.get(col, 0) for col in colunas_meses]
              
                 # Dados 2024 (mesmos meses para comparação direta)
@@ -2238,7 +2301,7 @@ class ChartManager:
                     df_grafico,
                     x='Mês',
                     y=['2025', '2024', 'Média 2025', 'Média 2024'],
-                    title=f"📈 Evolução Mensal - {lab_selecionado}",
+                    title=f"📈 Evolução Mensal - {nome_exibicao}",
                     markers=True,
                     line_shape='spline'
                 )
@@ -2361,13 +2424,27 @@ class MetricasAvancadas:
     """Classe para métricas avançadas de laboratórios - Atualizado organização e comparativos."""
  
     @staticmethod
-    def calcular_metricas_lab(df: pd.DataFrame, lab_nome: str) -> dict:
+    def calcular_metricas_lab(
+        df: pd.DataFrame,
+        lab_cnpj: Optional[str] = None,
+        lab_nome: Optional[str] = None
+    ) -> dict:
         """Calcula métricas avançadas para um laboratório específico - Atualizado score."""
-        lab_data = df[df['Nome_Fantasia_PCL'] == lab_nome]
-     
+
+        df_ref = df
+        if lab_cnpj and 'CNPJ_Normalizado' not in df_ref.columns and 'CNPJ_PCL' in df_ref.columns:
+            df_ref = df_ref.copy()
+            df_ref['CNPJ_Normalizado'] = df_ref['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
+
+        lab_data = pd.DataFrame()
+        if lab_cnpj and 'CNPJ_Normalizado' in df_ref.columns:
+            lab_data = df_ref[df_ref['CNPJ_Normalizado'] == lab_cnpj]
+        if lab_data.empty and lab_nome:
+            lab_data = df_ref[df_ref['Nome_Fantasia_PCL'] == lab_nome]
+
         if lab_data.empty:
             return {}
-     
+
         lab = lab_data.iloc[0]
      
         # Total de coletas 2025 (até o mês atual)
@@ -2436,11 +2513,27 @@ class MetricasAvancadas:
             'risco_diario': risco_diario
         }
     @staticmethod
-    def calcular_metricas_evolucao(df: pd.DataFrame, lab_nome: str) -> dict:
+    def calcular_metricas_evolucao(
+        df: pd.DataFrame,
+        lab_cnpj: Optional[str] = None,
+        lab_nome: Optional[str] = None
+    ) -> dict:
         """Calcula métricas de evolução e comparativos para um laboratório específico - Atualizado organização e comparativo."""
-        lab_data = df[df['Nome_Fantasia_PCL'] == lab_nome]
+
+        df_ref = df
+        if lab_cnpj and 'CNPJ_Normalizado' not in df_ref.columns and 'CNPJ_PCL' in df_ref.columns:
+            df_ref = df_ref.copy()
+            df_ref['CNPJ_Normalizado'] = df_ref['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
+
+        lab_data = pd.DataFrame()
+        if lab_cnpj and 'CNPJ_Normalizado' in df_ref.columns:
+            lab_data = df_ref[df_ref['CNPJ_Normalizado'] == lab_cnpj]
+        if lab_data.empty and lab_nome:
+            lab_data = df_ref[df_ref['Nome_Fantasia_PCL'] == lab_nome]
+
         if lab_data.empty:
             return {}
+
         lab = lab_data.iloc[0]
         # Total de coletas 2024 (todos os meses disponíveis)
         meses_2024 = ChartManager._meses_ate_hoje(df, 2024)
@@ -3453,6 +3546,55 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
         """, unsafe_allow_html=True)
         # Seleção de laboratório específico
         if not df_filtrado.empty:
+            if 'CNPJ_Normalizado' not in df_filtrado.columns:
+                df_filtrado['CNPJ_Normalizado'] = df_filtrado['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
+            df_filtrado['CNPJ_Normalizado'] = df_filtrado['CNPJ_Normalizado'].fillna('')
+
+            labs_catalogo = df_filtrado[
+                ['CNPJ_PCL', 'CNPJ_Normalizado', 'Nome_Fantasia_PCL', 'Razao_Social_PCL', 'Cidade', 'Estado']
+            ].copy()
+            labs_catalogo = labs_catalogo[labs_catalogo['CNPJ_Normalizado'] != ""]
+            labs_catalogo['CNPJ_Normalizado'] = labs_catalogo['CNPJ_Normalizado'].astype(str)
+            labs_catalogo = labs_catalogo.drop_duplicates('CNPJ_Normalizado')
+
+            def formatar_cnpj_display(cnpj_val):
+                digitos = ''.join(filter(str.isdigit, str(cnpj_val))) if pd.notna(cnpj_val) else ''
+                if len(digitos) == 14:
+                    return f"{digitos[:2]}.{digitos[2:5]}.{digitos[5:8]}/{digitos[8:12]}-{digitos[12:]}"
+                return digitos or "N/A"
+
+            def montar_rotulo(row):
+                nome = row.get('Nome_Fantasia_PCL') or row.get('Razao_Social_PCL') or "Laboratório sem nome"
+                cidade = row.get('Cidade') or ''
+                estado = row.get('Estado') or ''
+                if cidade and estado:
+                    local = f"{cidade}/{estado}"
+                elif cidade:
+                    local = cidade
+                elif estado:
+                    local = estado
+                else:
+                    local = "Localidade não informada"
+                cnpj_fmt = formatar_cnpj_display(row.get('CNPJ_PCL') or row.get('CNPJ_Normalizado'))
+                return f"{nome} - {local} (CNPJ: {cnpj_fmt})"
+
+            lab_display_map = {str(row['CNPJ_Normalizado']): montar_rotulo(row) for _, row in labs_catalogo.iterrows()}
+            lab_nome_map = {
+                str(row['CNPJ_Normalizado']): row.get('Nome_Fantasia_PCL') or row.get('Razao_Social_PCL') or str(row['CNPJ_Normalizado'])
+                for _, row in labs_catalogo.iterrows()
+            }
+            lista_cnpjs_ordenada = sorted(lab_display_map.keys(), key=lambda cnpj: lab_display_map[cnpj].lower())
+            lista_cnpjs_validos = set(lista_cnpjs_ordenada)
+
+            LAB_STATE_KEY = 'lab_cnpj_selecionado'
+            lab_cnpj_estado = st.session_state.get(LAB_STATE_KEY, "") or ""
+            if lab_cnpj_estado and lab_cnpj_estado not in lista_cnpjs_validos:
+                lab_cnpj_estado = ""
+                st.session_state[LAB_STATE_KEY] = ""
+
+            opcoes_select = [""] + lista_cnpjs_ordenada
+            index_padrao = opcoes_select.index(lab_cnpj_estado) if lab_cnpj_estado in lista_cnpjs_validos else 0
+
             # Layout melhorado com 3 colunas - ajustado para melhor alinhamento
             col1, col2, col3 = st.columns([4, 1.5, 2.5])
             with col1:
@@ -3470,10 +3612,15 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                 # Seleção por dropdown como alternativa
                 lab_selecionado = st.selectbox(
                     "📋 Lista Rápida:",
-                    options=[""] + sorted(df_filtrado['Nome_Fantasia_PCL'].unique()),
-                    help="Ou selecione um laboratório da lista completa",
-                    key="lista_rapida"
+                    options=opcoes_select,
+                    index=index_padrao,
+                    format_func=lambda cnpj: "Selecione um laboratório" if cnpj == "" else lab_display_map.get(cnpj, cnpj),
+                    help="Ou selecione um laboratório da lista completa"
                 )
+                lab_selecionado = lab_selecionado or ""
+                if lab_selecionado != st.session_state.get(LAB_STATE_KEY, ""):
+                    st.session_state[LAB_STATE_KEY] = lab_selecionado
+            lab_cnpj_estado = st.session_state.get(LAB_STATE_KEY, "") or ""
             # Informações de ajuda - Atualizado espaçamento dica busca
             with st.expander("💡 Dicas de Busca", expanded=False):
                 st.markdown("""
@@ -3489,63 +3636,71 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                 """)
             # Estado da busca
             lab_final = None
+            lab_final_cnpj = lab_cnpj_estado if lab_cnpj_estado in lista_cnpjs_validos else ""
             # Verificar se há busca ativa ou laboratório selecionado
             busca_ativa = buscar_btn or (busca_lab and len(busca_lab.strip()) > 2)
-            tem_selecao = lab_selecionado and lab_selecionado != ""
+            tem_selecao = bool(lab_cnpj_estado)
             if busca_ativa or tem_selecao:
                 # Lógica de busca aprimorada
                 if busca_ativa and busca_lab:
                     busca_normalizada = busca_lab.strip()
                     # Verificar se é CNPJ (com ou sem formatação)
                     cnpj_limpo = ''.join(filter(str.isdigit, busca_normalizada))
-                    if len(cnpj_limpo) >= 8: # CNPJ válido tem pelo menos 8 dígitos
-                        # Buscar por CNPJ normalizado
-                        df_filtrado['CNPJ_Normalizado_Busca'] = df_filtrado['CNPJ_PCL'].apply(
-                            lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
-                        )
-                        lab_encontrado = df_filtrado[df_filtrado['CNPJ_Normalizado_Busca'].str.startswith(cnpj_limpo)]
+                    if len(cnpj_limpo) >= 1:
+                        if len(cnpj_limpo) >= 14:
+                            lab_encontrado = df_filtrado[df_filtrado['CNPJ_Normalizado'] == cnpj_limpo]
+                        else:
+                            lab_encontrado = df_filtrado[df_filtrado['CNPJ_Normalizado'].str.startswith(cnpj_limpo)]
                     else:
                         # Buscar por nome (case insensitive e parcial) - apenas nome fantasia e razão social
                         lab_encontrado = df_filtrado[
                             df_filtrado['Nome_Fantasia_PCL'].str.contains(busca_normalizada, case=False, na=False) |
                             df_filtrado['Razao_Social_PCL'].str.contains(busca_normalizada, case=False, na=False)
                         ]
+                    lab_encontrado = lab_encontrado[lab_encontrado['CNPJ_Normalizado'] != ""].drop_duplicates('CNPJ_Normalizado')
                     if not lab_encontrado.empty:
                         if len(lab_encontrado) == 1:
-                            lab_final = lab_encontrado.iloc[0]['Nome_Fantasia_PCL']
-                            st.toast(f"✅ Laboratório encontrado: {lab_final}")
+                            lab_info_unico = lab_encontrado.iloc[0]
+                            lab_final = lab_info_unico.get('Nome_Fantasia_PCL') or lab_info_unico.get('Razao_Social_PCL')
+                            lab_final_cnpj = str(lab_info_unico.get('CNPJ_Normalizado', ''))
+                            st.toast(
+                                f"✅ Laboratório encontrado: {lab_final} (CNPJ: {formatar_cnpj_display(lab_final_cnpj)})"
+                            )
+                            st.session_state[LAB_STATE_KEY] = lab_final_cnpj
                         else:
                             # Múltiplos resultados - mostrar opções
                             st.info(f"🔍 Encontrados {len(lab_encontrado)} laboratórios. Selecione um:")
-                            # Criar lista de opções com mais detalhes
-                            opcoes = []
-                            for _, row in lab_encontrado.head(10).iterrows():
-                                nome = row['Nome_Fantasia_PCL']
-                                cidade = row.get('Cidade', 'N/A')
-                                estado = row.get('Estado', 'N/A')
-                                cnpj = row.get('CNPJ_PCL', 'N/A')
-                                opcao = f"{nome} - {cidade}/{estado} (CNPJ: {cnpj})"
-                                opcoes.append(opcao)
+                            opcoes_df = lab_encontrado.head(10)
+                            opcoes_cnpjs = [""] + opcoes_df['CNPJ_Normalizado'].astype(str).tolist()
+                            if 'multiplo_resultados' in st.session_state:
+                                valor_multi = st.session_state['multiplo_resultados']
+                                if valor_multi not in opcoes_cnpjs:
+                                    st.session_state['multiplo_resultados'] = ""
                             lab_selecionado_multiplo = st.selectbox(
                                 "Selecione o laboratório correto:",
-                                options=[""] + opcoes,
+                                options=opcoes_cnpjs,
+                                format_func=lambda cnpj: "Selecione" if cnpj == "" else lab_display_map.get(cnpj, cnpj),
                                 key="multiplo_resultados"
                             )
-                            if lab_selecionado_multiplo and lab_selecionado_multiplo != "":
-                                # Extrair nome do laboratório da opção selecionada
-                                nome_selecionado = lab_selecionado_multiplo.split(" - ")[0]
-                                lab_final = nome_selecionado
+                            if lab_selecionado_multiplo:
+                                lab_final_cnpj = str(lab_selecionado_multiplo)
+                                lab_final = lab_nome_map.get(lab_final_cnpj, lab_final_cnpj)
+                                st.session_state[LAB_STATE_KEY] = lab_final_cnpj
                     else:
                         st.warning("⚠️ Nenhum laboratório encontrado com os critérios informados")
                 elif tem_selecao:
                     # Laboratório selecionado diretamente da lista
-                    lab_final = lab_selecionado
+                    lab_final_cnpj = st.session_state.get(LAB_STATE_KEY, "")
+                    lab_final = lab_nome_map.get(lab_final_cnpj, lab_final_cnpj)
                 # Renderizar dados do laboratório encontrado/selecionado
-                if lab_final:
+                if lab_final_cnpj:
                     st.markdown("---") # Separador antes dos dados
                     # Verificar se é VIP
                     df_vip = DataManager.carregar_dados_vip()
-                    lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
+                    if lab_final_cnpj:
+                        lab_data = df_filtrado[df_filtrado['CNPJ_Normalizado'] == lab_final_cnpj]
+                    else:
+                        lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
                     info_vip = None
                     if not lab_data.empty and df_vip is not None:
                         cnpj_lab = lab_data.iloc[0].get('CNPJ_PCL', '')
@@ -3577,7 +3732,10 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                             </h3>
                         """, unsafe_allow_html=True)
                     # Informações de contato e localização
-                    lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
+                    if lab_final_cnpj:
+                        lab_data = df_filtrado[df_filtrado['CNPJ_Normalizado'] == lab_final_cnpj]
+                    else:
+                        lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
                     if not lab_data.empty:
                             lab_info = lab_data.iloc[0]
                          
@@ -3780,7 +3938,11 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                             </div>
                             """, unsafe_allow_html=True)
                     # Métricas comerciais essenciais
-                    metricas = MetricasAvancadas.calcular_metricas_lab(df_filtrado, lab_final)
+                    metricas = MetricasAvancadas.calcular_metricas_lab(
+                        df_filtrado,
+                        lab_cnpj=lab_final_cnpj,
+                        lab_nome=lab_final
+                    )
                     if metricas:
                         # Dados de Performance
                         st.markdown(f"""
@@ -3884,7 +4046,11 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                             """, unsafe_allow_html=True)
                         # Histórico de Performance - Reorganizado conforme solicitação
                         # Calcular máxima de coletas histórica (respeitando meses disponíveis)
-                        metricas_evolucao = MetricasAvancadas.calcular_metricas_evolucao(df_filtrado, lab_final)
+                        metricas_evolucao = MetricasAvancadas.calcular_metricas_evolucao(
+                            df_filtrado,
+                            lab_cnpj=lab_final_cnpj,
+                            lab_nome=lab_final
+                        )
                         st.markdown(f"""
                             <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #17a2b8;">
                                 <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">HISTÓRICO DE PERFORMANCE</div>
@@ -3954,7 +4120,12 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                         # Gráfico de Evolução Mensal abaixo dos comparativos
                         st.markdown("---")
                         st.subheader("📈 Evolução Mensal")
-                        ChartManager.criar_grafico_evolucao_mensal(df_filtrado, lab_final, "historico")
+                        ChartManager.criar_grafico_evolucao_mensal(
+                            df_filtrado,
+                            lab_cnpj=lab_final_cnpj,
+                            lab_nome=lab_final,
+                            chart_key="historico"
+                        )
                     st.markdown("</div>", unsafe_allow_html=True)
                     # Seção de Gráficos com Abas - Refatorado conforme solicitação
                     st.markdown("""
@@ -3973,15 +4144,28 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                     with tab_distribuicao:
                         st.subheader("📊 Distribuição de Coletas por Dia da Semana")
                         # Gráfico com destaque maior conforme solicitado
-                        ChartManager.criar_grafico_media_dia_semana_novo(df_filtrado, lab_final, filtros)
+                        ChartManager.criar_grafico_media_dia_semana_novo(
+                            df_filtrado,
+                            lab_cnpj=lab_final_cnpj,
+                            lab_nome=lab_final,
+                            filtros=filtros
+                        )
                     
                     with tab_media_diaria:
                         st.subheader("📊 Média Diária por Mês")
-                        ChartManager.criar_grafico_media_diaria(df_filtrado, lab_final)
+                        ChartManager.criar_grafico_media_diaria(
+                            df_filtrado,
+                            lab_cnpj=lab_final_cnpj,
+                            lab_nome=lab_final
+                        )
 
                     with tab_coletas_dia:
                         st.subheader("📈 Coletas por Dia do Mês")
-                        ChartManager.criar_grafico_coletas_por_dia(df_filtrado, lab_final)
+                        ChartManager.criar_grafico_coletas_por_dia(
+                            df_filtrado,
+                            lab_cnpj=lab_final_cnpj,
+                            lab_nome=lab_final
+                        )
 
         # Conteúdo único da análise detalhada
         # Carregar dados VIP para análise de rede

@@ -1767,7 +1767,7 @@ class ChartManager:
         fig = px.pie(
             values=status_counts.values,
             names=status_counts.index,
-            title="📊 Distribuição de Risco Diário",
+            title="📊 Distribuição de Risco Diário<br><sup>Baseado em dias úteis e reduções vs. MM7_BR/MM7_UF/MM7_CIDADE</sup>",
             color=status_counts.index,
             color_discrete_map=cores_map
         )
@@ -1807,7 +1807,7 @@ class ChartManager:
             x='Vol_Hoje',
             y='Nome_Fantasia_PCL',
             orientation='h',
-            title=f"🚨 Top {top_n} Laboratórios em Risco (Diário)",
+            title=f"🚨 Top {top_n} Laboratórios em Risco (Diário)<br><sup>Classificação baseada em dias úteis</sup>",
             color='Risco_Diario',
             color_discrete_map=cores_map,
             text='Delta_MM7'
@@ -1815,7 +1815,7 @@ class ChartManager:
         fig.update_traces(texttemplate='%{text:.1f}% vs MM7', textposition='outside')
         fig.update_layout(
             yaxis={'categoryorder': 'total ascending'},
-            xaxis_title="Coletas (Hoje)",
+            xaxis_title="Coletas (Último Dia Útil)",
             yaxis_title="Laboratório",
             showlegend=True,
             height=500,
@@ -2354,6 +2354,265 @@ class ChartManager:
                 Dados diários reais forneceriam análise mais precisa.
                 """)
     @staticmethod
+    def criar_grafico_controle_br_uf_cidade(
+        df: pd.DataFrame,
+        df_filtrado: Optional[pd.DataFrame] = None,
+        lab_cnpj: Optional[str] = None,
+        lab_nome: Optional[str] = None,
+        usar_mm30: bool = False
+    ):
+        """
+        Cria gráfico comparativo de controle BR × UF × Cidade × Lab atual.
+        Mostra séries temporais de MM7 ou MM30 (dias úteis) para cada contexto.
+        
+        Args:
+            df: DataFrame completo (para calcular contextos BR/UF/Cidade)
+            df_filtrado: DataFrame filtrado (para série atual quando não há lab específico)
+            lab_cnpj: CNPJ do laboratório específico (opcional)
+            lab_nome: Nome do laboratório específico (opcional)
+            usar_mm30: Se True, usa MM30; se False, usa MM7
+        """
+        if df.empty:
+            st.info("📊 Nenhum dado disponível para o gráfico de controle")
+            return
+        
+        import json
+        from pandas.tseries.offsets import BDay
+        
+        # Determinar contexto atual (lab específico ou conjunto filtrado)
+        serie_atual = pd.Series(dtype="float")
+        nome_serie_atual = "Conjunto Filtrado"
+        lab_data = pd.DataFrame()
+        
+        if lab_cnpj or lab_nome:
+            # Buscar lab específico
+            df_ref = df.copy()
+            if lab_cnpj and 'CNPJ_Normalizado' not in df_ref.columns and 'CNPJ_PCL' in df_ref.columns:
+                df_ref['CNPJ_Normalizado'] = df_ref['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
+            
+            if lab_cnpj and 'CNPJ_Normalizado' in df_ref.columns:
+                lab_data = df_ref[df_ref['CNPJ_Normalizado'] == lab_cnpj]
+            else:
+                lab_data = df_ref[df_ref['Nome_Fantasia_PCL'] == lab_nome]
+            
+            if not lab_data.empty:
+                lab = lab_data.iloc[0]
+                nome_serie_atual = lab.get('Nome_Fantasia_PCL', lab_cnpj or lab_nome)
+                if 'Dados_Diarios_2025' in lab and pd.notna(lab['Dados_Diarios_2025']):
+                    serie_atual = RiskEngine._serie_diaria_from_json(lab['Dados_Diarios_2025'])
+        else:
+            # Agregar série do conjunto filtrado (usar df_filtrado se disponível, senão df)
+            df_para_serie = df_filtrado if df_filtrado is not None and not df_filtrado.empty else df
+            todas_series = []
+            for _, row in df_para_serie.iterrows():
+                if 'Dados_Diarios_2025' in row and pd.notna(row['Dados_Diarios_2025']):
+                    s = RiskEngine._serie_diaria_from_json(row['Dados_Diarios_2025'])
+                    if not s.empty:
+                        todas_series.append(s)
+            
+            if todas_series:
+                # Agregar todas as séries por data
+                todas_datas = set()
+                for s in todas_series:
+                    todas_datas.update(s.index)
+                
+                serie_agregada = pd.Series(index=sorted(todas_datas), dtype="float")
+                for data in serie_agregada.index:
+                    total = sum(s.get(data, 0) for s in todas_series)
+                    serie_agregada[data] = total
+                
+                serie_atual = serie_agregada
+        
+        # Agregar séries por contexto (BR, UF, Cidade)
+        def agregar_por_contexto(df_contexto: pd.DataFrame) -> pd.Series:
+            """Agrega coletas diárias por contexto."""
+            todas_series = []
+            for _, row in df_contexto.iterrows():
+                if 'Dados_Diarios_2025' in row and pd.notna(row['Dados_Diarios_2025']):
+                    s = RiskEngine._serie_diaria_from_json(row['Dados_Diarios_2025'])
+                    if not s.empty:
+                        todas_series.append(s)
+            
+            if not todas_series:
+                return pd.Series(dtype="float")
+            
+            # Agregar todas as séries por data
+            todas_datas = set()
+            for s in todas_series:
+                todas_datas.update(s.index)
+            
+            serie_agregada = pd.Series(index=sorted(todas_datas), dtype="float")
+            for data in serie_agregada.index:
+                total = sum(s.get(data, 0) for s in todas_series)
+                serie_agregada[data] = total
+            
+            return serie_agregada
+        
+        # Agregar por BR (todos os labs do DataFrame completo)
+        serie_br = agregar_por_contexto(df)
+        
+        # Agregar por UF (se temos info de UF)
+        serie_uf = pd.Series(dtype="float")
+        uf_nome = ""
+        if lab_cnpj or lab_nome:
+            if not lab_data.empty and 'Estado' in lab_data.columns:
+                uf_nome = lab_data.iloc[0]['Estado']
+                if pd.notna(uf_nome) and uf_nome:
+                    df_uf = df[df['Estado'] == uf_nome]
+                    serie_uf = agregar_por_contexto(df_uf)
+        else:
+            # Para conjunto filtrado, usar UF do primeiro lab (se disponível)
+            if not df.empty and 'Estado' in df.columns:
+                uf_nome = df.iloc[0]['Estado']
+                if pd.notna(uf_nome) and uf_nome:
+                    df_uf = df[df['Estado'] == uf_nome]
+                    serie_uf = agregar_por_contexto(df_uf)
+        
+        # Agregar por Cidade (se temos info de Cidade)
+        serie_cidade = pd.Series(dtype="float")
+        cidade_nome = ""
+        if lab_cnpj or lab_nome:
+            if not lab_data.empty and 'Cidade' in lab_data.columns:
+                cidade_nome = lab_data.iloc[0]['Cidade']
+                if pd.notna(cidade_nome) and cidade_nome:
+                    df_cidade = df[df['Cidade'] == cidade_nome]
+                    serie_cidade = agregar_por_contexto(df_cidade)
+        else:
+            # Para conjunto filtrado, usar Cidade do primeiro lab (se disponível)
+            if not df.empty and 'Cidade' in df.columns:
+                cidade_nome = df.iloc[0]['Cidade']
+                if pd.notna(cidade_nome) and cidade_nome:
+                    df_cidade = df[df['Cidade'] == cidade_nome]
+                    serie_cidade = agregar_por_contexto(df_cidade)
+        
+        # Calcular médias móveis ao longo do tempo (apenas dias úteis)
+        def calcular_mm_serie(serie: pd.Series, janela: int) -> pd.Series:
+            """Calcula média móvel de janela dias úteis ao longo da série."""
+            if serie.empty:
+                return pd.Series(dtype="float")
+            
+            # Garantir que temos apenas dias úteis
+            serie = serie.sort_index()
+            serie_uteis = serie[serie.index.weekday < 5]  # Segunda=0 a Sexta=4
+            
+            if serie_uteis.empty:
+                return pd.Series(dtype="float")
+            
+            # Calcular MM ao longo do tempo
+            mm_serie = serie_uteis.rolling(window=janela, min_periods=1).mean()
+            return mm_serie
+        
+        janela = 30 if usar_mm30 else 7
+        mm_label = "MM30" if usar_mm30 else "MM7"
+        
+        # Calcular MMs para cada contexto
+        mm_br = calcular_mm_serie(serie_br, janela)
+        mm_uf = calcular_mm_serie(serie_uf, janela)
+        mm_cidade = calcular_mm_serie(serie_cidade, janela)
+        mm_atual = calcular_mm_serie(serie_atual, janela)
+        
+        # Preparar dados para o gráfico
+        dados_grafico = []
+        
+        # Adicionar série BR
+        for data, valor in mm_br.items():
+            dados_grafico.append({
+                'Data': data,
+                'Valor': valor,
+                'Serie': '🇧🇷 MM7_BR' if not usar_mm30 else '🇧🇷 MM30_BR'
+            })
+        
+        # Adicionar série UF
+        if not mm_uf.empty and uf_nome:
+            uf_label = f"📍 MM7_UF ({uf_nome})" if not usar_mm30 else f"📍 MM30_UF ({uf_nome})"
+            for data, valor in mm_uf.items():
+                dados_grafico.append({
+                    'Data': data,
+                    'Valor': valor,
+                    'Serie': uf_label
+                })
+        
+        # Adicionar série Cidade
+        if not mm_cidade.empty and cidade_nome:
+            cidade_label = f"🏙️ MM7_CIDADE ({cidade_nome})" if not usar_mm30 else f"🏙️ MM30_CIDADE ({cidade_nome})"
+            for data, valor in mm_cidade.items():
+                dados_grafico.append({
+                    'Data': data,
+                    'Valor': valor,
+                    'Serie': cidade_label
+                })
+        
+        # Adicionar série atual
+        if not mm_atual.empty:
+            atual_label = f"📊 {nome_serie_atual} ({mm_label})"
+            for data, valor in mm_atual.items():
+                dados_grafico.append({
+                    'Data': data,
+                    'Valor': valor,
+                    'Serie': atual_label
+                })
+        
+        if not dados_grafico:
+            st.info("📊 Nenhum dado disponível para gerar o gráfico de controle")
+            return
+        
+        df_grafico = pd.DataFrame(dados_grafico)
+        
+        # Criar gráfico de linha
+        cores_map = {
+            '🇧🇷 MM7_BR': '#DC2626',
+            '🇧🇷 MM30_BR': '#DC2626',
+            '📍 MM7_UF': '#3B82F6',
+            '📍 MM30_UF': '#3B82F6',
+            '🏙️ MM7_CIDADE': '#10B981',
+            '🏙️ MM30_CIDADE': '#10B981'
+        }
+        
+        # Adicionar cores dinâmicas para série atual
+        for serie_nome in df_grafico['Serie'].unique():
+            if serie_nome not in cores_map:
+                cores_map[serie_nome] = '#6BBF47'  # Cor padrão verde
+        
+        fig = px.line(
+            df_grafico,
+            x='Data',
+            y='Valor',
+            color='Serie',
+            title=f"📊 Controle BR × UF × Cidade × {nome_serie_atual}<br><sup>{mm_label} - Apenas dias úteis</sup>",
+            markers=True,
+            line_shape='linear',
+            color_discrete_map=cores_map
+        )
+        
+        fig.update_traces(
+            hovertemplate='<b>%{fullData.name}</b><br>Data: %{x|%d/%m/%Y}<br>Valor: %{y:.2f}<extra></extra>',
+            line=dict(width=2.5)
+        )
+        
+        fig.update_layout(
+            xaxis_title="Data (dias úteis)",
+            yaxis_title=f"Média Móvel ({mm_label})",
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=-0.2,
+                xanchor="center",
+                x=0.5,
+                bgcolor="rgba(255,255,255,0.9)",
+                bordercolor="rgba(0,0,0,0.2)",
+                borderwidth=1
+            ),
+            height=600,
+            margin=dict(l=60, r=60, t=100, b=120),
+            hovermode='x unified',
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(size=12)
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    @staticmethod
     def criar_grafico_evolucao_mensal(
         df: pd.DataFrame,
         lab_cnpj: Optional[str] = None,
@@ -2485,78 +2744,111 @@ class UIManager:
         """, unsafe_allow_html=True)
     @staticmethod
     def renderizar_kpi_cards(metrics: KPIMetrics):
-        """Renderiza cards de KPIs modernos - Atualizado rótulo total labs."""
+        """Renderiza cards de KPIs modernos V2 - Otimizado para eliminar redundâncias."""
+        # Primeira linha: Métricas principais
         col1, col2, col3, col4 = st.columns(4)
+        
         with col1:
-            risco_total_txt = f"Risco total: {metrics.labs_em_risco:,}" if metrics.labs_em_risco else "Risco total: 0"
-            recuperacao_txt = f"Recuperação: {metrics.labs_recuperando:,}" if metrics.labs_recuperando else "Recuperação: 0"
-            delta_text = f"{risco_total_txt} | {recuperacao_txt}"
+            # Card 1: Labs monitorados com breakdown de risco
+            risco_breakdown = []
+            if metrics.labs_moderado_count > 0:
+                risco_breakdown.append(f"🟠 {metrics.labs_moderado_count:,}")
+            if metrics.labs_alto_count > 0:
+                risco_breakdown.append(f"🔴 {metrics.labs_alto_count:,}")
+            if metrics.labs_critico_count > 0:
+                risco_breakdown.append(f"⚫ {metrics.labs_critico_count:,}")
+            
+            risco_text = " | ".join(risco_breakdown) if risco_breakdown else "Nenhum em risco"
+            recuperacao_text = f"🔄 Recuperação: {metrics.labs_recuperando:,}" if metrics.labs_recuperando > 0 else ""
+            delta_text = f"{risco_text}" + (f" | {recuperacao_text}" if recuperacao_text else "")
+            
             st.markdown(f"""
-            <div class="metric-card" title="Total de laboratórios ativos nos últimos 90 dias. Risco total: laboratórios em risco (🟠 Moderado + 🔴 Alto + ⚫ Crítico). Recuperação: laboratórios que voltaram a operar acima da MM7 após período de queda.">
+            <div class="metric-card" title="Total de laboratórios ativos nos últimos 90 dias. Breakdown por nível de risco (🟠 Moderado, 🔴 Alto, ⚫ Crítico). Recuperação: laboratórios que voltaram a operar acima da MM7 após período de queda.">
                 <div class="metric-value">{metrics.total_labs:,}</div>
-                <div class="metric-label">Labs monitorados (≤90 dias)</div>
-                <div class="metric-delta">{delta_text}</div>
+                <div class="metric-label">Labs Monitorados (≤90 dias)</div>
+                <div class="metric-delta" style="font-size:0.85rem;">{delta_text}</div>
             </div>
             """, unsafe_allow_html=True)
+        
         with col2:
+            # Card 2: Coletas do dia
             delta_text = f"D-1: {metrics.vol_d1_total:,} | YTD: {metrics.total_coletas:,}"
             st.markdown(f"""
-            <div class="metric-card" title="Total de coletas registradas na data de referência (dia mais recente). D-1: volume de coletas do dia anterior. YTD (Year To Date): soma total de coletas em 2025 até o momento (todos os meses disponíveis até hoje).">
+            <div class="metric-card" title="Total de coletas registradas no último dia útil. D-1: volume de coletas do dia útil anterior. YTD (Year To Date): soma total de coletas em 2025 até o momento.">
                 <div class="metric-value">{metrics.vol_hoje_total:,}</div>
                 <div class="metric-label">Coletas Hoje</div>
                 <div class="metric-delta">{delta_text}</div>
             </div>
             """, unsafe_allow_html=True)
+        
         with col3:
-            delta_text = f"⚫ Críticos: {metrics.labs_critico:,}"
+            # Card 3: Risco crítico consolidado (sem redundância)
+            risco_alto_critico = metrics.labs_alto_count + metrics.labs_critico_count
+            if risco_alto_critico > 0:
+                if metrics.labs_alto_count > 0 and metrics.labs_critico_count > 0:
+                    delta_text = f"🔴 {metrics.labs_alto_count:,} | ⚫ {metrics.labs_critico_count:,}"
+                elif metrics.labs_critico_count > 0:
+                    delta_text = f"⚫ {metrics.labs_critico_count:,} críticos"
+                else:
+                    delta_text = f"🔴 {metrics.labs_alto_count:,} alto"
+            else:
+                delta_text = "✅ Nenhum"
+            
             st.markdown(f"""
-            <div class="metric-card" title="Laboratórios classificados com os maiores níveis de risco: soma de 🔴 Alto e ⚫ Crítico pela régua baseada em dias úteis e reduções vs. MM7_BR/MM7_UF/MM7_CIDADE. Críticos: laboratórios com paralisia prolongada ou quedas severas consecutivas.">
-                <div class="metric-value">{metrics.labs_alto_risco:,}</div>
-                <div class="metric-label">Labs 🔴 & ⚫ (Alto + Crítico)</div>
+            <div class="metric-card" title="Laboratórios em risco alto (🔴) ou crítico (⚫) pela régua baseada em dias úteis e reduções vs. MM7_BR/MM7_UF/MM7_CIDADE.">
+                <div class="metric-value">{risco_alto_critico:,}</div>
+                <div class="metric-label">Risco Alto + Crítico</div>
                 <div class="metric-delta">{delta_text}</div>
             </div>
             """, unsafe_allow_html=True)
+        
         with col4:
+            # Card 4: Sem coleta 48h com ativos 7D
             delta_class = "positive" if metrics.ativos_7d >= 80 else "negative"
             ativos_label = f"Ativos 7D: {metrics.ativos_7d:.1f}% ({metrics.ativos_7d_count}/{metrics.total_labs})" if metrics.total_labs else "Ativos 7D: --"
             st.markdown(f"""
-            <div class="metric-card" title="Laboratórios com dois dias úteis consecutivos sem registrar coletas (Vol_Hoje = 0 e Vol_D1 = 0). Ativos 7D: percentual de laboratórios com pelo menos uma coleta nos últimos 7 dias úteis. Valores abaixo de 80% indicam necessidade de atenção operacional.">
+            <div class="metric-card" title="Laboratórios com dois dias úteis consecutivos sem registrar coletas (Vol_Hoje = 0 e Vol_D1 = 0). Ativos 7D: percentual de laboratórios com pelo menos uma coleta nos últimos 7 dias úteis.">
                 <div class="metric-value">{metrics.labs_sem_coleta_48h:,}</div>
                 <div class="metric-label">Sem Coleta (48h)</div>
                 <div class="metric-delta {delta_class}">{ativos_label}</div>
             </div>
             """, unsafe_allow_html=True)
-        col5, col6, col7 = st.columns([2, 1, 1])
+        
+        # Segunda linha: Distribuição de risco e comparação MM7
+        col5, col6 = st.columns([1.5, 1])
+        
         with col5:
+            # Card 5: Distribuição completa de risco (consolidado)
+            total_risco = metrics.labs_moderado_count + metrics.labs_alto_count + metrics.labs_critico_count
+            risco_dist_text = f"🟢 {metrics.labs_normal_count:,} | 🟡 {metrics.labs_atencao_count:,} | 🟠 {metrics.labs_moderado_count:,} | 🔴 {metrics.labs_alto_count:,} | ⚫ {metrics.labs_critico_count:,}"
             st.markdown(f"""
-            <div class="metric-card" title="Distribuição atual de risco diário calculada sobre dias úteis e reduções máximas vs. MM7 dos contextos BR/UF/Cidade.">
-                <div class="metric-value" style="font-size:1.4rem;">Distribuição de Risco</div>
-                <div class="metric-delta" style="display:flex; flex-wrap:wrap; gap:0.5rem; font-weight:600;">
+            <div class="metric-card" title="Distribuição completa de risco diário calculada sobre dias úteis e reduções máximas vs. MM7 dos contextos BR/UF/Cidade.">
+                <div class="metric-value" style="font-size:1.3rem; margin-bottom:0.3rem;">Distribuição de Risco</div>
+                <div class="metric-delta" style="display:flex; flex-wrap:wrap; gap:0.4rem; font-weight:600; font-size:0.9rem; justify-content:center;">
                     <span>🟢 {metrics.labs_normal_count:,}</span>
                     <span>🟡 {metrics.labs_atencao_count:,}</span>
                     <span>🟠 {metrics.labs_moderado_count:,}</span>
                     <span>🔴 {metrics.labs_alto_count:,}</span>
                     <span>⚫ {metrics.labs_critico_count:,}</span>
                 </div>
-                <div class="metric-label">Régua de risco (dias úteis)</div>
+                <div class="metric-label" style="margin-top:0.5rem;">Régua de risco (dias úteis)</div>
             </div>
             """, unsafe_allow_html=True)
+        
         with col6:
-            delta_text = f"{metrics.labs_abaixo_mm7_br_pct:.1f}% do total" if metrics.total_labs else "--"
+            # Card 6: Comparação MM7_BR vs MM7_UF (consolidado)
+            mm7_br_pct = f"{metrics.labs_abaixo_mm7_br_pct:.1f}%" if metrics.total_labs else "--"
+            mm7_uf_pct = f"{metrics.labs_abaixo_mm7_uf_pct:.1f}%" if metrics.total_labs else "--"
+            delta_text = f"BR: {mm7_br_pct} | UF: {mm7_uf_pct}"
+            
             st.markdown(f"""
-            <div class="metric-card" title="Laboratórios cujo volume do último dia útil ficou abaixo da média móvel nacional (MM7_BR, construída apenas com dias úteis).">
-                <div class="metric-value">{metrics.labs_abaixo_mm7_br:,}</div>
-                <div class="metric-label">Labs abaixo da MM7_BR</div>
-                <div class="metric-delta">{delta_text}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with col7:
-            delta_text = f"{metrics.labs_abaixo_mm7_uf_pct:.1f}% do total" if metrics.total_labs else "--"
-            st.markdown(f"""
-            <div class="metric-card" title="Laboratórios cujo volume do último dia útil ficou abaixo da média móvel da própria UF (MM7_UF, baseada em dias úteis).">
-                <div class="metric-value">{metrics.labs_abaixo_mm7_uf:,}</div>
-                <div class="metric-label">Labs abaixo da MM7_UF</div>
-                <div class="metric-delta">{delta_text}</div>
+            <div class="metric-card" title="Laboratórios abaixo da média móvel: MM7_BR (nacional) e MM7_UF (estadual), ambas construídas apenas com dias úteis.">
+                <div class="metric-value" style="font-size:1.3rem; margin-bottom:0.3rem;">Abaixo da MM7</div>
+                <div class="metric-delta" style="font-size:0.95rem; font-weight:600; margin:0.5rem 0;">
+                    <div>🇧🇷 BR: {metrics.labs_abaixo_mm7_br:,} ({mm7_br_pct})</div>
+                    <div>📍 UF: {metrics.labs_abaixo_mm7_uf:,} ({mm7_uf_pct})</div>
+                </div>
+                <div class="metric-label">Comparação Nacional vs Estadual</div>
             </div>
             """, unsafe_allow_html=True)
 class MetricasAvancadas:
@@ -3018,7 +3310,7 @@ def main():
         # KPIs principais com cards modernos
         UIManager.renderizar_kpi_cards(metrics)
         # Usar tabs para organização
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Resumo", "📈 Tendências", "📊 Distribuição", "🚨 Alto Risco", "🏆 Top 100 PCLs"])
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Resumo", "📈 Tendências", "📊 Distribuição", "🚨 Alto Risco", "🏆 Top 100 PCLs", "📊 Controle BR/UF/Cidade"])
         with tab1:
             st.subheader("📊 Resumo Geral")
             st.markdown("### 🚨 Alertas Prioritários")
@@ -3028,7 +3320,7 @@ def main():
                 if 'Risco_Diario' in df_filtrado.columns:
                     criticos = df_filtrado[df_filtrado['Risco_Diario'] == '⚫ Crítico'].copy()
                     if not criticos.empty:
-                        st.error(f"⚠️ {len(criticos)} laboratório(s) em risco **CRÍTICO** — intervenção imediata necessária.")
+                        st.error(f"⚠️ {len(criticos)} laboratório(s) em risco **CRÍTICO** (classificação baseada em dias úteis) — intervenção imediata necessária.")
                         colunas_alerta = [
                             'Nome_Fantasia_PCL', 'Estado',
                             'Vol_Hoje',
@@ -3044,12 +3336,12 @@ def main():
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório em risco crítico"),
                                     "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
-                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
-                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual"),
-                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia anterior"),
-                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"),
-                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Indica performance vs. média semanal dos últimos 7 dias"),
-                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias sem Coleta", help="Número consecutivo de dias sem registrar coletas. Valores altos indicam possível inatividade")
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas no último dia útil"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia útil imediatamente anterior"),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia útil anterior"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias úteis - média aritmética simples dos últimos 7 dias úteis"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Indica performance vs. média semanal dos últimos 7 dias úteis"),
+                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias sem Coleta", help="Número consecutivo de dias úteis sem registrar coletas. Valores altos indicam possível inatividade")
                                 },
                                 hide_index=True
                             )
@@ -3065,7 +3357,7 @@ def main():
                     ].copy()
                     if not quedas_relevantes.empty:
                         st.warning(
-                            f"🔻 {len(quedas_relevantes)} laboratório(s) com queda ≥50% vs MM7 e risco elevado — priorize contato de recuperação."
+                            f"🔻 {len(quedas_relevantes)} laboratório(s) com queda ≥50% vs MM7 (7 dias úteis) e risco elevado — priorize contato de recuperação."
                         )
                         colunas_queda = [
                             'Nome_Fantasia_PCL', 'Estado',
@@ -3082,8 +3374,8 @@ def main():
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com queda ≥50% vs MM7"),
                                     "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
-                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
-                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas no último dia útil"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia útil imediatamente anterior"),
                                     "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia anterior"),
                                     "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"),
                                     "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Valores ≤ -50% indicam queda estrutural significativa"),
@@ -3100,7 +3392,7 @@ def main():
                     ].copy()
                     if not quedas_d1_relevantes.empty:
                         st.error(
-                            f"📉 {len(quedas_d1_relevantes)} laboratório(s) com queda ≥40% vs D-1 e risco elevado — atenção imediata necessária."
+                            f"📉 {len(quedas_d1_relevantes)} laboratório(s) com queda ≥40% vs D-1 (dia útil anterior) e risco elevado — atenção imediata necessária."
                         )
                         colunas_queda_d1 = [
                             'Nome_Fantasia_PCL', 'Estado',
@@ -3117,8 +3409,8 @@ def main():
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com queda ≥40% vs D-1"),
                                     "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
-                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
-                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas no último dia útil"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia útil imediatamente anterior"),
                                     "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Valores ≤ -40% indicam queda brusca recente"),
                                     "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"),
                                     "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Indica performance vs. média semanal dos últimos 7 dias"),
@@ -3135,7 +3427,7 @@ def main():
                     if not moderados.empty:
                         moderados = moderados.sort_values('Delta_MM7').head(10)
                         st.markdown("#### 🟠 Risco Moderado — Top 10 quedas vs MM7")
-                        st.caption("Ordenado por maior queda percentual (ΔMM7) e limitado aos 10 piores casos.")
+                        st.caption("Ordenado por maior queda percentual (ΔMM7) e limitado aos 10 piores casos. Baseado em dias úteis.")
                         colunas_moderado = [
                             'Nome_Fantasia_PCL', 'Estado',
                             'Vol_Hoje',
@@ -3152,14 +3444,14 @@ def main():
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com risco moderado"),
                                     "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
-                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
-                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual"),
-                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"),
-                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Indica performance vs. média semanal dos últimos 7 dias"),
-                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia anterior"),
-                                    "MM30": st.column_config.NumberColumn("MM30", format="%.3f", help="Média móvel de 30 dias - média aritmética simples dos últimos 30 dias (inclui dias sem coleta como zero)"),
-                                    "Delta_MM30": st.column_config.NumberColumn("Δ vs MM30", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM30) / MM30 × 100. Indica performance vs. média mensal dos últimos 30 dias"),
-                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta", help="Número consecutivo de dias sem registrar coletas. Valores altos indicam possível inatividade")
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas no último dia útil"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia útil imediatamente anterior"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias úteis - média aritmética simples dos últimos 7 dias úteis"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Indica performance vs. média semanal dos últimos 7 dias úteis"),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia útil anterior"),
+                                    "MM30": st.column_config.NumberColumn("MM30", format="%.3f", help="Média móvel de 30 dias úteis - média aritmética simples dos últimos 30 dias úteis"),
+                                    "Delta_MM30": st.column_config.NumberColumn("Δ vs MM30", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM30) / MM30 × 100. Indica performance vs. média mensal dos últimos 30 dias úteis"),
+                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta", help="Número consecutivo de dias úteis sem registrar coletas. Valores altos indicam possível inatividade")
                                 },
                                 hide_index=True
                             )
@@ -3168,7 +3460,7 @@ def main():
                     dois_dias_sem_coleta = df_filtrado[(df_filtrado['Vol_Hoje'] == 0) & (df_filtrado['Vol_D1'] == 0)].copy()
                     if not dois_dias_sem_coleta.empty:
                         st.error(
-                            f"🛑 {len(dois_dias_sem_coleta)} laboratório(s) com **dois dias seguidos sem coleta** — alinhar com operações/logística."
+                            f"🛑 {len(dois_dias_sem_coleta)} laboratório(s) com **dois dias úteis consecutivos sem coleta** — alinhar com operações/logística."
                         )
                         colunas_zero = ['Nome_Fantasia_PCL', 'Estado', 'Risco_Diario', 'Vol_D1', 'Dias_Sem_Coleta']
                         colunas_zero = [c for c in colunas_zero if c in dois_dias_sem_coleta.columns]
@@ -3180,8 +3472,8 @@ def main():
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com dois dias consecutivos sem coleta"),
                                     "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
                                     "Risco_Diario": st.column_config.TextColumn("Risco", help="Classificação de risco: 🟢 Normal, 🟡 Atenção, 🟠 Moderado, 🔴 Alto, ⚫ Crítico"),
-                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual (mostra zero para estes casos)"),
-                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias sem Coleta", help="Número consecutivo de dias sem registrar coletas. ⚠️ Valores ≥ 2 indicam necessidade de alinhamento operacional")
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia útil imediatamente anterior ao atual (mostra zero para estes casos)"),
+                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias sem Coleta", help="Número consecutivo de dias úteis sem registrar coletas. ⚠️ Valores ≥ 2 indicam necessidade de alinhamento operacional")
                                 },
                                 hide_index=True
                             )
@@ -3190,42 +3482,42 @@ def main():
             with st.expander("ℹ️ Legenda das métricas diárias"):
                 st.markdown("""
 #### 📊 Métricas Principais
-- **Vol_Hoje**: total de coletas registradas na data de referência (dia mais recente da série diária).
-- **Vol_D1**: volume de coletas do dia imediatamente anterior ao atual.
-- **MM7 / MM30 / MM90**: médias móveis de 7, 30 e 90 dias da série diária, incluindo dias sem coleta (zero). Exibidas com 3 casas decimais para máxima transparência nos cálculos de variação.
-- **Δ vs MM7 / MM30 / MM90**: variação percentual do volume de hoje em relação às respectivas médias móveis (calculada com valores não arredondados).
-- **Δ vs D-1**: variação percentual do volume de hoje comparado ao dia anterior.
-- **DOW_Media**: média de coletas para o mesmo dia da semana (ex.: todas as segundas) nos últimos 90 dias.
+- **Vol_Hoje**: total de coletas registradas na data de referência (último dia útil da série diária).
+- **Vol_D1**: volume de coletas do dia útil imediatamente anterior ao atual.
+- **MM7 / MM30 / MM90**: médias móveis de 7, 30 e 90 dias úteis da série diária, calculadas apenas com dias úteis. Exibidas com 3 casas decimais para máxima transparência nos cálculos de variação.
+- **Δ vs MM7 / MM30 / MM90**: variação percentual do volume do último dia útil em relação às respectivas médias móveis (calculada com valores não arredondados).
+- **Δ vs D-1**: variação percentual do volume do último dia útil comparado ao dia útil anterior.
+- **DOW_Media**: média de coletas para o mesmo dia da semana (ex.: todas as segundas) nos últimos 90 dias úteis.
 
 #### 🚨 Classificação de Risco Diário
-A classificação de risco segue uma régua hierárquica baseada em múltiplos critérios:
+A classificação de risco segue uma régua hierárquica baseada em múltiplos critérios, considerando **apenas dias úteis**:
 
 **🟢 Normal**: Volume dentro dos padrões esperados (90-120% da MM7 ou 100-120% do D-1).
 **🟡 Atenção**: Volume abaixo do normal mas ainda recuperável (70-90% da MM7 ou 70-100% do D-1).
 **🟠 Moderado**: Volume significativamente reduzido (50-70% da MM7 ou 60-70% do D-1).
 **🔴 Alto**: Volume crítico com necessidade de intervenção (abaixo de 50% da MM7 ou 60% do D-1).
-**⚫ Crítico**: Situações extremas (7+ dias sem coleta ou 3+ quedas consecutivas de 50%+).
+**⚫ Crítico**: Situações extremas (7+ dias úteis sem coleta ou 3+ quedas consecutivas de 50%+).
 
 #### ⚠️ Regras de Alerta Específicas
 - **🔻 Queda ≥50% vs MM7**: Laboratórios com queda estrutural significativa + risco moderado/alto.
 - **📉 Queda ≥40% vs D-1**: Laboratórios com queda brusca recente + risco moderado/alto.
 
 #### 🔄 Outros Indicadores
-- **Risco_Diario**: classificação automática baseada nos limiares acima.
+- **Risco_Diario**: classificação automática baseada nos limiares acima, calculada sobre dias úteis e reduções vs. MM7_BR/MM7_UF/MM7_CIDADE.
 - **Recuperacao**: indica que o laboratório voltou a operar acima da MM7 após período de queda.
-- **Sem Coleta (48h)**: quantidade de laboratórios com dois dias consecutivos sem registrar coletas (Vol_Hoje = 0 e Vol_D1 = 0).
+- **Sem Coleta (48h)**: quantidade de laboratórios com dois dias úteis consecutivos sem registrar coletas (Vol_Hoje = 0 e Vol_D1 = 0).
                 """)
 
             # Adicionar métricas adicionais aqui
         with tab2:
-            st.subheader("📈 Tendências e Variações (Diário)")
+            st.subheader("📈 Tendências e Variações (Diário - Dias Úteis)")
             if df_filtrado.empty:
                 st.info("📊 Nenhum dado disponível para esta análise.")
             else:
                 col1, col2 = st.columns(2)
 
                 with col1:
-                    st.markdown("#### 📉 Maiores Quedas vs MM7")
+                    st.markdown("#### 📉 Maiores Quedas vs MM7 (7 dias úteis)")
                     if {'Delta_MM7', 'Vol_Hoje', 'MM7'}.issubset(df_filtrado.columns):
                         quedas_diarias = df_filtrado[df_filtrado['Delta_MM7'].notna()].copy()
                         if not quedas_diarias.empty:
@@ -3244,13 +3536,13 @@ A classificação de risco segue uma régua hierárquica baseada em múltiplos c
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com maiores quedas vs MM7"),
                                     "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
-                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
-                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual"),
-                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"),
-                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Ordenado por maior queda (valores mais negativos primeiro)"),
-                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia anterior"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas no último dia útil"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia útil imediatamente anterior"),
+                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias úteis - média aritmética simples dos últimos 7 dias úteis"),
+                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Ordenado por maior queda (valores mais negativos primeiro). Baseado em dias úteis."),
+                                    "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia útil anterior"),
                                     "Risco_Diario": st.column_config.TextColumn("Risco", help="Classificação de risco: 🟢 Normal, 🟡 Atenção, 🟠 Moderado, 🔴 Alto, ⚫ Crítico"),
-                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta", help="Número consecutivo de dias sem registrar coletas. Valores altos indicam possível inatividade")
+                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta", help="Número consecutivo de dias úteis sem registrar coletas. Valores altos indicam possível inatividade")
                                 },
                                 hide_index=True
                             )
@@ -3260,7 +3552,7 @@ A classificação de risco segue uma régua hierárquica baseada em múltiplos c
                         st.warning("⚠️ Colunas necessárias para a análise de quedas (Δ vs MM7) não encontradas.")
 
                 with col2:
-                    st.markdown("#### 📈 Altas vs MM7")
+                    st.markdown("#### 📈 Altas vs MM7 (7 dias úteis)")
                     if {'Delta_MM7', 'Vol_Hoje', 'MM7'}.issubset(df_filtrado.columns):
                         altas_diarias = df_filtrado[df_filtrado['Delta_MM7'].notna()].copy()
                         altas_diarias = altas_diarias[altas_diarias['Delta_MM7'] > 0]
@@ -3280,8 +3572,8 @@ A classificação de risco segue uma régua hierárquica baseada em múltiplos c
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com maiores altas vs MM7"),
                                     "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
-                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
-                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia imediatamente anterior ao atual"),
+                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas no último dia útil"),
+                                    "Vol_D1": st.column_config.NumberColumn("Coletas (D-1)", help="Volume de coletas do dia útil imediatamente anterior"),
                                     "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"),
                                     "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Ordenado por maior crescimento (valores mais positivos primeiro)"),
                                     "Delta_D1": st.column_config.NumberColumn("Δ vs D-1", format="%.1f%%", help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia anterior"),
@@ -3344,30 +3636,30 @@ A classificação de risco segue uma régua hierárquica baseada em múltiplos c
 #### 🔢 **Fórmulas Básicas dos Indicadores**
 
 **Médias Móveis (MM7, MM30, MM90):**
-- **MM7**: Média aritmética simples dos últimos 7 dias
-- **MM30**: Média aritmética simples dos últimos 30 dias
-- **MM90**: Média aritmética simples dos últimos 90 dias
-- *Nota: Inclui dias sem coleta (contados como zero)*
+- **MM7**: Média aritmética simples dos últimos 7 dias úteis
+- **MM30**: Média aritmética simples dos últimos 30 dias úteis
+- **MM90**: Média aritmética simples dos últimos 90 dias úteis
+- *Nota: Calculadas apenas com dias úteis (exclui finais de semana e feriados)*
 
 **Variações Percentuais (Deltas):**
-- **Δ vs MM7** = `(Vol_Hoje - MM7) / MM7 × 100`
-- **Δ vs D-1** = `(Vol_Hoje - Vol_D1) / Vol_D1 × 100`
-- **Δ vs MM30** = `(Vol_Hoje - MM30) / MM30 × 100`
+- **Δ vs MM7** = `(Vol_Hoje - MM7) / MM7 × 100` (baseado em dias úteis)
+- **Δ vs D-1** = `(Vol_Hoje - Vol_D1) / Vol_D1 × 100` (dia útil anterior)
+- **Δ vs MM30** = `(Vol_Hoje - MM30) / MM30 × 100` (baseado em dias úteis)
 - *Nota: Calculados com valores não arredondados para máxima precisão*
 
 #### 📊 **Lógica de Cada Tabela**
 
-**1. 📉 Maiores Quedas vs MM7**
+**1. 📉 Maiores Quedas vs MM7 (7 dias úteis)**
 - **Filtro**: `Delta_MM7.notna()` (todos com dados disponíveis)
 - **Ordenação**: Por `Delta_MM7` (maior queda primeiro)
 - **Limite**: Top 10 laboratórios
-- **Objetivo**: Identificar maiores declínios estruturais
+- **Objetivo**: Identificar maiores declínios estruturais vs. média semanal de dias úteis
 
-**2. 📈 Altas vs MM7**
+**2. 📈 Altas vs MM7 (7 dias úteis)**
 - **Filtro**: `Delta_MM7 > 0` (apenas crescimentos)
 - **Ordenação**: Por `Delta_MM7` decrescente (maior alta primeiro)
 - **Limite**: Top 10 laboratórios
-- **Objetivo**: Identificar recuperações expressivas
+- **Objetivo**: Identificar recuperações expressivas vs. média semanal de dias úteis
 
 **3. 🔁 Recuperações em Andamento**
 - **Filtro**: `Recuperacao == True AND Delta_MM7.notna()`
@@ -3385,7 +3677,7 @@ Dados do laboratório: `Vol_Hoje = 3`, `MM7 = 0.429`
           = 600%
 ```
 
-**Por que 600%?** Porque o laboratório coletou ~7 vezes mais que sua média semanal!
+**Por que 600%?** Porque o laboratório coletou ~7 vezes mais que sua média semanal de dias úteis!
 
 #### ⚠️ **Alertas e Regras de Priorização**
 
@@ -3405,7 +3697,7 @@ Dados do laboratório: `Vol_Hoje = 3`, `MM7 = 0.429`
 - **Sempre compare com o valor absoluto**: 600% com MM7=0.429 significa apenas ~3 coletas vs. média de ~0.429
 
 #### 📈 **Contexto Executivo**
-Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), registrar 3 coletas hoje representa um crescimento de 600% vs. sua média histórica. Isso indica recuperação de operação, não necessariamente "superperformance".
+Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em dias úteis), registrar 3 coletas no último dia útil representa um crescimento de 600% vs. sua média histórica de dias úteis. Isso indica recuperação de operação, não necessariamente "superperformance".
                 """)
         with tab3:
             st.subheader("📊 Distribuição por Status")
@@ -3670,6 +3962,105 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                     st.info("🔍 Nenhum resultado encontrado para os filtros aplicados.")
             else:
                 st.warning("⚠️ Nenhum dado disponível para gerar o ranking.")
+        
+        with tab6:
+            st.subheader("📊 Controle BR × UF × Cidade")
+            st.markdown("""
+            **Comparação de médias móveis (MM7/MM30) entre contextos geográficos e o laboratório/conjunto selecionado.**
+            
+            Este gráfico permite visualizar como o desempenho do laboratório ou conjunto filtrado se compara com:
+            - 🇧🇷 **MM7_BR / MM30_BR**: Média móvel nacional (todos os laboratórios)
+            - 📍 **MM7_UF / MM30_UF**: Média móvel do estado (UF) do laboratório
+            - 🏙️ **MM7_CIDADE / MM30_CIDADE**: Média móvel da cidade do laboratório
+            - 📊 **Série atual**: Laboratório específico ou conjunto filtrado
+            
+            **Nota**: Todas as séries são calculadas apenas com dias úteis (exclui finais de semana e feriados).
+            """)
+            
+            if df_filtrado.empty:
+                st.info("📊 Nenhum dado disponível para o gráfico de controle")
+            else:
+                # Toggle para MM7/MM30
+                col_toggle1, col_toggle2 = st.columns([1, 4])
+                with col_toggle1:
+                    usar_mm30 = st.toggle("Usar MM30", value=False, help="Alternar entre MM7 (7 dias úteis) e MM30 (30 dias úteis)")
+                
+                # Opção para selecionar laboratório específico ou usar conjunto filtrado
+                st.markdown("#### Seleção de Contexto")
+                modo_visualizacao = st.radio(
+                    "Escolha o contexto para comparação:",
+                    ["Conjunto Filtrado", "Laboratório Específico"],
+                    horizontal=True,
+                    help="Conjunto Filtrado: agrega todos os laboratórios que passaram pelos filtros aplicados. Laboratório Específico: seleciona um laboratório individual para análise."
+                )
+                
+                lab_cnpj_selecionado = None
+                lab_nome_selecionado = None
+                
+                if modo_visualizacao == "Laboratório Específico":
+                    # Buscar laboratórios disponíveis
+                    labs_disponiveis = df_filtrado[['CNPJ_PCL', 'Nome_Fantasia_PCL', 'Estado', 'Cidade']].copy()
+                    labs_disponiveis = labs_disponiveis.dropna(subset=['Nome_Fantasia_PCL'])
+                    labs_disponiveis['Display'] = labs_disponiveis.apply(
+                        lambda x: f"{x['Nome_Fantasia_PCL']} ({x.get('Estado', 'N/A')})",
+                        axis=1
+                    )
+                    
+                    if not labs_disponiveis.empty:
+                        lab_selecionado = st.selectbox(
+                            "Selecione o laboratório:",
+                            options=labs_disponiveis['Display'].tolist(),
+                            help="Selecione um laboratório específico para comparar com os contextos BR/UF/Cidade"
+                        )
+                        
+                        lab_info = labs_disponiveis[labs_disponiveis['Display'] == lab_selecionado].iloc[0]
+                        lab_nome_selecionado = lab_info['Nome_Fantasia_PCL']
+                        lab_cnpj_selecionado = lab_info.get('CNPJ_PCL')
+                    else:
+                        st.warning("⚠️ Nenhum laboratório disponível nos dados filtrados")
+                        modo_visualizacao = "Conjunto Filtrado"
+                
+                # Renderizar gráfico
+                if modo_visualizacao == "Conjunto Filtrado" or (modo_visualizacao == "Laboratório Específico" and lab_nome_selecionado):
+                    # Usar df completo para calcular contextos BR/UF/Cidade
+                    ChartManager.criar_grafico_controle_br_uf_cidade(
+                        df=df,  # DataFrame completo para contextos
+                        df_filtrado=df_filtrado,  # DataFrame filtrado para série atual
+                        lab_cnpj=lab_cnpj_selecionado,
+                        lab_nome=lab_nome_selecionado,
+                        usar_mm30=usar_mm30
+                    )
+                    
+                    st.markdown("---")
+                    with st.expander("ℹ️ Como interpretar este gráfico"):
+                        st.markdown("""
+                        #### 📊 **Interpretação do Gráfico**
+                        
+                        **Posicionamento relativo:**
+                        - Se a série atual está **acima** das linhas de contexto (BR/UF/Cidade), o desempenho está melhor que a média do contexto
+                        - Se está **abaixo**, há oportunidade de melhoria comparado ao contexto
+                        
+                        **Tendências:**
+                        - **Linhas ascendentes**: Crescimento consistente
+                        - **Linhas descendentes**: Declínio que requer atenção
+                        - **Linhas estáveis**: Manutenção de padrão
+                        
+                        **Comparações úteis:**
+                        - Compare primeiro com **MM7_UF** (contexto estadual mais próximo)
+                        - Use **MM7_BR** para visão macro nacional
+                        - **MM7_CIDADE** mostra contexto local mais específico
+                        
+                        **MM7 vs MM30:**
+                        - **MM7**: Mais sensível a variações recentes (últimos 7 dias úteis)
+                        - **MM30**: Visão mais suavizada e de médio prazo (últimos 30 dias úteis)
+                        
+                        **Dias úteis:**
+                        - Todas as séries consideram apenas dias úteis (segunda a sexta)
+                        - Feriados e finais de semana são excluídos automaticamente
+                        """)
+                else:
+                    st.info("📊 Selecione um laboratório para visualizar o gráfico de controle")
+    
     elif st.session_state.page == "📋 Análise Detalhada":
         st.header("📋 Análise Detalhada")
         # Filtros avançados com design moderno

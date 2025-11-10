@@ -420,8 +420,10 @@ def calcular_metricas_churn():
         if df_2025.empty:
             return pd.Series(['{}'] * len(base_index), index=base_index)
         
-        # Mapear números para nomes dos dias
-        dias_semana_map = {0: 'Segunda', 1: 'Terça', 2: 'Quarta', 3: 'Quinta', 4: 'Sexta', 5: 'Sábado', 6: 'Domingo'}
+        # Mapear números para nomes dos dias (apenas dias úteis)
+        dias_semana_map = {0: 'Segunda', 1: 'Terça', 2: 'Quarta', 3: 'Quinta', 4: 'Sexta'}
+        # Filtrar apenas dias úteis (segunda=0 a sexta=4)
+        df_2025 = df_2025[df_2025['dia_semana'].isin([0, 1, 2, 3, 4])].copy()
         df_2025['dia_semana_nome'] = df_2025['dia_semana'].map(dias_semana_map)
         
         # Agrupar por laboratório e dia da semana
@@ -596,8 +598,101 @@ def calcular_metricas_churn():
     # Garantir que não há valores None
     base['Estado'] = base['Estado'].fillna('')
     base['Cidade'] = base['Cidade'].fillna('')
-            
-            # Metadados
+
+    # ================================
+    # Séries de controle em dias úteis
+    # ================================
+    def _preparar_serie_business_day(serie: pd.Series, ultimo_bday: pd.Timestamp) -> pd.Series:
+        """Reindexa para dias úteis e aplica forward-fill antes do rolling."""
+        serie = serie.sort_index()
+        if serie.empty:
+            return serie.astype(float)
+        end_date = max(serie.index.max(), ultimo_bday)
+        idx = pd.date_range(serie.index.min(), end_date, freq='B')
+        serie = serie.reindex(idx)
+        serie = serie.ffill()
+        serie = serie.fillna(0)
+        return serie.astype(float)
+
+    def _calcular_mm_series(serie: pd.Series, ultimo_bday: pd.Timestamp) -> Tuple[float, float]:
+        """Calcula MM7/MM30 considerando apenas dias úteis."""
+        serie_bd = _preparar_serie_business_day(serie, ultimo_bday)
+        if serie_bd.empty:
+            return np.nan, np.nan
+        mm7 = serie_bd.rolling(window=7, min_periods=1).mean().iloc[-1]
+        mm30 = serie_bd.rolling(window=30, min_periods=1).mean().iloc[-1]
+        return float(mm7), float(mm30)
+
+    frames_gatherings = []
+    for df_src in (df_gatherings_2024, df_gatherings_2025):
+        if not df_src.empty and all(col in df_src.columns for col in ['_laboratory', 'createdAt']):
+            frames_gatherings.append(df_src[['_laboratory', 'createdAt']].copy())
+
+    mm7_br = np.nan
+    mm30_br = np.nan
+    mm7_por_uf: Dict[str, float] = {}
+    mm30_por_uf: Dict[str, float] = {}
+    mm7_por_cidade: Dict[Tuple[str, str], float] = {}
+    mm30_por_cidade: Dict[Tuple[str, str], float] = {}
+
+    if frames_gatherings:
+        df_gatherings_total = pd.concat(frames_gatherings, ignore_index=True)
+        df_gatherings_total['_laboratory'] = df_gatherings_total['_laboratory'].astype(str)
+        df_gatherings_total['createdAt'] = pd.to_datetime(
+            df_gatherings_total['createdAt'], errors='coerce', utc=True
+        )
+        df_gatherings_total = df_gatherings_total.dropna(subset=['createdAt'])
+        df_gatherings_total['createdAt'] = df_gatherings_total['createdAt'].dt.tz_convert(timezone_br)
+        df_gatherings_total['data_ref'] = pd.to_datetime(df_gatherings_total['createdAt'].dt.date)
+
+        estado_map = base['Estado'].to_dict()
+        cidade_map = base['Cidade'].to_dict()
+        df_gatherings_total['Estado'] = df_gatherings_total['_laboratory'].map(estado_map).fillna('')
+        df_gatherings_total['Cidade'] = df_gatherings_total['_laboratory'].map(cidade_map).fillna('')
+
+        ultimo_bday = pd.bdate_range(
+            end=pd.Timestamp.now(tz=timezone_br).normalize().tz_localize(None),
+            periods=1
+        )[0]
+
+        serie_br = df_gatherings_total.groupby('data_ref').size()
+        mm7_br, mm30_br = _calcular_mm_series(serie_br, ultimo_bday)
+
+        df_uf = df_gatherings_total[df_gatherings_total['Estado'] != '']
+        if not df_uf.empty:
+            serie_uf = df_uf.groupby(['Estado', 'data_ref']).size()
+            for estado, serie_estado in serie_uf.groupby(level=0):
+                serie_estado = serie_estado.droplevel(0)
+                mm7_val, mm30_val = _calcular_mm_series(serie_estado, ultimo_bday)
+                mm7_por_uf[estado] = mm7_val
+                mm30_por_uf[estado] = mm30_val
+
+            df_cidade = df_uf[df_uf['Cidade'] != '']
+            if not df_cidade.empty:
+                serie_cidade = df_cidade.groupby(['Estado', 'Cidade', 'data_ref']).size()
+                for (estado, cidade), serie_loc in serie_cidade.groupby(level=[0, 1]):
+                    serie_loc = serie_loc.droplevel([0, 1])
+                    mm7_val, mm30_val = _calcular_mm_series(serie_loc, ultimo_bday)
+                    chave = (estado, cidade)
+                    mm7_por_cidade[chave] = mm7_val
+                    mm30_por_cidade[chave] = mm30_val
+
+    base['MM7_BR'] = mm7_br
+    base['MM30_BR'] = mm30_br
+    base['MM7_UF'] = base['Estado'].map(mm7_por_uf)
+    base['MM30_UF'] = base['Estado'].map(mm30_por_uf)
+    base['MM7_CIDADE'] = pd.Series(
+        [mm7_por_cidade.get((estado, cidade), np.nan) for estado, cidade in zip(base['Estado'], base['Cidade'])],
+        index=base.index,
+        dtype=float
+    )
+    base['MM30_CIDADE'] = pd.Series(
+        [mm30_por_cidade.get((estado, cidade), np.nan) for estado, cidade in zip(base['Estado'], base['Cidade'])],
+        index=base.index,
+        dtype=float
+    )
+
+    # Metadados
     base['Data_Analise'] = datetime.now()
 
     # Reordenar colunas principais
@@ -609,6 +704,7 @@ def calcular_metricas_churn():
     cols_2024 = [f'N_Coletas_{m}_24' for m in meses_nomes]
     cols_2025 = [f'N_Coletas_{m}_25' for m in meses_nomes[:mes_limite_2025]]
     cols_fim = [
+        'MM7_BR','MM30_BR','MM7_UF','MM30_UF','MM7_CIDADE','MM30_CIDADE',
         'Data_Ultima_Coleta','Dias_Sem_Coleta','Media_Coletas_Mensal_2024','Media_Coletas_Mensal_2025',
         'Variacao_Percentual','Tendencia','Status_Risco','Motivo_Risco','Data_Analise',
         'Total_Coletas_2024','Total_Coletas_2025','Dados_Diarios_2025','Dados_Semanais_2025'

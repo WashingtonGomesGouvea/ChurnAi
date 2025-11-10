@@ -1,0 +1,413 @@
+================================================================================
+FLUXO DE DADOS: LOCAL vs PRODUÇÃO - SISTEMA CHURN
+================================================================================
+
+📋 RESUMO EXECUTIVO
+-------------------
+O sistema possui DOIS ambientes com diferentes fontes de dados:
+
+1. LOCAL (Desenvolvimento): Arquivos salvos em pasta local do PC
+2. PRODUÇÃO (Streamlit Cloud): Arquivos acessados via SharePoint Online
+
+
+================================================================================
+🔄 FLUXO COMPLETO DE DADOS
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          GERADOR (Local/Servidor)                        │
+│                       gerador_dados_churn.py                             │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+              ┌─────────────────────────────────────┐
+              │  Conecta MongoDB                     │
+              │  Extrai: gatherings, laboratories,   │
+              │          representatives             │
+              └─────────────────────────────────────┘
+                                    │
+                                    ▼
+              ┌─────────────────────────────────────┐
+              │  Salva LOCALMENTE em:                │
+              │  ./output_churn/                     │
+              │                                      │
+              │  Arquivos gerados:                   │
+              │  - gatherings_2024.csv               │
+              │  - gatherings_2025.csv               │
+              │  - laboratories.csv                  │
+              │  - representatives.csv               │
+              │  - churn_analysis_latest.parquet     │
+              │  - churn_analysis_latest.csv         │
+              └─────────────────────────────────────┘
+                                    │
+                                    ▼
+              ┌─────────────────────────────────────┐
+              │  TENTA Upload SharePoint             │
+              │  (linhas 641-661)                    │
+              │                                      │
+              │  Se tiver secrets.toml:              │
+              │  - Lê configurações Graph API        │
+              │  - Usa ChurnSPConnector              │
+              │  - Faz upload para OneDrive/SP       │
+              │                                      │
+              │  Se falhar: apenas loga aviso        │
+              │  (não interrompe o processo)         │
+              └─────────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    APP STREAMLIT (Produção/Local)                        │
+│                       app_streamlit_churn.py                             │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+                    ┌──────────────────────────────┐
+                    │  Detecta ambiente:            │
+                    │                               │
+                    │  LOCAL: arquivo existe em     │
+                    │         ./output_churn/       │
+                    │                               │
+                    │  PROD: arquivo NÃO existe     │
+                    │        localmente             │
+                    └──────────────────────────────┘
+                            │               │
+                            │               │
+                    ┌───────▼─────┐   ┌────▼──────────┐
+                    │   LOCAL      │   │   PRODUÇÃO    │
+                    └──────────────┘   └───────────────┘
+                            │                    │
+                            ▼                    ▼
+            ┌──────────────────────┐   ┌───────────────────────┐
+            │ Lê arquivo local:     │   │ Usa ChurnSPConnector: │
+            │ pd.read_parquet()     │   │ connector.read_csv()  │
+            │                       │   │                       │
+            │ Caminho:              │   │ Acessa SharePoint:    │
+            │ ./output_churn/       │   │ - Autentica Graph API │
+            │ churn_analysis_       │   │ - Baixa arquivo remoto│
+            │ latest.parquet        │   │ - Retorna DataFrame   │
+            └──────────────────────┘   └───────────────────────┘
+
+
+================================================================================
+📂 ESTRUTURA DE ARQUIVOS
+================================================================================
+
+LOCAL (PC/Servidor onde roda gerador):
+--------------------------------------
+F:\Progamação\ChurnAi\
+├── gerador_dados_churn.py          ← Gera dados
+├── app_streamlit_churn.py          ← App Streamlit
+├── churn_sp_connector.py           ← Conector SharePoint
+├── config_churn.py                 ← Configurações
+├── .streamlit/
+│   └── secrets.toml                ← Credenciais (NÃO commitar!)
+└── output_churn/                   ← DADOS GERADOS LOCALMENTE
+    ├── gatherings_2024.csv
+    ├── gatherings_2025.csv
+    ├── laboratories.csv
+    ├── representatives.csv
+    ├── churn_analysis_latest.parquet
+    └── churn_analysis_latest.csv
+
+
+PRODUÇÃO (Streamlit Cloud):
+---------------------------
+Streamlit Cloud App
+├── gerador_dados_churn.py          ← NÃO executa em produção
+├── app_streamlit_churn.py          ← App principal
+├── churn_sp_connector.py           ← Conector SharePoint
+├── config_churn.py                 ← Configurações
+├── secrets (via Streamlit UI)      ← st.secrets (interface web)
+└── output_churn/                   ← Pasta VAZIA ou inexistente
+    └── (sem arquivos)
+
+                    ▲
+                    │
+                    │ Acessa via Graph API
+                    │
+            ┌───────▼─────────────────────────────────────────────┐
+            │  SharePoint Online                                   │
+            │  synviagroup-my.sharepoint.com                       │
+            │                                                      │
+            │  Path completo:                                      │
+            │  /personal/washington_gouvea_synvia_com_/            │
+            │    Documents/Data Analysis/Churn PCLs/               │
+            │                                                      │
+            │  Arquivos:                                           │
+            │  ✓ churn_analysis_latest.csv      (dados principais)│
+            │  ✓ matriz_cs_normalizada.csv      (VIP/matriz CS)   │
+            └──────────────────────────────────────────────────────┘
+
+
+================================================================================
+📁 ARQUIVOS DO SISTEMA
+================================================================================
+
+O sistema utiliza DOIS arquivos principais no SharePoint:
+
+1. churn_analysis_latest.csv
+   -------------------------
+   - Fonte: Gerado pelo gerador_dados_churn.py
+   - Conteúdo: Análise completa de churn de laboratórios
+   - Path: /personal/washington_gouvea_synvia_com_/Documents/Data Analysis/Churn PCLs/
+   - Autenticação: [graph] client_id/secret (680b6cbf...)
+   - Acesso: ChurnSPConnector com st.secrets['graph']
+   - Frequência atualização: A cada 15 minutos (gerador)
+
+2. matriz_cs_normalizada.csv
+   --------------------------
+   - Fonte: Sistema VIP (vip_integration.py)
+   - Conteúdo: Matriz de Customer Success normalizada
+   - Path: /personal/washington_gouvea_synvia_com_/Documents/Data Analysis/Churn PCLs/
+   - Autenticação: [auth] client_id/secret (7c19a480...)
+   - Acesso: VIPHistoryManager com st.secrets['auth']
+   - Frequência atualização: Manual ou via sistema VIP
+
+⚠️ IMPORTANTE: 
+   São DUAS autenticações diferentes (Graph API):
+   - [graph] → Para churn_analysis_latest.csv
+   - [auth]  → Para matriz_cs_normalizada.csv
+
+
+================================================================================
+🔑 CONFIGURAÇÕES NECESSÁRIAS
+================================================================================
+
+1. LOCAL (Desenvolvimento):
+   -------------------------
+   .streamlit/secrets.toml:
+   ```toml
+   # String de conexão do MongoDB
+   mongodb_uri = "mongodb+srv://ctox-prod-read:a0gho3oqn93HHW6L@ctox0.u8vx3.gcp.mongodb.net/homolog"
+   mongodb_database = "ctox"
+
+   # Configurações de email para alertas
+   email_alerta = "seuemail@exemplo.com"
+   smtp_server = "smtp.exemplo.com"
+   smtp_port = 587
+   smtp_user = "user"
+   smtp_password = "pass"
+
+   # Configurações do Microsoft Graph API para SharePoint/OneDrive
+   [graph]
+   tenant_id = "fee1b506-24b6-444a-919e-83df9442dc5d"
+   client_id = "680b6cbf-ded3-4839-bdba-cfa8d5051309"
+   client_secret = "YOUR_GRAPH_CLIENT_SECRET_HERE"
+   hostname = "synviagroup-my.sharepoint.com"
+   site_path = "personal/washington_gouvea_synvia_com_"
+   library_name = "Documents"
+
+   [files]
+   arquivo = "/personal/washington_gouvea_synvia_com_/Documents/Data Analysis/Churn PCLs/churn_analysis_latest.csv"
+   arquivo_vip = "/personal/washington_gouvea_synvia_com_/Documents/Data Analysis/Churn PCLs/matriz_cs_normalizada.csv"
+
+   [onedrive]
+   user_upn = "washington.gouvea@synvia.com"
+
+   # Configurações de diretório de saída
+   output_dir = "/tmp/churn_data"
+
+   # Configurações do Microsoft Authentication
+   [auth]
+   client_id = "7c19a480-bc01-45b6-8b74-6a3e6154e876"
+   client_secret = "YOUR_AUTH_CLIENT_SECRET_HERE"
+   tenant_id = "fee1b506-24b6-444a-919e-83df9442dc5d"
+   redirect_uri_local = "http://localhost:8501"
+   redirect_uri_prod = "https://syntoxchurn.streamlit.app/"
+   authority = "https://login.microsoftonline.com/fee1b506-24b6-444a-919e-83df9442dc5d"
+   scope = ["https://graph.microsoft.com/User.Read"]
+   ```
+
+2. PRODUÇÃO (Streamlit Cloud):
+   ---------------------------
+   Configurar secrets via interface web do Streamlit:
+   - Settings > Secrets
+   - Adicionar mesmo conteúdo do secrets.toml
+
+
+================================================================================
+⚠️ REGRAS IMPORTANTES PARA NOVAS IMPLEMENTAÇÕES
+================================================================================
+
+1. SEMPRE QUE CRIAR NOVA FUNCIONALIDADE QUE LÊ DADOS:
+   --------------------------------------------------
+   ✓ Verificar se arquivo existe localmente PRIMEIRO
+   ✓ Se NÃO existir localmente → usar ChurnSPConnector
+   ✓ Nunca assumir que arquivo estará local em produção
+
+   EXEMPLO:
+   ```python
+   arquivo_local = os.path.join("output_churn", "dados.parquet")
+   
+   if os.path.exists(arquivo_local):
+       # AMBIENTE LOCAL
+       df = pd.read_parquet(arquivo_local)
+   else:
+       # AMBIENTE PRODUÇÃO (SharePoint)
+       connector = ChurnSPConnector(st.secrets)
+       df = connector.read_csv("dados.csv")
+   ```
+
+2. SEMPRE QUE CRIAR NOVA FUNCIONALIDADE QUE SALVA DADOS:
+   ------------------------------------------------------
+   ✓ No gerador: salvar localmente em output_churn/
+   ✓ Tentar upload para SharePoint (com try/except)
+   ✓ Se falhar upload: apenas logar aviso, não interromper
+
+   EXEMPLO (no gerador):
+   ```python
+   # Salvar localmente
+   df.to_parquet("output_churn/novo_arquivo.parquet")
+   
+   # Tentar upload SharePoint
+   try:
+       connector = ChurnSPConnector(config)
+       connector.write_csv(df, "novo_arquivo.csv")
+       logger.info("Upload SharePoint OK")
+   except Exception as e:
+       logger.warning(f"Falha SharePoint (ignorado): {e}")
+   ```
+
+3. NOVOS ARQUIVOS DE DADOS:
+   -------------------------
+   Se adicionar novo arquivo de dados:
+   
+   a) Atualizar gerador_dados_churn.py:
+      - Gerar arquivo em output_churn/
+      - Adicionar upload SharePoint
+
+   b) Atualizar app_streamlit_churn.py:
+      - Adicionar lógica de leitura com fallback
+      - Testar localmente E em produção
+
+   c) Atualizar config_churn.py:
+      - Adicionar constante para nome do arquivo
+
+   d) Atualizar secrets.toml (se necessário):
+      - Adicionar path do novo arquivo
+
+
+================================================================================
+🧪 TESTANDO MUDANÇAS
+================================================================================
+
+1. TESTE LOCAL:
+   ------------
+   ✓ Executar gerador: python gerador_dados_churn.py
+   ✓ Verificar arquivos em output_churn/
+   ✓ Executar app: streamlit run app_streamlit_churn.py
+   ✓ Confirmar que app lê dados locais
+
+2. TESTE PRODUÇÃO (Simulado Localmente):
+   -------------------------------------
+   ✓ Renomear pasta: mv output_churn output_churn_backup
+   ✓ Criar secrets.toml com credenciais SharePoint válidas
+   ✓ Executar app: streamlit run app_streamlit_churn.py
+   ✓ Confirmar que app busca dados do SharePoint
+   ✓ Restaurar pasta: mv output_churn_backup output_churn
+
+3. TESTE PRODUÇÃO (Real):
+   ----------------------
+   ✓ Deploy no Streamlit Cloud
+   ✓ Configurar secrets via interface web
+   ✓ Verificar logs para confirmar conexão SharePoint
+   ✓ Testar todas as funcionalidades do app
+
+
+================================================================================
+🔧 TROUBLESHOOTING
+================================================================================
+
+ERRO: "Arquivo não encontrado"
+-------------------------------
+→ Verificar se está em produção (sem pasta output_churn)
+→ Verificar secrets do SharePoint configurados
+→ Verificar permissões da conta no SharePoint
+→ Verificar se gerador rodou e fez upload
+
+
+ERRO: "Falha autenticação SharePoint"
+--------------------------------------
+→ Verificar client_id, client_secret, tenant_id
+→ Verificar se app está registrado no Azure AD
+→ Verificar permissões Files.Read.All no app Azure
+
+
+ERRO: "Path não encontrado no SharePoint"
+-----------------------------------------
+→ Path correto: /personal/washington_gouvea_synvia_com_/Documents/Data Analysis/Churn PCLs/
+→ Hostname: synviagroup-my.sharepoint.com
+→ User UPN: washington.gouvea@synvia.com
+→ Verificar se arquivos existem no SharePoint manualmente
+
+ERRO: "Autenticação falhou para matriz_cs"
+-------------------------------------------
+→ Usar credenciais [auth] (não [graph])
+→ Client ID correto para VIP: 7c19a480-bc01-45b6-8b74-6a3e6154e876
+→ VIPHistoryManager usa st.secrets['auth']
+
+ERRO: "Autenticação falhou para churn_analysis"
+------------------------------------------------
+→ Usar credenciais [graph] (não [auth])
+→ Client ID correto para Churn: 680b6cbf-ded3-4839-bdba-cfa8d5051309
+→ ChurnSPConnector usa st.secrets['graph']
+
+
+App lento em produção:
+----------------------
+→ SharePoint API tem latência natural (2-5s por request)
+→ Considerar cache com st.cache_data
+→ Evitar múltiplas leituras do mesmo arquivo
+
+
+================================================================================
+📝 CHECKLIST PARA NOVAS FEATURES
+================================================================================
+
+Ao adicionar funcionalidade que manipula dados:
+
+□ Código funciona com dados locais (desenvolvimento)
+□ Código funciona com dados do SharePoint (produção)
+□ Try/except para tratar falhas de conexão SharePoint
+□ Logs apropriados para debug (logger.info/warning/error)
+□ Testado localmente com pasta output_churn presente
+□ Testado localmente com pasta output_churn ausente (simula prod)
+□ Secrets.toml tem todas configurações necessárias
+□ Documentação atualizada se necessário
+
+
+================================================================================
+📚 ARQUIVOS RELACIONADOS
+================================================================================
+
+churn_sp_connector.py   → Implementa conexão SharePoint (Graph API)
+config_churn.py         → Configurações globais (caminhos, constantes)
+gerador_dados_churn.py  → Gera dados e faz upload SharePoint
+app_streamlit_churn.py  → App principal com leitura local/SharePoint
+.streamlit/secrets.toml → Credenciais (NUNCA commitar no Git!)
+
+
+================================================================================
+🌐 URLs DO SISTEMA
+================================================================================
+
+APP PRODUÇÃO:
+https://syntoxchurn.streamlit.app/
+
+SHAREPOINT (OneDrive):
+https://synviagroup-my.sharepoint.com/personal/washington_gouvea_synvia_com_/Documents/Data%20Analysis/Churn%20PCLs/
+
+AZURE AD (Gerenciar Apps):
+https://portal.azure.com/#view/Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/RegisteredApps
+
+GRAPH EXPLORER (Testar APIs):
+https://developer.microsoft.com/graph/graph-explorer
+
+TENANT ID:
+fee1b506-24b6-444a-919e-83df9442dc5d
+
+
+================================================================================
+ÚLTIMA ATUALIZAÇÃO: 04/11/2025
+================================================================================
+

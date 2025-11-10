@@ -15,6 +15,7 @@ import warnings
 warnings.filterwarnings('ignore')
 # Importar configurações
 from config_churn import *
+from pandas.tseries.offsets import BDay
 # Importar sistema de autenticação Microsoft
 from auth_microsoft import MicrosoftAuth, AuthManager, create_login_page, create_user_header
 # ============================================
@@ -448,6 +449,15 @@ class KPIMetrics:
     vol_d1_total: int = 0
     ativos_7d_count: int = 0
     ativos_30d_count: int = 0
+    labs_normal_count: int = 0
+    labs_atencao_count: int = 0
+    labs_moderado_count: int = 0
+    labs_alto_count: int = 0
+    labs_critico_count: int = 0
+    labs_abaixo_mm7_br: int = 0
+    labs_abaixo_mm7_br_pct: float = 0.0
+    labs_abaixo_mm7_uf: int = 0
+    labs_abaixo_mm7_uf_pct: float = 0.0
 class DataManager:
     """Gerenciador de dados com cache inteligente."""
     @staticmethod
@@ -751,37 +761,64 @@ class RiskEngine:
         if not rows:
             return pd.Series(dtype="float")
         s = pd.Series({d: v for d, v in rows}).sort_index()
-        full_idx = pd.date_range(s.index.min(), s.index.max(), freq="D")
-        return s.reindex(full_idx).fillna(0)
+        return s
+
+    @staticmethod
+    def _last_business_day(reference: Optional[pd.Timestamp] = None) -> pd.Timestamp:
+        """Retorna a última data útil (considerando TIMEZONE)."""
+        if reference is None:
+            reference = pd.Timestamp.now(tz=TIMEZONE)
+        else:
+            if reference.tzinfo is None:
+                reference = reference.tz_localize(TIMEZONE)
+            else:
+                reference = reference.tz_convert(TIMEZONE)
+        reference = reference.normalize()
+        reference_naive = reference.tz_localize(None)
+        while reference_naive.weekday() >= 5:
+            reference_naive = (reference_naive - BDay(1))
+        return reference_naive
+
+    @staticmethod
+    def _serie_business_day(s: pd.Series, ref_date: pd.Timestamp) -> pd.Series:
+        """Reindexa série para frequência de dias úteis até ref_date."""
+        if s.empty:
+            return s
+        s = s.sort_index()
+        start = s.index.min()
+        if ref_date < start:
+            ref_date = start
+        idx = pd.bdate_range(start, ref_date)
+        if len(idx) == 0:
+            idx = pd.DatetimeIndex([ref_date])
+        return s.reindex(idx, fill_value=0)
 
     @staticmethod
     def _rolling_means(s: pd.Series, ref_date: pd.Timestamp) -> dict:
         """MM7/MM30/MM90, D-1, média por DOW e contadores auxiliares."""
         if s.empty:
             return dict(MM7=0, MM30=0, MM90=0, D1=0, DOW=0, HOJE=0, zeros_consec=0, quedas50_consec=0)
-        s = s.sort_index()
-        
-        # Se ref_date não existe na série, expandir até ref_date com zeros
         if ref_date not in s.index:
-            # Se ref_date é posterior aos dados, expandir série até ref_date
-            if ref_date > s.index.max():
-                full_idx = pd.date_range(s.index.min(), ref_date, freq="D")
-                s = s.reindex(full_idx).fillna(0)
-            else:
-                # Se ref_date é anterior aos dados, retornar zeros
-                return dict(MM7=0, MM30=0, MM90=0, D1=0, DOW=0, HOJE=0, zeros_consec=0, quedas50_consec=0)
-        
+            return dict(MM7=0, MM30=0, MM90=0, D1=0, DOW=0, HOJE=0, zeros_consec=0, quedas50_consec=0)
+
         hoje = float(s.loc[ref_date])
-        d1 = float(s.shift(1).loc[ref_date]) if ref_date - pd.Timedelta(days=1) in s.index else 0.0
-        mm7 = float(s.loc[:ref_date].tail(7).mean())
-        mm30 = float(s.loc[:ref_date].tail(30).mean())
-        mm90 = float(s.loc[:ref_date].tail(90).mean())
+        serie_ate_ref = s.loc[:ref_date]
+        if len(serie_ate_ref) > 1:
+            d1 = float(serie_ate_ref.iloc[-2])
+        else:
+            d1 = 0.0
+        mm7 = float(serie_ate_ref.tail(7).mean())
+        mm30 = float(serie_ate_ref.tail(30).mean())
+        mm90 = float(serie_ate_ref.tail(90).mean())
         dow = int(ref_date.weekday())
-        ult_90 = s.loc[:ref_date].tail(90)
-        dow_vals = ult_90[ult_90.index.weekday == dow]
-        dow_mean = float(dow_vals.mean()) if len(dow_vals) else 0.0
-        zeros_consec = int((s.loc[:ref_date][::-1] == 0).astype(int)
-                           .groupby((s.loc[:ref_date][::-1] != 0).cumsum()).cumcount()[0] + 1) if hoje == 0 else 0
+        dow_vals = serie_ate_ref[serie_ate_ref.index.weekday == dow]
+        dow_mean = float(dow_vals.tail(90).mean()) if len(dow_vals) else 0.0
+        zeros_consec = 0
+        for valor in serie_ate_ref[::-1]:
+            if valor == 0:
+                zeros_consec += 1
+            else:
+                break
 
         def _is_queda50(idx):
             mm7_local = s.loc[:idx].tail(7).mean()
@@ -793,13 +830,28 @@ class RiskEngine:
                     zeros_consec=zeros_consec, quedas50_consec=quedas50_consec)
 
     @staticmethod
+    def _to_float(value: Any) -> Optional[float]:
+        """Converte valor para float com tratamento de NaN."""
+        try:
+            if pd.isna(value):
+                return None
+        except TypeError:
+            pass
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
     def classificar(row: pd.Series) -> dict:
         """Aplica as regras do anexo e retorna métricas + 'Risco_Diario' e 'Recuperacao'."""
         s = RiskEngine._serie_diaria_from_json(row.get("Dados_Diarios_2025", "{}"))
         if s.empty:
             return {}
-        # CORREÇÃO CRÍTICA: usar data atual, não último dia da série
-        ref_date = pd.Timestamp.today().normalize()
+        ref_date = RiskEngine._last_business_day()
+        s = RiskEngine._serie_business_day(s, ref_date)
+        if s.empty:
+            return {}
         m = RiskEngine._rolling_means(s, ref_date)
         hoje, d1 = m["HOJE"], m["D1"]
         mm7, mm30, mm90, dow = m["MM7"], m["MM30"], m["MM90"], m["DOW"]
@@ -821,23 +873,34 @@ class RiskEngine:
         d_vs_mm7 = pct(hoje, mm7)
         d_vs_mm30 = pct(hoje, mm30)
         d_vs_mm90 = pct(hoje, mm90)
+
+        mm7_br = RiskEngine._to_float(row.get("MM7_BR"))
+        mm7_uf = RiskEngine._to_float(row.get("MM7_UF"))
+        mm7_cidade = RiskEngine._to_float(row.get("MM7_CIDADE"))
+        contexto_mm = [mm for mm in [mm7_br, mm7_uf, mm7_cidade] if mm is not None and mm > 0]
+
+        reducoes = []
+        for mm_ctx in contexto_mm:
+            reducao = 1 - (hoje / mm_ctx) if mm_ctx > 0 else 0
+            reducoes.append(max(0.0, reducao))
+        maior_reducao = max(reducoes) if reducoes else 0.0
+        reducao_zero_absoluto = any(mm_ctx > 0 and hoje == 0 for mm_ctx in contexto_mm)
+
         risco = "🟢 Normal"
-        if (hoje >= 0.90 * mm7) and (hoje <= 1.20 * d1 if d1 > 0 else True):
-            risco = "🟢 Normal"
-        elif ((hoje >= 0.70 * mm7) or (hoje >= 0.70 * d1)) and (hoje >= 0.85 * mm30):
-            risco = "🟡 Atenção"
-        elif ((hoje >= 0.50 * mm7 and hoje < 0.70 * mm7) or (d1 > 0 and hoje >= 0.60 * d1 and hoje < 0.70 * d1)):
-            risco = "🟠 Moderado"
-        elif (((hoje < 0.50 * mm7) or (d1 > 0 and hoje < 0.60 * d1)) and (hoje < 0.70 * mm30)):
-            risco = "🔴 Alto"
-        if d1 > 0 and hoje <= 0.60 * d1:
-            risco = "🔴 Alto"
-        if m["zeros_consec"] >= 7 or m["quedas50_consec"] >= 3:
+        limiar_medio = REDUCAO_MEDIO_RISCO
+        limiar_alto = REDUCAO_ALTO_RISCO
+
+        if reducao_zero_absoluto or maior_reducao >= 1.0 or m["zeros_consec"] >= 7 or m["quedas50_consec"] >= 3:
             risco = "⚫ Crítico"
-        if dow > 0 and abs(hoje - dow) / dow <= 0.15 and risco in {"🟡 Atenção", "🟠 Moderado"}:
+        elif maior_reducao >= limiar_alto:
+            risco = "🔴 Alto"
+        elif maior_reducao >= limiar_medio:
+            risco = "🟠 Moderado"
+        elif maior_reducao > 0:
+            risco = "🟡 Atenção"
+        else:
             risco = "🟢 Normal"
-        if m["zeros_consec"] >= 2 and risco in {"🟢 Normal", "🟡 Atenção"}:
-            risco = "🟠 Moderado" if risco == "🟡 Atenção" else "🟡 Atenção"
+
         recuperacao = False
         ultimos_4 = s.loc[:ref_date].tail(4)
         if len(ultimos_4) == 4 and hoje >= mm7 and (ultimos_4.iloc[:3].mean() < 0.9 * mm7):
@@ -1345,6 +1408,24 @@ class FilterManager:
      
         # Separador visual
         st.sidebar.markdown("---")
+        # Filtro por representante
+        if 'Representante_Nome' in df.columns:
+            representantes_lista = (
+                df['Representante_Nome']
+                .astype(str)
+                .str.strip()
+                .replace({'nan': '', 'None': ''})
+            )
+            representantes_opcoes = sorted({r for r in representantes_lista if r})
+        else:
+            representantes_opcoes = []
+        filtros['representantes'] = st.sidebar.multiselect(
+            "👤 Representantes",
+            options=representantes_opcoes,
+            help="Selecione um ou mais representantes para filtrar os laboratórios exibidos."
+        )
+
+        st.sidebar.markdown("---")
         # Filtro por período - Anos e Meses (dados mensais)
         st.sidebar.markdown("**📅 Período de Análise (Mensal)**")
         # Verificar anos disponíveis nos dados
@@ -1472,6 +1553,10 @@ class FilterManager:
                 # Em caso de erro no filtro de data, continuar sem filtrar
                 st.warning(f"Aviso: Erro ao aplicar filtro de período: {str(e)}")
                 pass
+        # Filtro por representante
+        representantes_sel = filtros.get('representantes', [])
+        if representantes_sel and 'Representante_Nome' in df_filtrado.columns:
+            df_filtrado = df_filtrado[df_filtrado['Representante_Nome'].isin(representantes_sel)]
         # Para dados mensais, o filtro principal será usado nos cálculos dos gráficos
         # Os filtros 'ano_selecionado', 'meses_selecionados' e 'sufixo_ano' são usados
         # diretamente nas funções de cálculo dos gráficos
@@ -1499,7 +1584,30 @@ class KPIManager:
         metrics.labs_alto_risco = labs_alto + labs_critico
         metrics.labs_em_risco = labs_moderado + labs_alto + labs_critico
         metrics.labs_critico = labs_critico
+        metrics.labs_normal_count = labs_normal
+        metrics.labs_atencao_count = labs_atencao
+        metrics.labs_moderado_count = labs_moderado
+        metrics.labs_alto_count = labs_alto
+        metrics.labs_critico_count = labs_critico
         metrics.churn_rate = (metrics.labs_em_risco / metrics.total_labs * 100) if metrics.total_labs else 0
+        # Labs abaixo de MM7 por contexto
+        def _count_below(column_name: str) -> int:
+            if column_name not in df_recent.columns or 'Vol_Hoje' not in df_recent.columns:
+                return 0
+            serie_ref = pd.to_numeric(df_recent[column_name], errors='coerce')
+            vol_hoje = pd.to_numeric(df_recent['Vol_Hoje'], errors='coerce').fillna(0)
+            mask_valid = serie_ref.notna() & (serie_ref > 0)
+            return int(((vol_hoje < serie_ref) & mask_valid).sum())
+
+        metrics.labs_abaixo_mm7_br = _count_below('MM7_BR')
+        metrics.labs_abaixo_mm7_uf = _count_below('MM7_UF')
+        denominator = metrics.total_labs or 0
+        metrics.labs_abaixo_mm7_br_pct = (
+            metrics.labs_abaixo_mm7_br / denominator * 100 if denominator else 0.0
+        )
+        metrics.labs_abaixo_mm7_uf_pct = (
+            metrics.labs_abaixo_mm7_uf / denominator * 100 if denominator else 0.0
+        )
         # Total coletas 2025
         meses_2025 = ChartManager._meses_ate_hoje(df_recent, 2025)
         cols = [f'N_Coletas_{m}_25' for m in meses_2025 if f'N_Coletas_{m}_25' in df_recent.columns]
@@ -1917,7 +2025,7 @@ class ChartManager:
             x='Dia',
             y='Coletas',
             color='Mês',
-            title=f"📅 Coletas por Dia do Mês - {nome_exibicao}",
+            title=f"📅 Coletas por Dia Útil do Mês - {nome_exibicao}",
             markers=True,
             line_shape='linear'
         )
@@ -1928,8 +2036,8 @@ class ChartManager:
         )
 
         fig.update_layout(
-            xaxis_title="Dia do Mês (1-31)",
-            yaxis_title="Número de Coletas",
+            xaxis_title="Dia do Mês (dias úteis disponíveis)",
+            yaxis_title="Número de Coletas (dias úteis)",
             xaxis=dict(tickmode='linear', tick0=1, dtick=5),
             legend=dict(
                 orientation="h",
@@ -2012,17 +2120,17 @@ class ChartManager:
             return
         
         # NOVA IMPLEMENTAÇÃO - Criar dados de forma mais simples e direta
-        dias_semana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
+        dias_uteis = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta']
         cores_dias = {
             'Segunda': '#6BBF47', 'Terça': '#ff7f0e', 'Quarta': '#52B54B', 'Quinta': '#d62728',
-            'Sexta': '#9467bd', 'Sábado': '#8c564b', 'Domingo': '#e377c2'
+            'Sexta': '#9467bd'
         }
         
         # Criar lista de dados de forma mais direta
         dados_grafico = []
         total_coletas = 0
         
-        for dia in dias_semana:
+        for dia in dias_uteis:
             coletas = dados_semanais.get(dia, 0)
             total_coletas += coletas
             dados_grafico.append({
@@ -2063,9 +2171,9 @@ class ChartManager:
         
         # Configurar layout
         fig.update_layout(
-            title=f"📅 Distribuição Real de Coletas por Dia da Semana<br><sup>{nome_exibicao} | Total semanal: {total_coletas} coletas</sup>",
-            xaxis_title="Dia da Semana",
-            yaxis_title="Coletas por Dia",
+            title=f"📅 Distribuição Real de Coletas por Dia Útil da Semana<br><sup>{nome_exibicao} | Total semanal: {total_coletas} coletas úteis</sup>",
+            xaxis_title="Dia da Semana (dias úteis)",
+            yaxis_title="Coletas por Dia Útil",
             height=600,
             margin=dict(l=60, r=60, t=100, b=80),
             font=dict(size=14),
@@ -2075,12 +2183,12 @@ class ChartManager:
         
         # Adicionar linha de média diária
         if total_coletas > 0:
-            media_diaria = total_coletas / 7
+            media_diaria = total_coletas / len(dias_uteis)
             fig.add_hline(
                 y=media_diaria,
                 line_dash="dash",
                 line_color="red",
-                annotation_text=f"Média diária: {media_diaria:.1f} coletas",
+                annotation_text=f"Média por dia útil: {media_diaria:.1f} coletas",
                 annotation_position="top right"
             )
         
@@ -2133,21 +2241,19 @@ class ChartManager:
                 return
             
             # Converter dados para DataFrame
-            dias_semana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
+            dias_uteis = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta']
             cores_dias = {
                 'Segunda': '#6BBF47', # Verde Synvia
                 'Terça': '#ff7f0e', # Laranja
                 'Quarta': '#52B54B', # Verde Synvia Escuro
                 'Quinta': '#d62728', # Vermelho
-                'Sexta': '#9467bd', # Roxo
-                'Sábado': '#8c564b', # Marrom
-                'Domingo': '#e377c2' # Rosa
+                'Sexta': '#9467bd' # Roxo
             }
             
             dados_semana = []
             total_coletas_semana = 0
             
-            for dia in dias_semana:
+            for dia in dias_uteis:
                 coletas_dia = dados_semanais.get(dia, 0)
                 total_coletas_semana += coletas_dia
                 dados_semana.append({
@@ -2166,8 +2272,8 @@ class ChartManager:
             # Criar título informativo
             periodo_texto = "dados reais de 2025"
             
-            # Calcular média diária correta (soma das coletas semanais / 7)
-            media_diaria = total_coletas_semana / 7 if total_coletas_semana > 0 else 0
+            # Calcular média diária correta (soma das coletas semanais / 5 dias úteis)
+            media_diaria = total_coletas_semana / len(dias_uteis) if total_coletas_semana > 0 else 0
             
             # Gráfico de barras
             max_coletas_semana = df_semana['Coletas_Reais'].max() if not df_semana.empty else 0
@@ -2176,7 +2282,7 @@ class ChartManager:
                 df_semana,
                 x='Dia_Semana',
                 y='Coletas_Reais',
-                title=f"📅 Distribuição Real de Coletas por Dia da Semana<br><sup>{lab_selecionado} | Baseado em: {periodo_texto} | Total semanal: {total_coletas_semana:.0f} coletas</sup>",
+                title=f"📅 Distribuição Real de Coletas por Dia Útil da Semana<br><sup>{lab_selecionado} | Baseado em: {periodo_texto} | Total semanal: {total_coletas_semana:.0f} coletas úteis</sup>",
                 color='Dia_Semana',
                 color_discrete_map=cores_dias,
                 text='Coletas_Reais'
@@ -2189,8 +2295,8 @@ class ChartManager:
                 hovertemplate='<b>%{x}</b><br>Coletas: %{y:.0f}<br>Percentual: %{customdata:.1f}% da semana<extra></extra>'
             )
             fig.update_layout(
-                xaxis_title="Dia da Semana",
-                yaxis_title="Coletas por Dia",
+                xaxis_title="Dia da Semana (dias úteis)",
+                yaxis_title="Coletas por Dia Útil",
                 showlegend=False,
                 coloraxis_showscale=False,
                 height=700,  # Aumentado significativamente para destaque
@@ -2206,7 +2312,7 @@ class ChartManager:
                     y=media_diaria,
                     line_dash="dash",
                     line_color="red",
-                    annotation_text=f"Média diária: {media_diaria:.1f} coletas",
+                    annotation_text=f"Média por dia útil: {media_diaria:.1f} coletas",
                     annotation_position="top right"
                 )
             st.plotly_chart(fig, use_container_width=True)
@@ -2237,9 +2343,9 @@ class ChartManager:
                 **Como é calculada a distribuição semanal:**
                 1. **Base de dados**: Dados reais de coletas de 2025 ({periodo_texto})
                 2. **Distribuição real**: Baseada nas datas exatas das coletas (createdAt)
-                   - **Total semanal**: {total_coletas_semana:.0f} coletas
-                   - **Percentuais**: Calculados baseados na distribuição real dos dados
-                3. **Média diária**: {media_diaria:.1f} coletas (total semanal ÷ 7)
+                   - **Total semanal**: {total_coletas_semana:.0f} coletas úteis
+                   - **Percentuais**: Calculados considerando apenas dias úteis
+                3. **Média diária útil**: {media_diaria:.1f} coletas (total semanal ÷ {len(dias_uteis)})
                 **💡 Insight**: Esta análise mostra:
                 - Padrões reais de coleta do laboratório
                 - Dias com maior/menor movimento baseado em dados históricos
@@ -2404,7 +2510,7 @@ class UIManager:
         with col3:
             delta_text = f"⚫ Críticos: {metrics.labs_critico:,}"
             st.markdown(f"""
-            <div class="metric-card" title="Laboratórios em risco alto ou crítico: soma de labs com classificação 🔴 Alto (volume abaixo de 50% da MM7 ou 60% do D-1) + ⚫ Crítico (7+ dias sem coleta ou 3+ quedas consecutivas de 50%+). Críticos: laboratórios em situação extrema que necessitam intervenção imediata.">
+            <div class="metric-card" title="Laboratórios classificados com os maiores níveis de risco: soma de 🔴 Alto e ⚫ Crítico pela régua baseada em dias úteis e reduções vs. MM7_BR/MM7_UF/MM7_CIDADE. Críticos: laboratórios com paralisia prolongada ou quedas severas consecutivas.">
                 <div class="metric-value">{metrics.labs_alto_risco:,}</div>
                 <div class="metric-label">Labs 🔴 & ⚫ (Alto + Crítico)</div>
                 <div class="metric-delta">{delta_text}</div>
@@ -2414,10 +2520,43 @@ class UIManager:
             delta_class = "positive" if metrics.ativos_7d >= 80 else "negative"
             ativos_label = f"Ativos 7D: {metrics.ativos_7d:.1f}% ({metrics.ativos_7d_count}/{metrics.total_labs})" if metrics.total_labs else "Ativos 7D: --"
             st.markdown(f"""
-            <div class="metric-card" title="Laboratórios com dois dias consecutivos sem registrar coletas (Vol_Hoje = 0 e Vol_D1 = 0). Ativos 7D: percentual de laboratórios que registraram pelo menos uma coleta nos últimos 7 dias. Valores abaixo de 80% indicam necessidade de atenção operacional.">
+            <div class="metric-card" title="Laboratórios com dois dias úteis consecutivos sem registrar coletas (Vol_Hoje = 0 e Vol_D1 = 0). Ativos 7D: percentual de laboratórios com pelo menos uma coleta nos últimos 7 dias úteis. Valores abaixo de 80% indicam necessidade de atenção operacional.">
                 <div class="metric-value">{metrics.labs_sem_coleta_48h:,}</div>
                 <div class="metric-label">Sem Coleta (48h)</div>
                 <div class="metric-delta {delta_class}">{ativos_label}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        col5, col6, col7 = st.columns([2, 1, 1])
+        with col5:
+            st.markdown(f"""
+            <div class="metric-card" title="Distribuição atual de risco diário calculada sobre dias úteis e reduções máximas vs. MM7 dos contextos BR/UF/Cidade.">
+                <div class="metric-value" style="font-size:1.4rem;">Distribuição de Risco</div>
+                <div class="metric-delta" style="display:flex; flex-wrap:wrap; gap:0.5rem; font-weight:600;">
+                    <span>🟢 {metrics.labs_normal_count:,}</span>
+                    <span>🟡 {metrics.labs_atencao_count:,}</span>
+                    <span>🟠 {metrics.labs_moderado_count:,}</span>
+                    <span>🔴 {metrics.labs_alto_count:,}</span>
+                    <span>⚫ {metrics.labs_critico_count:,}</span>
+                </div>
+                <div class="metric-label">Régua de risco (dias úteis)</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col6:
+            delta_text = f"{metrics.labs_abaixo_mm7_br_pct:.1f}% do total" if metrics.total_labs else "--"
+            st.markdown(f"""
+            <div class="metric-card" title="Laboratórios cujo volume do último dia útil ficou abaixo da média móvel nacional (MM7_BR, construída apenas com dias úteis).">
+                <div class="metric-value">{metrics.labs_abaixo_mm7_br:,}</div>
+                <div class="metric-label">Labs abaixo da MM7_BR</div>
+                <div class="metric-delta">{delta_text}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col7:
+            delta_text = f"{metrics.labs_abaixo_mm7_uf_pct:.1f}% do total" if metrics.total_labs else "--"
+            st.markdown(f"""
+            <div class="metric-card" title="Laboratórios cujo volume do último dia útil ficou abaixo da média móvel da própria UF (MM7_UF, baseada em dias úteis).">
+                <div class="metric-value">{metrics.labs_abaixo_mm7_uf:,}</div>
+                <div class="metric-label">Labs abaixo da MM7_UF</div>
+                <div class="metric-delta">{delta_text}</div>
             </div>
             """, unsafe_allow_html=True)
 class MetricasAvancadas:
@@ -4138,11 +4277,11 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                     
                     # Criar abas para organizar os gráficos (Resumo Executivo removido)
                     tab_distribuicao, tab_media_diaria, tab_coletas_dia = st.tabs([
-                        "📊 Distribuição por Dia", "📅 Média Diária", "📈 Coletas por Dia"
+                        "📊 Distribuição por Dia Útil", "📅 Média Diária", "📈 Coletas por Dia Útil"
                     ])
                     
                     with tab_distribuicao:
-                        st.subheader("📊 Distribuição de Coletas por Dia da Semana")
+                        st.subheader("📊 Distribuição de Coletas por Dia Útil da Semana")
                         # Gráfico com destaque maior conforme solicitado
                         ChartManager.criar_grafico_media_dia_semana_novo(
                             df_filtrado,
@@ -4160,7 +4299,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429), 
                         )
 
                     with tab_coletas_dia:
-                        st.subheader("📈 Coletas por Dia do Mês")
+                        st.subheader("📈 Coletas por Dia Útil do Mês")
                         ChartManager.criar_grafico_coletas_por_dia(
                             df_filtrado,
                             lab_cnpj=lab_final_cnpj,

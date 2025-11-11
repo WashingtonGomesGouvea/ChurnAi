@@ -4314,7 +4314,48 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                                 lab_final = lab_nome_map.get(lab_final_cnpj, lab_final_cnpj)
                                 st.session_state[LAB_STATE_KEY] = lab_final_cnpj
                     else:
-                        st.warning("⚠️ Nenhum laboratório encontrado com os critérios informados")
+                        # Não encontrou - verificar se existe na base completa e qual filtro está impedindo
+                        cnpj_limpo = ''.join(filter(str.isdigit, busca_normalizada))
+                        lab_na_base_completa = None
+                        
+                        if len(cnpj_limpo) >= 1:
+                            if len(cnpj_limpo) >= 14:
+                                lab_na_base_completa = df[df['CNPJ_Normalizado'] == cnpj_limpo]
+                            else:
+                                lab_na_base_completa = df[df['CNPJ_Normalizado'].str.startswith(cnpj_limpo)]
+                        else:
+                            # Buscar por nome na base completa
+                            lab_na_base_completa = df[
+                                df['Nome_Fantasia_PCL'].str.contains(busca_normalizada, case=False, na=False) |
+                                df['Razao_Social_PCL'].str.contains(busca_normalizada, case=False, na=False)
+                            ]
+                        
+                        lab_na_base_completa = lab_na_base_completa[lab_na_base_completa['CNPJ_Normalizado'] != ""].drop_duplicates('CNPJ_Normalizado')
+                        
+                        if not lab_na_base_completa.empty:
+                            # Encontrou na base completa mas não nos filtros atuais
+                            st.warning("⚠️ Nenhum laboratório encontrado com os filtros atuais")
+                            
+                            # Identificar quais filtros estão ativos
+                            filtros_ativos = []
+                            if filtros.get('apenas_vip', False):
+                                filtros_ativos.append("**Apenas VIPs**")
+                            if filtros.get('representantes'):
+                                filtros_ativos.append(f"**Representante(s)**: {', '.join(filtros['representantes'])}")
+                            if filtros.get('ufs'):
+                                filtros_ativos.append(f"**UF(s)**: {', '.join(filtros['ufs'])}")
+                            
+                            if filtros_ativos:
+                                st.info(f"💡 Encontramos **{len(lab_na_base_completa)} laboratório(s)** na base completa, mas está(ão) sendo filtrado(s) por:\n\n" + 
+                                       "\n".join([f"- {f}" for f in filtros_ativos]))
+                                
+                                st.caption("💡 **Dica**: Desative os filtros na barra lateral para visualizar este laboratório.")
+                            else:
+                                st.info(f"💡 Encontramos **{len(lab_na_base_completa)} laboratório(s)** na base completa, mas está(ão) fora do período selecionado ou de outros filtros aplicados.")
+                        else:
+                            # Não encontrou nem na base completa
+                            st.warning("⚠️ Nenhum laboratório encontrado com os critérios informados")
+                            st.caption("Este laboratório não está na nossa base de dados.")
                 elif tem_selecao:
                     # Laboratório selecionado diretamente da lista
                     lab_final_cnpj = st.session_state.get(LAB_STATE_KEY, "")
@@ -6515,12 +6556,13 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
         else:
             df_gralab = dados_gralab['Dados Completos']
             
-            # Normalizar CNPJs da nossa base
-            if 'CNPJ_Normalizado' not in df_filtrado.columns:
-                df_filtrado['CNPJ_Normalizado'] = df_filtrado['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
+            # Normalizar CNPJs da nossa base (usar df completo, não df_filtrado)
+            # Isso garante que todos os nossos clientes sejam considerados na comparação
+            if 'CNPJ_Normalizado' not in df.columns:
+                df['CNPJ_Normalizado'] = df['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
             
-            # Obter conjuntos de CNPJs
-            cnpjs_nossos = set(df_filtrado['CNPJ_Normalizado'].dropna().unique())
+            # Obter conjuntos de CNPJs (usar df completo para ter todos os clientes)
+            cnpjs_nossos = set(df['CNPJ_Normalizado'].dropna().unique())
             cnpjs_gralab = set(df_gralab['CNPJ_Normalizado'].dropna().unique())
             
             # Calcular intersecções
@@ -6598,7 +6640,8 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
             with col_g2:
                 # Gráfico de Barras - Top UFs em Comum
                 if len(cnpjs_comuns) > 0:
-                    df_comuns = df_filtrado[df_filtrado['CNPJ_Normalizado'].isin(cnpjs_comuns)]
+                    # Usar df completo para análise geográfica completa
+                    df_comuns = df[df['CNPJ_Normalizado'].isin(cnpjs_comuns)]
                     top_ufs = df_comuns['Estado'].value_counts().head(10)
                     
                     import plotly.express as px
@@ -6629,10 +6672,11 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
             st.markdown("---")
             st.subheader("📋 Análise Detalhada")
             
-            tab1, tab2, tab3, tab4 = st.tabs([
+            tab1, tab2, tab3, tab4, tab5 = st.tabs([
                 "🤝 Labs em Comum",
                 "🔵 Exclusivos Nossos",
                 "🟠 Exclusivos Gralab",
+                "🔄 Movimentações",
                 "💰 Análise de Preços"
             ])
             
@@ -6640,8 +6684,8 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                 st.markdown("### 🤝 Laboratórios em Ambas as Bases")
                 
                 if len(cnpjs_comuns) > 0:
-                    # Criar DataFrame combinado
-                    df_comuns_nossos = df_filtrado[df_filtrado['CNPJ_Normalizado'].isin(cnpjs_comuns)][
+                    # Criar DataFrame combinado (usar df completo para pegar todos os labs)
+                    df_comuns_nossos = df[df['CNPJ_Normalizado'].isin(cnpjs_comuns)][
                         ['CNPJ_PCL', 'CNPJ_Normalizado', 'Nome_Fantasia_PCL', 'Cidade', 'Estado']
                     ].drop_duplicates('CNPJ_Normalizado')
                     
@@ -6712,14 +6756,31 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                     
                     st.dataframe(df_exibir_final, use_container_width=True, height=400, hide_index=True)
                     
-                    # Botão de download
-                    csv = df_exibir_final.to_csv(index=False, encoding='utf-8-sig')
-                    st.download_button(
-                        label="📥 Download CSV",
-                        data=csv,
-                        file_name="labs_em_comum_gralab.csv",
-                        mime="text/csv"
-                    )
+                    # Botões de download
+                    col_d1, col_d2 = st.columns(2)
+                    
+                    with col_d1:
+                        csv = df_exibir_final.to_csv(index=False, encoding='utf-8-sig')
+                        st.download_button(
+                            label="📥 Download CSV",
+                            data=csv,
+                            file_name=f"labs_em_comum_gralab_{datetime.now().strftime('%Y%m%d')}.csv",
+                            mime="text/csv",
+                            key="download_comuns_csv"
+                        )
+                    
+                    with col_d2:
+                        from io import BytesIO
+                        excel_buffer = BytesIO()
+                        df_exibir_final.to_excel(excel_buffer, index=False, engine='openpyxl')
+                        excel_data = excel_buffer.getvalue()
+                        st.download_button(
+                            label="📊 Download Excel",
+                            data=excel_data,
+                            file_name=f"labs_em_comum_gralab_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="download_comuns_excel"
+                        )
                 else:
                     st.info("Nenhum laboratório em comum encontrado")
             
@@ -6728,7 +6789,8 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                 st.caption("Laboratórios que temos mas o Gralab (CunhaLab) não tem - potencial para proteção")
                 
                 if len(cnpjs_so_nossos) > 0:
-                    df_exclusivos_nossos = df_filtrado[df_filtrado['CNPJ_Normalizado'].isin(cnpjs_so_nossos)][
+                    # Usar df completo para pegar todos os labs exclusivos nossos
+                    df_exclusivos_nossos = df[df['CNPJ_Normalizado'].isin(cnpjs_so_nossos)][
                         ['CNPJ_PCL', 'Nome_Fantasia_PCL', 'Cidade', 'Estado', 'Vol_Hoje', 'Risco_Diario']
                     ].drop_duplicates('CNPJ_PCL')
                     
@@ -6742,15 +6804,31 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                     
                     st.dataframe(df_exclusivos_nossos, use_container_width=True, height=400, hide_index=True)
                     
-                    # Download
-                    csv = df_exclusivos_nossos.to_csv(index=False, encoding='utf-8-sig')
-                    st.download_button(
-                        label="📥 Download CSV",
-                        data=csv,
-                        file_name="labs_exclusivos_nossos.csv",
-                        mime="text/csv",
-                        key="download_exclusivos_nossos"
-                    )
+                    # Botões de download
+                    col_d1, col_d2 = st.columns(2)
+                    
+                    with col_d1:
+                        csv = df_exclusivos_nossos.to_csv(index=False, encoding='utf-8-sig')
+                        st.download_button(
+                            label="📥 Download CSV",
+                            data=csv,
+                            file_name=f"labs_exclusivos_nossos_{datetime.now().strftime('%Y%m%d')}.csv",
+                            mime="text/csv",
+                            key="download_exclusivos_nossos_csv"
+                        )
+                    
+                    with col_d2:
+                        from io import BytesIO
+                        excel_buffer = BytesIO()
+                        df_exclusivos_nossos.to_excel(excel_buffer, index=False, engine='openpyxl')
+                        excel_data = excel_buffer.getvalue()
+                        st.download_button(
+                            label="📊 Download Excel",
+                            data=excel_data,
+                            file_name=f"labs_exclusivos_nossos_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="download_exclusivos_nossos_excel"
+                        )
                 else:
                     st.info("Nenhum laboratório exclusivo encontrado")
             
@@ -6791,21 +6869,171 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                         
                         st.dataframe(df_exclusivos_gralab_filtrado, use_container_width=True, height=400, hide_index=True)
                         
-                        # Download
-                        csv = df_exclusivos_gralab_filtrado.to_csv(index=False, encoding='utf-8-sig')
-                        st.download_button(
-                            label="📥 Download CSV",
-                            data=csv,
-                            file_name="labs_exclusivos_gralab.csv",
-                            mime="text/csv",
-                            key="download_exclusivos_gralab"
-                        )
+                        # Botões de download
+                        col_d1, col_d2 = st.columns(2)
+                        
+                        with col_d1:
+                            csv = df_exclusivos_gralab_filtrado.to_csv(index=False, encoding='utf-8-sig')
+                            st.download_button(
+                                label="📥 Download CSV",
+                                data=csv,
+                                file_name=f"labs_exclusivos_gralab_{datetime.now().strftime('%Y%m%d')}.csv",
+                                mime="text/csv",
+                                key="download_exclusivos_gralab_csv"
+                            )
+                        
+                        with col_d2:
+                            from io import BytesIO
+                            excel_buffer = BytesIO()
+                            df_exclusivos_gralab_filtrado.to_excel(excel_buffer, index=False, engine='openpyxl')
+                            excel_data = excel_buffer.getvalue()
+                            st.download_button(
+                                label="📊 Download Excel",
+                                data=excel_data,
+                                file_name=f"labs_exclusivos_gralab_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key="download_exclusivos_gralab_excel"
+                            )
                     else:
                         st.warning("⚠️ Colunas esperadas não encontradas no arquivo do Gralab")
                 else:
                     st.info("Nenhum laboratório exclusivo do Gralab (CunhaLab) encontrado")
             
             with tab4:
+                st.markdown("### 🔄 Movimentações do Gralab (CunhaLab)")
+                st.caption("Credenciamentos e descredenciamentos registrados")
+                
+                if 'EntradaSaida' in dados_gralab:
+                    df_entrada_saida = dados_gralab['EntradaSaida'].copy()
+                    
+                    if not df_entrada_saida.empty:
+                        # Formatar datas para padrão brasileiro
+                        for col_data in ['Data Entrada', 'Data Saída', 'Última Verificação']:
+                            if col_data in df_entrada_saida.columns:
+                                df_entrada_saida[col_data] = pd.to_datetime(df_entrada_saida[col_data], errors='coerce').dt.strftime('%d/%m/%Y')
+                                df_entrada_saida[col_data] = df_entrada_saida[col_data].replace('NaT', '')
+                        
+                        # Filtros
+                        col_mov1, col_mov2 = st.columns(2)
+                        
+                        with col_mov1:
+                            tipo_mov_filtro = st.multiselect(
+                                "Tipo de Movimentação:",
+                                options=['Todos', 'Credenciamento', 'Descredenciamento'],
+                                default=['Todos'],
+                                key="tipo_mov_gralab"
+                            )
+                        
+                        with col_mov2:
+                            if 'UF' in df_entrada_saida.columns:
+                                uf_mov_filtro = st.multiselect(
+                                    "UF:",
+                                    options=['Todos'] + sorted(df_entrada_saida['UF'].dropna().unique().tolist()),
+                                    default=['Todos'],
+                                    key="uf_mov_gralab"
+                                )
+                        
+                        # Aplicar filtros
+                        df_mov_filtrado = df_entrada_saida.copy()
+                        
+                        if tipo_mov_filtro and 'Todos' not in tipo_mov_filtro:
+                            df_mov_filtrado = df_mov_filtrado[df_mov_filtrado['Tipo Movimentação'].isin(tipo_mov_filtro)]
+                        
+                        if 'UF' in df_entrada_saida.columns and uf_mov_filtro and 'Todos' not in uf_mov_filtro:
+                            df_mov_filtrado = df_mov_filtrado[df_mov_filtrado['UF'].isin(uf_mov_filtro)]
+                        
+                        # Selecionar colunas para exibição
+                        colunas_exibir_mov = []
+                        
+                        # Sempre tentar incluir CNPJ
+                        if 'CNPJ' in df_mov_filtrado.columns:
+                            colunas_exibir_mov.append('CNPJ')
+                        elif 'CNPJ_Normalizado' in df_mov_filtrado.columns:
+                            colunas_exibir_mov.append('CNPJ_Normalizado')
+                        
+                        # Outras colunas importantes
+                        colunas_desejadas_mov = [
+                            'Nome', 'Cidade', 'UF', 'Data Entrada', 'Data Saída', 
+                            'Tipo Movimentação', 'Última Verificação',
+                            'Preço CNH', 'Preço Concurso', 'Preço CLT'
+                        ]
+                        
+                        for col in colunas_desejadas_mov:
+                            if col in df_mov_filtrado.columns:
+                                colunas_exibir_mov.append(col)
+                        
+                        if colunas_exibir_mov:
+                            df_mov_exibir = df_mov_filtrado[colunas_exibir_mov].copy()
+                            
+                            # Renomear CNPJ_Normalizado se necessário
+                            if 'CNPJ_Normalizado' in df_mov_exibir.columns and 'CNPJ' not in df_mov_exibir.columns:
+                                df_mov_exibir = df_mov_exibir.rename(columns={'CNPJ_Normalizado': 'CNPJ'})
+                            
+                            # Adicionar coluna indicando se é nosso cliente
+                            def verificar_nosso_cliente(cnpj):
+                                if pd.isna(cnpj) or cnpj == '':
+                                    return 'N/A'
+                                # Normalizar CNPJ para comparação
+                                cnpj_normalizado = DataManager.normalizar_cnpj(str(cnpj))
+                                if cnpj_normalizado in cnpjs_nossos:
+                                    return '✅ Sim'
+                                return '❌ Não'
+                            
+                            if 'CNPJ' in df_mov_exibir.columns:
+                                df_mov_exibir['Nosso Cliente'] = df_mov_exibir['CNPJ'].apply(verificar_nosso_cliente)
+                            
+                            # Métricas resumidas
+                            col_m1, col_m2, col_m3 = st.columns(3)
+                            
+                            total_movimentacoes = len(df_mov_exibir)
+                            credenciamentos = len(df_mov_exibir[df_mov_exibir['Tipo Movimentação'] == 'Credenciamento']) if 'Tipo Movimentação' in df_mov_exibir.columns else 0
+                            descredenciamentos = len(df_mov_exibir[df_mov_exibir['Tipo Movimentação'] == 'Descredenciamento']) if 'Tipo Movimentação' in df_mov_exibir.columns else 0
+                            
+                            with col_m1:
+                                st.metric("Total Movimentações", total_movimentacoes)
+                            with col_m2:
+                                st.metric("✅ Credenciamentos", credenciamentos)
+                            with col_m3:
+                                st.metric("❌ Descredenciamentos", descredenciamentos)
+                            
+                            st.markdown("---")
+                            
+                            # Tabela
+                            st.dataframe(df_mov_exibir, use_container_width=True, height=400, hide_index=True)
+                            
+                            # Botões de download
+                            col_d1, col_d2 = st.columns(2)
+                            
+                            with col_d1:
+                                csv = df_mov_exibir.to_csv(index=False, encoding='utf-8-sig')
+                                st.download_button(
+                                    label="📥 Download CSV",
+                                    data=csv,
+                                    file_name=f"movimentacoes_gralab_{datetime.now().strftime('%Y%m%d')}.csv",
+                                    mime="text/csv",
+                                    key="download_movimentacoes_gralab_csv"
+                                )
+                            
+                            with col_d2:
+                                from io import BytesIO
+                                excel_buffer = BytesIO()
+                                df_mov_exibir.to_excel(excel_buffer, index=False, engine='openpyxl')
+                                excel_data = excel_buffer.getvalue()
+                                st.download_button(
+                                    label="📊 Download Excel",
+                                    data=excel_data,
+                                    file_name=f"movimentacoes_gralab_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    key="download_movimentacoes_gralab_excel"
+                                )
+                        else:
+                            st.warning("⚠️ Nenhuma coluna disponível para exibição")
+                    else:
+                        st.info("Nenhuma movimentação registrada")
+                else:
+                    st.info("Aba 'EntradaSaida' não encontrada no arquivo do Gralab (CunhaLab)")
+            
+            with tab5:
                 st.markdown("### 💰 Análise de Preços (Labs em Comum)")
                 
                 if len(cnpjs_comuns) > 0:

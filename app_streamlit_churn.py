@@ -1880,7 +1880,7 @@ class ChartManager:
             height=500,
             margin=dict(l=40, r=40, t=40, b=40)
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     @staticmethod
     def criar_grafico_top_labs(df: pd.DataFrame, top_n: int = 10):
         if df.empty:
@@ -1918,7 +1918,7 @@ class ChartManager:
             height=500,
             margin=dict(l=40, r=40, t=40, b=100)
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     @staticmethod
     def criar_grafico_media_diaria(
         df: pd.DataFrame,
@@ -2022,7 +2022,7 @@ class ChartManager:
             font=dict(size=14)
         )
      
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # Explicação metodológica
         with st.expander("ℹ️ Sobre Esta Análise", expanded=False):
@@ -2167,7 +2167,7 @@ class ChartManager:
             xanchor="center"
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     @staticmethod
     def criar_grafico_media_dia_semana_novo(
         df: pd.DataFrame,
@@ -2289,7 +2289,7 @@ class ChartManager:
                 annotation_position="top right"
             )
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # Métricas
         col1, col2, col3 = st.columns(3)
@@ -2412,7 +2412,7 @@ class ChartManager:
                     annotation_text=f"Média por dia útil: {media_diaria:.1f} coletas",
                     annotation_position="top right"
                 )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
             # Métricas adicionais
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -2707,7 +2707,7 @@ class ChartManager:
             font=dict(size=12)
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     
     @staticmethod
     def criar_grafico_evolucao_mensal(
@@ -2802,7 +2802,7 @@ class ChartManager:
                     autosize=True,  # Responsivo
                     showlegend=True
                 )
-                st.plotly_chart(fig, use_container_width=True, key=f"evolucao_mensal_lab_{chart_key}")
+                st.plotly_chart(fig, width='stretch', key=f"evolucao_mensal_lab_{chart_key}")
         else:
             # Gráfico agregado
             valores_agregados = [df[col].sum() for col in colunas_meses]
@@ -2827,7 +2827,7 @@ class ChartManager:
                 margin=dict(l=60, r=60, t=60, b=80),  # Margens aumentadas
                 autosize=True  # Responsivo
             )
-            st.plotly_chart(fig, use_container_width=True, key=f"evolucao_mensal_agregado_{chart_key}")
+            st.plotly_chart(fig, width='stretch', key=f"evolucao_mensal_agregado_{chart_key}")
 class UIManager:
     """Gerenciador da interface do usuário - Atualizado com tabs."""
     @staticmethod
@@ -3264,7 +3264,7 @@ class ReportManager:
                 st.subheader("📉 Top 10 Quedas")
                 st.dataframe(
                     top_quedas,
-                    use_container_width=True,
+                    width='stretch',
                     column_config={
                         "Ranking": st.column_config.NumberColumn("🏆", width="small", help="Posição no ranking"),
                         "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome do laboratório"),
@@ -3277,7 +3277,7 @@ class ReportManager:
                 st.subheader("📈 Top 10 Recuperações")
                 st.dataframe(
                     top_recuperacoes,
-                    use_container_width=True,
+                    width='stretch',
                     column_config={
                         "Ranking": st.column_config.NumberColumn("🏆", width="small", help="Posição no ranking"),
                         "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome do laboratório"),
@@ -3368,7 +3368,7 @@ def main():
         st.session_state.page = pages[0]
    
     for page in pages:
-        if st.sidebar.button(page, key=page, use_container_width=True):
+        if st.sidebar.button(page, key=page, width='stretch'):
             st.session_state.page = page
    
     # Separador visual
@@ -3429,7 +3429,7 @@ def main():
                         if colunas_alerta:
                             st.dataframe(
                                 _formatar_df_exibicao(criticos[colunas_alerta].sort_values('Vol_Hoje', ascending=True).head(10)),
-                                use_container_width=True,
+                                width='stretch',
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório em risco crítico"),
                                     "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
@@ -3467,7 +3467,7 @@ def main():
                         if colunas_queda:
                             st.dataframe(
                                 _formatar_df_exibicao(quedas_relevantes[colunas_queda].sort_values(['Delta_MM7', 'Vol_Hoje']).head(15)),
-                                use_container_width=True,
+                                width='stretch',
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com queda ≥50% vs MM7"),
                                     "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
@@ -3502,7 +3502,7 @@ def main():
                         if colunas_queda_d1:
                             st.dataframe(
                                 _formatar_df_exibicao(quedas_d1_relevantes[colunas_queda_d1].sort_values(['Delta_D1', 'Vol_Hoje']).head(15)),
-                                use_container_width=True,
+                                width='stretch',
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com queda ≥40% vs D-1"),
                                     "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
@@ -3537,7 +3537,7 @@ def main():
                         if colunas_moderado:
                             st.dataframe(
                                 _formatar_df_exibicao(moderados[colunas_moderado]),
-                                use_container_width=True,
+                                width='stretch',
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com risco moderado"),
                                     "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
@@ -3564,7 +3564,7 @@ def main():
                         if colunas_zero:
                             st.dataframe(
                                 _formatar_df_exibicao(dois_dias_sem_coleta[colunas_zero].head(15)),
-                                use_container_width=True,
+                                width='stretch',
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com dois dias consecutivos sem coleta"),
                                     "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
@@ -3629,7 +3629,7 @@ A classificação de risco segue uma régua hierárquica baseada em múltiplos c
                             colunas_quedas = [c for c in colunas_quedas if c in quedas_diarias.columns]
                             st.dataframe(
                                 _formatar_df_exibicao(quedas_diarias[colunas_quedas]),
-                                use_container_width=True,
+                                width='stretch',
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com maiores quedas vs MM7"),
                                     "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
@@ -3665,7 +3665,7 @@ A classificação de risco segue uma régua hierárquica baseada em múltiplos c
                             colunas_altas = [c for c in colunas_altas if c in altas_diarias.columns]
                             st.dataframe(
                                 _formatar_df_exibicao(altas_diarias[colunas_altas]),
-                                use_container_width=True,
+                                width='stretch',
                                 column_config={
                                     "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com maiores altas vs MM7"),
                                     "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
@@ -3708,7 +3708,7 @@ A classificação de risco segue uma régua hierárquica baseada em múltiplos c
                         colunas_recuperacao = [c for c in colunas_recuperacao if c in recuperacoes.columns]
                         st.dataframe(
                             _formatar_df_exibicao(recuperacoes[colunas_recuperacao].head(10)),
-                            use_container_width=True,
+                            width='stretch',
                             column_config={
                                 "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório em recuperação"),
                                 "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
@@ -3812,7 +3812,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                                   'Vol_Hoje', 'Delta_MM7', 'Risco_Diario']
                 st.dataframe(
                     _formatar_df_exibicao(labs_em_risco[colunas_resumo]),
-                    use_container_width=True,
+                    width='stretch',
                     height=300,
                     column_config={
                         "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório em risco"),
@@ -3941,7 +3941,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                     # Exibir tabela com formatação
                     st.dataframe(
                         df_filtrado_ranking[['Ranking', 'CNPJ', 'Laboratório', 'Coletas', 'Representante', 'Estado', 'Cidade']],
-                        use_container_width=True,
+                        width='stretch',
                         height=600,
                         column_config={
                             "Ranking": st.column_config.NumberColumn(
@@ -3995,7 +3995,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                             csv_data,
                             file_name=f"ranking_top_100_pcls_{datetime.now().strftime('%Y%m%d')}.csv",
                             mime="text/csv",
-                            use_container_width=True
+                            width='stretch'
                         )
                     
                     with col_download2:
@@ -4053,7 +4053,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                             excel_data,
                             file_name=f"ranking_top_100_pcls_{datetime.now().strftime('%Y%m%d')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True
+                            width='stretch'
                         )
                 else:
                     st.info("🔍 Nenhum resultado encontrado para os filtros aplicados.")
@@ -4234,7 +4234,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                 )
             with col2:
                 # Botão de busca rápida
-                buscar_btn = st.button("🔎 Buscar", type="primary", use_container_width=True)
+                buscar_btn = st.button("🔎 Buscar", type="primary", width='stretch')
             with col3:
                 # Seleção por dropdown como alternativa
                 lab_selecionado = st.selectbox(
@@ -5174,7 +5174,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
             st.markdown(f"**Mostrando {len(df_exibicao_renamed)} laboratórios**")
             st.dataframe(
                 df_exibicao_renamed,
-                use_container_width=True,
+                width='stretch',
                 height=500,
                 hide_index=True,
                 column_config=column_config_renamed
@@ -5529,7 +5529,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                         top_estados_display = top_estados_display[['Ranking', 'Estado', 'Qtd_Labs', 'Volume_Total', 'Volume_Medio']]
                         st.dataframe(
                             top_estados_display,
-                            use_container_width=True,
+                            width='stretch',
                             column_config={
                                 "Ranking": st.column_config.NumberColumn("🏆", width="small", help="Posição no ranking"),
                                 "Estado": st.column_config.TextColumn("🏛️ Estado"),
@@ -5547,7 +5547,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                         top_cidades_display = top_cidades_display[['Ranking', 'Cidade', 'Qtd_Labs', 'Volume_Total', 'Volume_Medio']]
                         st.dataframe(
                             top_cidades_display,
-                            use_container_width=True,
+                            width='stretch',
                             column_config={
                                 "Ranking": st.column_config.NumberColumn("🏆", width="small", help="Posição no ranking"),
                                 "Cidade": st.column_config.TextColumn("🏙️ Cidade"),
@@ -5583,7 +5583,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                         margin=dict(l=60, r=60, t=80, b=80),
                         yaxis=dict(range=[0, y_axis_max])
                     )
-                    st.plotly_chart(fig_ranking, use_container_width=True)
+                    st.plotly_chart(fig_ranking, width='stretch')
                     # Tabela detalhada
                     # Adicionar ranking para volume_por_rede
                     volume_por_rede_display = volume_por_rede.round(2).copy()
@@ -5591,7 +5591,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                     volume_por_rede_display = volume_por_rede_display[['Ranking', 'Rede', 'Volume_Total', 'Volume_Medio', 'Qtd_Labs']]
                     st.dataframe(
                         volume_por_rede_display,
-                        use_container_width=True,
+                        width='stretch',
                         column_config={
                             "Ranking": st.column_config.NumberColumn("🏆", width="small", help="Posição no ranking"),
                             "Rede": st.column_config.TextColumn("🏢 Rede"),
@@ -5633,7 +5633,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                                 margin=dict(l=60, r=60, t=80, b=80),
                                 yaxis=dict(range=[0, y_axis_max])
                             )
-                            st.plotly_chart(fig_perf, use_container_width=True)
+                            st.plotly_chart(fig_perf, width='stretch')
                         with col2:
                             # Scatter plot: Volume vs Performance
                             fig_scatter = px.scatter(
@@ -5646,11 +5646,11 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                                 labels={'Volume_Total': 'Volume Total', 'Variacao_Media': 'Variação Média %'}
                             )
                             fig_scatter.update_layout(height=500, margin=dict(l=40, r=40, t=40, b=40))
-                            st.plotly_chart(fig_scatter, use_container_width=True)
+                            st.plotly_chart(fig_scatter, width='stretch')
                         # Tabela de performance
                         st.dataframe(
                             perf_rede.round(2),
-                            use_container_width=True,
+                            width='stretch',
                             column_config={
                                 "Rede": st.column_config.TextColumn("🏢 Rede"),
                                 "Variacao_Media": st.column_config.NumberColumn("📈 Variação Média %", format="%.2f%%"),
@@ -5700,7 +5700,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                                 fig_top.update_traces(texttemplate='%{text}', textposition='outside')
                                 fig_top.update_layout(xaxis_title="Laboratórios em risco", yaxis_title="Rede",
                                                       height=500, margin=dict(l=40, r=40, t=40, b=40))
-                                st.plotly_chart(fig_top, use_container_width=True)
+                                st.plotly_chart(fig_top, width='stretch')
                             with col2:
                                 resumo_rede_delta = resumo_rede.sort_values('Delta_MM7_Medio')
                                 fig_delta = px.bar(
@@ -5716,10 +5716,10 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                                 fig_delta.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
                                 fig_delta.update_layout(xaxis_title="Δ vs MM7 (%)", yaxis_title="Rede",
                                                         height=500, margin=dict(l=40, r=40, t=40, b=40))
-                                st.plotly_chart(fig_delta, use_container_width=True)
+                                st.plotly_chart(fig_delta, width='stretch')
                         st.dataframe(
                             resumo_rede,
-                            use_container_width=True,
+                            width='stretch',
                             column_config={
                                 "Rede": st.column_config.TextColumn("🏢 Rede"),
                                 "Labs_Risco": st.column_config.NumberColumn("🚨 Labs em Risco"),
@@ -5740,7 +5740,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                             barmode='stack'
                         )
                         fig_status.update_layout(xaxis_tickangle=-45, height=500, margin=dict(l=40, r=40, t=40, b=40))
-                        st.plotly_chart(fig_status, use_container_width=True)
+                        st.plotly_chart(fig_status, width='stretch')
                         # Destaques de risco crítico
                         redes_criticas = labs_risco[labs_risco['Risco_Diario'] == '⚫ Crítico']['Rede'].value_counts()
                         if not redes_criticas.empty:
@@ -5817,7 +5817,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                                     barmode='group',
                                     height=400
                                 )
-                                st.plotly_chart(fig_comp1, use_container_width=True)
+                                st.plotly_chart(fig_comp1, width='stretch')
                             with col2:
                                 # Comparação de performance (volume médio e taxa churn)
                                 fig_comp2 = go.Figure()
@@ -5837,7 +5837,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                                     yaxis_title="Taxa Churn (%)",
                                     height=400
                                 )
-                                st.plotly_chart(fig_comp2, use_container_width=True)
+                                st.plotly_chart(fig_comp2, width='stretch')
                             # ========================================
                             # TABELA COMPARATIVA DETALHADA
                             # ========================================
@@ -5876,7 +5876,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                             redes_comparacao_display = redes_comparacao_display[cols_final]
                             st.dataframe(
                                 redes_comparacao_display.round(2),
-                                use_container_width=True,
+                                width='stretch',
                                 column_config={
                                     "🚨 Indicadores": st.column_config.TextColumn("🚨 Alertas", width="small"),
                                     "Rede": st.column_config.TextColumn("🏢 Rede", width="medium"),
@@ -6023,7 +6023,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                 if colunas_existentes:
                     st.dataframe(
                         df_filtrado[colunas_existentes],
-                        use_container_width=True,
+                        width='stretch',
                         height=400,
                         column_config={
                             "CNPJ": st.column_config.TextColumn("📄 CNPJ", help="CNPJ do laboratório"),
@@ -6635,7 +6635,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                     showlegend=True
                 )
                 
-                st.plotly_chart(fig_pizza, use_container_width=True)
+                st.plotly_chart(fig_pizza, width='stretch')
             
             with col_g2:
                 # Gráfico de Barras - Top UFs em Comum
@@ -6662,7 +6662,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                         yaxis_title="Quantidade de Laboratórios"
                     )
                     
-                    st.plotly_chart(fig_ufs, use_container_width=True)
+                    st.plotly_chart(fig_ufs, width='stretch')
                 else:
                     st.info("Nenhum laboratório em comum para análise geográfica")
             
@@ -6754,7 +6754,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                     
                     df_exibir_final = df_exibir_final.rename(columns={k: v for k, v in rename_map.items() if k in df_exibir_final.columns})
                     
-                    st.dataframe(df_exibir_final, use_container_width=True, height=400, hide_index=True)
+                    st.dataframe(df_exibir_final, width='stretch', height=400, hide_index=True)
                     
                     # Botões de download
                     col_d1, col_d2 = st.columns(2)
@@ -6770,7 +6770,6 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                         )
                     
                     with col_d2:
-                        from io import BytesIO
                         excel_buffer = BytesIO()
                         df_exibir_final.to_excel(excel_buffer, index=False, engine='openpyxl')
                         excel_data = excel_buffer.getvalue()
@@ -6802,7 +6801,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                         'Risco_Diario': 'Risco'
                     })
                     
-                    st.dataframe(df_exclusivos_nossos, use_container_width=True, height=400, hide_index=True)
+                    st.dataframe(df_exclusivos_nossos, width='stretch', height=400, hide_index=True)
                     
                     # Botões de download
                     col_d1, col_d2 = st.columns(2)
@@ -6818,7 +6817,6 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                         )
                     
                     with col_d2:
-                        from io import BytesIO
                         excel_buffer = BytesIO()
                         df_exclusivos_nossos.to_excel(excel_buffer, index=False, engine='openpyxl')
                         excel_data = excel_buffer.getvalue()
@@ -6867,7 +6865,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                         if 'CNPJ' in df_exclusivos_gralab_filtrado.columns:
                             df_exclusivos_gralab_filtrado = df_exclusivos_gralab_filtrado.drop_duplicates('CNPJ')
                         
-                        st.dataframe(df_exclusivos_gralab_filtrado, use_container_width=True, height=400, hide_index=True)
+                        st.dataframe(df_exclusivos_gralab_filtrado, width='stretch', height=400, hide_index=True)
                         
                         # Botões de download
                         col_d1, col_d2 = st.columns(2)
@@ -6883,7 +6881,6 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                             )
                         
                         with col_d2:
-                            from io import BytesIO
                             excel_buffer = BytesIO()
                             df_exclusivos_gralab_filtrado.to_excel(excel_buffer, index=False, engine='openpyxl')
                             excel_data = excel_buffer.getvalue()
@@ -6999,7 +6996,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                             st.markdown("---")
                             
                             # Tabela
-                            st.dataframe(df_mov_exibir, use_container_width=True, height=400, hide_index=True)
+                            st.dataframe(df_mov_exibir, width='stretch', height=400, hide_index=True)
                             
                             # Botões de download
                             col_d1, col_d2 = st.columns(2)
@@ -7015,7 +7012,6 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                                 )
                             
                             with col_d2:
-                                from io import BytesIO
                                 excel_buffer = BytesIO()
                                 df_mov_exibir.to_excel(excel_buffer, index=False, engine='openpyxl')
                                 excel_data = excel_buffer.getvalue()
@@ -7106,7 +7102,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                         )
                         
                         fig_box.update_layout(height=400, showlegend=False)
-                        st.plotly_chart(fig_box, use_container_width=True)
+                        st.plotly_chart(fig_box, width='stretch')
                     else:
                         st.info("Sem dados de preços disponíveis para análise")
                 else:

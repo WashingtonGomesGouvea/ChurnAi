@@ -7388,10 +7388,34 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                 if len(cnpjs_comuns) > 0:
                     df_precos = df_gralab[df_gralab['CNPJ_Normalizado'].isin(cnpjs_comuns)].copy()
                     
-                    # Converter preços para numérico
+                    # Converter preços para numérico (limpando strings como 'R$ 120,00')
+                    def _parse_preco_gralab(valor):
+                        if pd.isna(valor):
+                            return np.nan
+                        if isinstance(valor, (int, float, np.number)):
+                            return float(valor)
+                        texto = str(valor).strip()
+                        if not texto:
+                            return np.nan
+                        texto = texto.replace('R$', '').replace('r$', '')
+                        texto = texto.replace(' ', '')
+                        texto = texto.replace('.', '').replace(',', '.')
+                        try:
+                            return float(texto)
+                        except Exception:
+                            import re
+                            numeros = re.findall(r'\d+[.,]?\d*', str(valor))
+                            if numeros:
+                                numero = numeros[0].replace('.', '').replace(',', '.')
+                                try:
+                                    return float(numero)
+                                except Exception:
+                                    return np.nan
+                            return np.nan
+
                     for col in ['Preço CNH', 'Preço Concurso', 'Preço CLT']:
                         if col in df_precos.columns:
-                            df_precos[col] = pd.to_numeric(df_precos[col], errors='coerce')
+                            df_precos[col] = df_precos[col].apply(_parse_preco_gralab)
                     
                     # Estatísticas
                     col_s1, col_s2, col_s3 = st.columns(3)

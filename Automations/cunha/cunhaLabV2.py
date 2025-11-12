@@ -1831,6 +1831,43 @@ class LabScraperV2:
         wb.save(self.global_report_file)
         logging.info(f"Relatório global atualizado: {self.global_report_file}")
     
+    def verificar_churn_processado(self, data_str: str) -> bool:
+        """
+        Verifica se o churn já foi processado para uma determinada data
+        
+        Args:
+            data_str: Data no formato 'YYYY-MM-DD'
+            
+        Returns:
+            True se já foi processado, False caso contrário
+        """
+        churn_file = os.path.join(BASE_DIR, f"churn_{data_str}.xlsx")
+        return os.path.exists(churn_file)
+    
+    def marcar_pipeline_completo(self, data_str: str):
+        """
+        Cria arquivo de marcação indicando que o pipeline foi completamente executado
+        
+        Args:
+            data_str: Data no formato 'YYYY-MM-DD'
+        """
+        flag_file = os.path.join(BASE_DIR, f".pipeline_completo_{data_str}.flag")
+        with open(flag_file, 'w') as f:
+            f.write(f"Pipeline executado em: {datetime.now().isoformat()}\n")
+    
+    def verificar_pipeline_completo(self, data_str: str) -> bool:
+        """
+        Verifica se o pipeline já foi completamente executado para uma data
+        
+        Args:
+            data_str: Data no formato 'YYYY-MM-DD'
+            
+        Returns:
+            True se já foi executado, False caso contrário
+        """
+        flag_file = os.path.join(BASE_DIR, f".pipeline_completo_{data_str}.flag")
+        return os.path.exists(flag_file)
+    
     def run_pipeline(self, max_workers: int = 16):
         """
         Executa o pipeline completo
@@ -1841,17 +1878,17 @@ class LabScraperV2:
         today = datetime.now().strftime('%Y-%m-%d')
         daily_file = os.path.join(BASE_DIR, f"dados_{today}.csv")
         
-        # Verificar se já executou hoje
+        # ====== ETAPA 1: COLETAR/CARREGAR DADOS DO DIA ======
         if os.path.exists(daily_file):
             print(f"\n{'='*70}")
             print(f"✓ Arquivo do dia atual já existe!")
             print(f"{'='*70}")
             print(f"📁 Arquivo: {os.path.basename(daily_file)}")
             print(f"⏭️  Pulando coleta de dados...")
-            print(f"📊 Carregando dados existentes e atualizando relatórios...\n")
+            print(f"📊 Carregando dados existentes...\n")
             
             logging.info(f"Arquivo do dia atual já existe: {daily_file}")
-            logging.info("Pulando coleta de dados. Carregando dados existentes e atualizando relatórios...")
+            logging.info("Pulando coleta de dados. Carregando dados existentes...")
             
             try:
                 df = pd.read_csv(daily_file, encoding='utf-8-sig')
@@ -1870,16 +1907,47 @@ class LabScraperV2:
             print(f"📅 Data: {today}")
             print(f"🧵 Threads: {max_workers}\n")
             
-            logging.info(f"Iniciando pipeline com {max_workers} threads...")
+            logging.info(f"Iniciando coleta com {max_workers} threads...")
             df = self.coletar_todos_postos(max_workers=max_workers)
+            
+            print(f"✓ Coleta concluída: {len(df)} laboratórios encontrados")
+            print(f"✓ Arquivo salvo: {os.path.basename(daily_file)}\n")
         
-        # Processar churn (sempre compara com dia anterior)
+        # ====== ETAPA 2: VERIFICAR SE PROCESSAMENTO JÁ FOI FEITO ======
+        if self.verificar_pipeline_completo(today):
+            print(f"\n{'='*70}")
+            print(f"⚠️  Pipeline já foi completamente executado hoje!")
+            print(f"{'='*70}")
+            print(f"📅 Data: {today}")
+            print(f"✓ Churn já processado")
+            print(f"✓ Relatórios já gerados")
+            print(f"\n💡 Se deseja reprocessar, delete o arquivo:")
+            print(f"   .pipeline_completo_{today}.flag")
+            print(f"{'='*70}\n")
+            
+            logging.info(f"Pipeline já executado completamente para {today}. Pulando processamento.")
+            return
+        
+        # ====== ETAPA 3: PROCESSAR CHURN (COMPARAÇÃO COM DIA ANTERIOR) ======
         print("🔄 Processando churn (comparando com dia anterior)...")
-        df_novos, df_removidos = self.detectar_churn(df)
-        print(f"   ➕ Credenciamentos: {len(df_novos)}")
-        print(f"   ➖ Descredenciamentos: {len(df_removidos)}\n")
         
-        # Atualizar aba EntradaSaida (análise completa de todos os arquivos)
+        # Verificar se existe dia anterior
+        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        yesterday_file = os.path.join(BASE_DIR, f"dados_{yesterday}.csv")
+        
+        if not os.path.exists(yesterday_file):
+            print(f"   ⚠️  Não há dados do dia anterior ({yesterday}) para comparação")
+            print(f"   ℹ️  Este é provavelmente o primeiro dia de coleta\n")
+            logging.warning(f"Não há dados do dia anterior para comparação de churn.")
+            df_novos = pd.DataFrame()
+            df_removidos = pd.DataFrame()
+        else:
+            df_novos, df_removidos = self.detectar_churn(df)
+            print(f"   ➕ Credenciamentos: {len(df_novos)}")
+            print(f"   ➖ Descredenciamentos: {len(df_removidos)}")
+            print(f"   ✓ Arquivo churn_{today}.xlsx salvo\n")
+        
+        # ====== ETAPA 4: ATUALIZAR ANÁLISES E RELATÓRIOS ======
         print("📝 Atualizando aba EntradaSaida (apenas movimentações)...")
         try:
             total_mov, credenc, descredenc = self.atualizar_entrada_saida()
@@ -1888,21 +1956,27 @@ class LabScraperV2:
             print(f"   ✗ Erro ao atualizar EntradaSaida: {e}\n")
             logging.error(f"Erro ao atualizar EntradaSaida: {e}")
         
-        # Gerar/atualizar relatório global
         print("📊 Gerando/atualizando relatório global...")
         self.gerar_relatorio_global(df)
         print("   ✓ Relatório atualizado\n")
         
-        # Gerar resumo de credenciamentos (analisa todos os arquivos históricos)
         print("📈 Gerando resumo de credenciamentos...")
         self.gerar_resumo_credenciamentos()
         print("   ✓ Resumo gerado\n")
         
+        # ====== ETAPA 5: MARCAR PIPELINE COMO COMPLETO ======
+        self.marcar_pipeline_completo(today)
+        
         print(f"{'='*70}")
         print("✅ Pipeline concluído com sucesso!")
+        print(f"{'='*70}")
+        print(f"📅 Data: {today}")
+        print(f"📊 Total de laboratórios: {len(df)}")
+        print(f"➕ Credenciamentos: {len(df_novos)}")
+        print(f"➖ Descredenciamentos: {len(df_removidos)}")
         print(f"{'='*70}\n")
         
-        logging.info("Pipeline concluído.")
+        logging.info(f"Pipeline concluído com sucesso para {today}.")
 
 def main():
     scraper = LabScraperV2()
@@ -1912,12 +1986,15 @@ def main():
                        # Para operações I/O bound (requisições HTTP), pode usar mais threads (ex: 24-32)
     daemon_mode = False
     gerar_relatorio_apenas = False
+    force_reprocess = False
     
     for arg in sys.argv[1:]:
         if arg == '--daemon':
             daemon_mode = True
         elif arg == '--gerar-relatorio':
             gerar_relatorio_apenas = True
+        elif arg == '--force':
+            force_reprocess = True
         elif arg.startswith('--threads='):
             try:
                 max_workers = int(arg.split('=')[1])
@@ -1925,6 +2002,15 @@ def main():
             except ValueError:
                 logging.warning(f"Valor inválido para threads: {arg}. Usando padrão: 16")
                 max_workers = 16
+    
+    # Se --force foi usado, remover flag de pipeline completo
+    if force_reprocess:
+        today = datetime.now().strftime('%Y-%m-%d')
+        flag_file = os.path.join(BASE_DIR, f".pipeline_completo_{today}.flag")
+        if os.path.exists(flag_file):
+            os.remove(flag_file)
+            print(f"✓ Flag de pipeline completo removida. Reprocessando...\n")
+            logging.info(f"Flag de pipeline completo removida para {today}. Forçando reprocessamento.")
     
     if gerar_relatorio_apenas:
         # Gerar relatório a partir do CSV do dia atual

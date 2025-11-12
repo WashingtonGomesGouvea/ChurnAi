@@ -9,6 +9,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import os
+import time
 from typing import Optional, List, Dict, Any, Tuple
 from io import BytesIO
 from dataclasses import dataclass
@@ -210,6 +211,32 @@ def baixar_excel_gralab(force: bool = False) -> Optional[str]:
         if os.path.exists(arquivo_local):
             return arquivo_local
         return None
+
+def show_overlay_loader(title: str = "Carregando...", subtitle: str = "Por favor, aguarde enquanto processamos os dados."):
+    """
+    Função helper para criar o overlay loader facilmente.
+    
+    Args:
+        title: Título do loader
+        subtitle: Subtítulo/descrição do loader
+    
+    Returns:
+        placeholder que deve ser limpo com .empty() quando terminar
+    """
+    loader_placeholder = st.empty()
+    loader_placeholder.markdown(
+        f"""
+        <div class="overlay-loader">
+            <div class="overlay-loader__content">
+                <div class="overlay-loader__spinner"></div>
+                <div class="overlay-loader__title">{title}</div>
+                <div class="overlay-loader__subtitle">{subtitle}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    return loader_placeholder
 
 # Configuração da página
 st.set_page_config(
@@ -2062,7 +2089,7 @@ class ChartManager:
         
         # Verificar se temos dados diários reais de 2025
         if 'Dados_Diarios_2025' not in lab or pd.isna(lab['Dados_Diarios_2025']) or lab['Dados_Diarios_2025'] == '{}':
-            st.info("📊 Nenhum dado diário disponível para 2025. Use o gerador para atualizar os dados.")
+            st.info("📊 Nenhum dado diário disponível para 2025 para este laboratório.")
             return
         
         import json
@@ -2070,7 +2097,7 @@ class ChartManager:
             # Carregar dados diários reais
             dados_diarios = json.loads(lab['Dados_Diarios_2025'])
         except (json.JSONDecodeError, TypeError):
-            st.info("📊 Erro ao carregar dados diários. Use o gerador para atualizar os dados.")
+            st.info("📊 Erro ao processar dados diários para este laboratório.")
             return
         
         if not dados_diarios:
@@ -2181,7 +2208,7 @@ class ChartManager:
 
         # Verificar se temos dados diários reais de 2025
         if 'Dados_Diarios_2025' not in lab or pd.isna(lab['Dados_Diarios_2025']) or lab['Dados_Diarios_2025'] == '{}':
-            st.info("📊 Nenhum dado diário disponível para 2025. Use o gerador para atualizar os dados.")
+            st.info("📊 Nenhum dado diário disponível para 2025 para este laboratório.")
             return
 
         import json
@@ -2189,7 +2216,7 @@ class ChartManager:
             # Carregar dados diários reais
             dados_diarios = json.loads(lab['Dados_Diarios_2025'])
         except (json.JSONDecodeError, TypeError):
-            st.info("📊 Erro ao carregar dados diários. Use o gerador para atualizar os dados.")
+            st.info("📊 Erro ao processar dados diários para este laboratório.")
             return
 
         if not dados_diarios:
@@ -2312,14 +2339,14 @@ class ChartManager:
         
         # Verificar se temos dados semanais reais de 2025
         if 'Dados_Semanais_2025' not in lab or pd.isna(lab['Dados_Semanais_2025']) or lab['Dados_Semanais_2025'] == '{}':
-            st.info("📊 Nenhum dado semanal disponível para 2025. Use o gerador para atualizar os dados.")
+            st.info("📊 Nenhum dado semanal disponível para 2025 para este laboratório.")
             return
         
         import json
         try:
             dados_semanais = json.loads(lab['Dados_Semanais_2025'])
         except (json.JSONDecodeError, TypeError):
-            st.info("📊 Erro ao carregar dados semanais. Use o gerador para atualizar os dados.")
+            st.info("📊 Erro ao processar dados semanais para este laboratório.")
             return
         
         if not dados_semanais:
@@ -2432,7 +2459,7 @@ class ChartManager:
             
             # Verificar se temos dados semanais reais de 2025
             if 'Dados_Semanais_2025' not in lab or pd.isna(lab['Dados_Semanais_2025']) or lab['Dados_Semanais_2025'] == '{}':
-                st.info("📊 Nenhum dado semanal disponível para 2025. Use o gerador para atualizar os dados.")
+                st.info("📊 Nenhum dado semanal disponível para 2025 para este laboratório.")
                 return
             
             import json
@@ -2440,7 +2467,7 @@ class ChartManager:
                 # Carregar dados semanais reais
                 dados_semanais = json.loads(lab['Dados_Semanais_2025'])
             except (json.JSONDecodeError, TypeError):
-                st.info("📊 Erro ao carregar dados semanais. Use o gerador para atualizar os dados.")
+                st.info("📊 Erro ao processar dados semanais para este laboratório.")
                 return
             
             if not dados_semanais:
@@ -3457,7 +3484,7 @@ def main():
     try:
         df_raw = DataManager.carregar_dados_churn()
         if df_raw is None:
-            st.error("❌ Não foi possível carregar os dados. Execute o gerador de dados primeiro.")
+            st.error("❌ Não foi possível carregar os dados. Por favor, tente novamente mais tarde.")
             return
         df = DataManager.preparar_dados(df_raw)
         show_toast_once(f"✅ Dados carregados: {len(df):,} laboratórios", "dados_carregados")
@@ -3496,8 +3523,18 @@ def main():
     metrics = KPIManager.calcular_kpis(df_filtrado)
     # Botão de refresh
     if st.sidebar.button("🔄 Atualizar Dados", help="Limpar cache e recarregar dados"):
-        st.cache_data.clear()
-        st.toast("✅ Cache limpo! Os dados serão recarregados automaticamente.")
+        loader = show_overlay_loader(
+            "Atualizando dados...",
+            "Limpando cache e recarregando todas as informações. Isso pode levar alguns segundos."
+        )
+        try:
+            st.cache_data.clear()
+            st.toast("✅ Cache limpo! Os dados serão recarregados automaticamente.")
+            # Forçar recarregamento dos dados
+            time.sleep(0.5)  # Pequena pausa para usuário ver o loader
+            st.rerun()
+        finally:
+            loader.empty()
     # Seção de relatórios na sidebar
     st.sidebar.markdown("---")
     st.sidebar.markdown('<div class="sidebar-header" style="font-size: 1rem; font-weight: 600; color: var(--primary-color);">📅 Relatórios</div>', unsafe_allow_html=True)
@@ -3507,7 +3544,14 @@ def main():
         help="Selecione o tipo de relatório a gerar"
     )
     if st.sidebar.button("📊 Gerar Relatório", help="Gerar relatório automático"):
-        ReportManager.gerar_relatorio_automatico(df_filtrado, metrics, tipo_relatorio.lower())
+        loader = show_overlay_loader(
+            "Gerando relatório...",
+            f"Preparando seu relatório {tipo_relatorio.lower()}. Aguarde alguns instantes."
+        )
+        try:
+            ReportManager.gerar_relatorio_automatico(df_filtrado, metrics, tipo_relatorio.lower())
+        finally:
+            loader.empty()
    
     # ========================================
     # RENDERIZAÇÃO DA PÁGINA SELECIONADA - Atualizado com tabs
@@ -5437,7 +5481,14 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
             """, unsafe_allow_html=True)
             
             try:
-                dados_gralab = DataManager.carregar_dados_gralab()
+                loader = show_overlay_loader(
+                    "Carregando dados do Gralab...",
+                    "Buscando informações do concorrente. Isso pode levar alguns segundos."
+                )
+                try:
+                    dados_gralab = DataManager.carregar_dados_gralab()
+                finally:
+                    loader.empty()
                 
                 if dados_gralab and 'Dados Completos' in dados_gralab:
                     df_gralab = dados_gralab['Dados Completos']
@@ -6239,7 +6290,14 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
             st.subheader("📋 Lista de Laboratórios VIP")
          
             # Carregar dados VIP
-            df_vip = DataManager.carregar_dados_vip()
+            loader = show_overlay_loader(
+                "Carregando dados VIP...",
+                "Buscando lista de laboratórios VIP. Aguarde um momento."
+            )
+            try:
+                df_vip = DataManager.carregar_dados_vip()
+            finally:
+                loader.empty()
          
             if df_vip is not None and not df_vip.empty:
                 # Filtros
@@ -6512,7 +6570,14 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
             st.subheader("✏️ Editar Laboratório VIP")
          
             # Carregar dados VIP
-            df_vip = DataManager.carregar_dados_vip()
+            loader = show_overlay_loader(
+                "Carregando dados VIP...",
+                "Buscando lista de laboratórios VIP para edição."
+            )
+            try:
+                df_vip = DataManager.carregar_dados_vip()
+            finally:
+                loader.empty()
          
             if df_vip is not None and not df_vip.empty:
                 # Selecionar VIP para editar
@@ -6830,8 +6895,14 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
         """, unsafe_allow_html=True)
         
         # Carregar dados
-        with st.spinner("Carregando dados do Gralab (CunhaLab)..."):
+        loader = show_overlay_loader(
+            "Carregando dados do Gralab (CunhaLab)...",
+            "Sincronizando informações do concorrente. Isso pode levar alguns segundos."
+        )
+        try:
             dados_gralab = DataManager.carregar_dados_gralab()
+        finally:
+            loader.empty()
         
         if not dados_gralab or 'Dados Completos' not in dados_gralab:
             st.error("❌ Não foi possível carregar os dados do Gralab. Verifique a conexão com o SharePoint.")

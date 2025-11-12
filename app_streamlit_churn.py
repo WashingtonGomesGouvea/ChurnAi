@@ -4,6 +4,7 @@ Dashboard moderno e profissional para análise de retenção de laboratórios
 """
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
@@ -627,6 +628,38 @@ class DataManager:
         # Opcional: preservar a coluna antiga para auditoria
         if 'Status_Risco' in df.columns and 'Risco_Diario' in df.columns:
             df.rename(columns={'Status_Risco': 'Status_Risco_Legado'}, inplace=True)
+
+        # Normalizar colunas de recoletas
+        recoleta_cols = [c for c in df.columns if c.startswith('Recoletas_')]
+        for col in recoleta_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+        for col in ['Total_Recoletas_2024', 'Total_Recoletas_2025']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+
+        # Normalizar colunas de preço
+        price_cols = []
+        for cfg in PRICE_CATEGORIES.values():
+            prefix = cfg['prefix']
+            price_cols.extend([
+                f'Preco_{prefix}_Total',
+                f'Preco_{prefix}_Coleta',
+                f'Preco_{prefix}_Exame'
+            ])
+        for col in price_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        if 'Voucher_Commission' in df.columns:
+            df['Voucher_Commission'] = pd.to_numeric(df['Voucher_Commission'], errors='coerce')
+
+        if 'Data_Preco_Atualizacao' in df.columns:
+            df['Data_Preco_Atualizacao'] = pd.to_datetime(df['Data_Preco_Atualizacao'], errors='coerce', utc=True)
+            try:
+                df['Data_Preco_Atualizacao'] = df['Data_Preco_Atualizacao'].dt.tz_convert(TIMEZONE)
+            except Exception:
+                pass
+
         return df
     @staticmethod
     @st.cache_data(ttl=CACHE_TTL)
@@ -4585,6 +4618,97 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
+
+                            # Bloco de preços praticados
+                            def _formatar_preco_valor(valor):
+                                try:
+                                    if pd.notna(valor):
+                                        return f"R$ {float(valor):.2f}".replace('.', ',')
+                                except Exception:
+                                    pass
+                                return "N/A"
+
+                            price_labels = {
+                                'CLT': 'CLT',
+                                'CNH': 'CNH',
+                                'Civil_Service': 'Concurso Público',
+                                'Civil_Service50': 'Concurso Público (50)',
+                                'CLT_CNH': 'CLT / CNH',
+                                'Outros': 'Outros',
+                                'Outros50': 'Outros (50)'
+                            }
+
+                            price_cards = []
+                            possui_preco = False
+                            for key, cfg in PRICE_CATEGORIES.items():
+                                prefix = cfg['prefix']
+                                label = price_labels.get(prefix, prefix.replace('_', ' '))
+                                total = lab_info.get(f'Preco_{prefix}_Total', np.nan)
+                                coleta = lab_info.get(f'Preco_{prefix}_Coleta', np.nan)
+                                exame = lab_info.get(f'Preco_{prefix}_Exame', np.nan)
+
+                                possui_valores = any(pd.notna(v) for v in [total, coleta, exame])
+                                if not possui_valores:
+                                    continue
+
+                                possui_preco = True
+
+                                price_cards.append(
+                                    f"<div style=\"background: white; border-radius: 8px; padding: 1rem; "
+                                    f"box-shadow: 0 2px 6px rgba(0,0,0,0.08);\">"
+                                    f"<div style=\"font-size: 0.85rem; color: #6c757d; text-transform: uppercase; "
+                                    f"letter-spacing: 0.5px; margin-bottom: 0.6rem; font-weight: 700;\">"
+                                    f"{label}"
+                                    f"</div>"
+                                    f"<div style=\"display: flex; justify-content: space-between; font-size: 0.85rem; "
+                                    f"color: #6c757d; margin-bottom: 0.4rem;\">"
+                                    f"<span>Coleta</span>"
+                                    f"<strong style=\"color: #495057;\">{_formatar_preco_valor(coleta)}</strong>"
+                                    f"</div>"
+                                    f"<div style=\"display: flex; justify-content: space-between; font-size: 0.85rem; "
+                                    f"color: #6c757d; margin-bottom: 0.4rem;\">"
+                                    f"<span>Exame</span>"
+                                    f"<strong style=\"color: #495057;\">{_formatar_preco_valor(exame)}</strong>"
+                                    f"</div>"
+                                    f"<div style=\"display: flex; justify-content: space-between; font-size: 0.85rem; "
+                                    f"color: #6c757d;\">"
+                                    f"<span>Total</span>"
+                                    f"<strong style=\"color: #495057;\">{_formatar_preco_valor(total)}</strong>"
+                                    f"</div>"
+                                    f"</div>"
+                                )
+
+                            if possui_preco or pd.notna(lab_info.get('Voucher_Commission', np.nan)):
+                                voucher_valor = lab_info.get('Voucher_Commission', np.nan)
+                                voucher_fmt = f"{float(voucher_valor):.0f}%" if pd.notna(voucher_valor) else "N/A"
+                                data_preco = lab_info.get('Data_Preco_Atualizacao')
+                                if isinstance(data_preco, pd.Timestamp):
+                                    data_preco_fmt = data_preco.tz_localize(None).strftime("%d/%m/%Y %H:%M")
+                                else:
+                                    data_preco_fmt = "N/A"
+
+                                if price_cards:
+                                    cards_html = "".join(price_cards)
+                                else:
+                                    cards_html = (
+                                        "<div style=\"background: white; border-radius: 8px; padding: 1rem; "
+                                        "color: #6c757d; text-align: center;\">Nenhum preço cadastrado.</div>"
+                                    )
+
+                                st.markdown(f"""
+                                    <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #0d6efd;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                                            <div style="font-size: 0.9rem; color: #0d6efd; font-weight: 700; text-transform: uppercase;">Tabela de Preços</div>
+                                            <div style="font-size: 0.8rem; color: #6c757d;">
+                                                Atualizado em <strong>{data_preco_fmt}</strong> • Voucher: <strong>{voucher_fmt}</strong>
+                                            </div>
+                                        </div>
+                                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem;">
+                                            {cards_html}
+                                        </div>
+                                    </div>
+                                """, unsafe_allow_html=True)
+
                     # Informações VIP se disponível
                     if info_vip:
                         st.markdown(f"""

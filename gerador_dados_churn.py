@@ -8,6 +8,7 @@ from bson import ObjectId
 from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
+import json
 from typing import Dict, List, Optional, Tuple, Any
 try:
     import tomllib  # Python 3.11+
@@ -63,7 +64,9 @@ def get_collections(db) -> Dict[str, Any]:
     return {
         "gatherings": db["gatherings"],
         "laboratories": db["laboratories"],
-        "representatives": db["representatives"]
+        "representatives": db["representatives"],
+        "chainofcustodies": db["chainofcustodies"],
+        "prices": db["prices"]
     }
 
 def atualizar_csv_incremental(arquivo_path: str, novos_dados_df: pd.DataFrame, chave_id: str = '_id') -> None:
@@ -227,7 +230,157 @@ def extrair_representatives():
     else:
         logger.warning("Nenhum representative encontrado")
 
-def carregar_dados_csv() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+
+def extrair_chainofcustodies():
+    """Extrai chain of custodies com merge incremental."""
+    logger.info("Iniciando extração de chain of custodies...")
+
+    db = connect_mongodb()
+    if db is None:
+        return
+
+    collections = get_collections(db)
+
+    cursor = collections["chainofcustodies"].find({}, {
+        "_id": 1,
+        "createdAt": 1,
+        "updatedAt": 1,
+        "analysisStatus": 1
+    })
+
+    def _extract_recollection_status(analysis: Any) -> bool:
+        if isinstance(analysis, dict):
+            recol = analysis.get('recollection', {})
+            if isinstance(recol, dict):
+                status = recol.get('status')
+                if isinstance(status, bool):
+                    return status
+                if isinstance(status, (int, float)):
+                    return bool(status)
+            status_flag = analysis.get('isRecollection')
+            if isinstance(status_flag, bool):
+                return status_flag
+        return False
+
+    chain_docs = []
+    for doc in cursor:
+        if doc is None:
+            continue
+        chain_docs.append({
+            '_id': str(doc.get('_id')),
+            'createdAt': doc.get('createdAt'),
+            'updatedAt': doc.get('updatedAt'),
+            'is_recollection': _extract_recollection_status(doc.get('analysisStatus'))
+        })
+
+    logger.info(f"Encontradas {len(chain_docs)} chain of custodies")
+
+    if chain_docs:
+        df_chain = pd.DataFrame(chain_docs)
+        df_chain['_id'] = df_chain['_id'].astype(str)
+        if 'createdAt' in df_chain.columns:
+            df_chain['createdAt'] = pd.to_datetime(df_chain['createdAt'], errors='coerce', utc=True)
+        if 'updatedAt' in df_chain.columns:
+            df_chain['updatedAt'] = pd.to_datetime(df_chain['updatedAt'], errors='coerce', utc=True)
+        df_chain['is_recollection'] = df_chain['is_recollection'].fillna(False).astype(bool)
+
+        arquivo_path = os.path.join(OUTPUT_DIR, CHAIN_OF_CUSTODIES_FILE)
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        atualizar_csv_incremental(arquivo_path, df_chain, '_id')
+    else:
+        logger.warning("Nenhuma chain of custody encontrada")
+
+def extrair_prices():
+    """Extrai preços por laboratório com merge incremental."""
+    logger.info("Iniciando extração de prices...")
+
+    db = connect_mongodb()
+    if db is None:
+        return
+
+    collections = get_collections(db)
+
+    cursor = collections["prices"].find({}, {
+        "_id": 1,
+        "_laboratory": 1,
+        "active": 1,
+        "voucherCommission": 1,
+        "createdAt": 1,
+        "updatedAt": 1,
+        **{key: 1 for key in PRICE_CATEGORIES.keys()}
+    })
+    prices_docs = list(cursor)
+
+    logger.info(f"Encontrados {len(prices_docs)} registros de prices")
+
+    if prices_docs:
+        df_prices = pd.DataFrame(prices_docs)
+        df_prices['_id'] = df_prices['_id'].astype(str)
+        if '_laboratory' in df_prices.columns:
+            df_prices['_laboratory'] = df_prices['_laboratory'].astype(str)
+
+        if 'active' in df_prices.columns:
+            df_prices['active'] = df_prices['active'].apply(
+                lambda x: str(x).strip().lower() in ('true', '1', 'yes') if pd.notna(x) else False
+            )
+        else:
+            df_prices['active'] = False
+
+        for col in ['createdAt', 'updatedAt']:
+            if col in df_prices.columns:
+                df_prices[col] = pd.to_datetime(df_prices[col], errors='coerce', utc=True)
+
+        def _to_float_local(value: Any) -> float:
+            if value is None or (isinstance(value, float) and np.isnan(value)):
+                return np.nan
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return np.nan
+
+        def _price_total(value: Any) -> float:
+            if isinstance(value, dict):
+                return _to_float_local(value.get('price'))
+            return np.nan
+
+        def _price_gathering(value: Any) -> float:
+            if isinstance(value, dict):
+                fixed = value.get('fixed')
+                if isinstance(fixed, dict):
+                    return _to_float_local(fixed.get('gathering'))
+            return np.nan
+
+        def _price_exam(value: Any) -> float:
+            if isinstance(value, dict):
+                fixed = value.get('fixed')
+                if isinstance(fixed, dict):
+                    return _to_float_local(fixed.get('exam'))
+            return np.nan
+
+        for price_key, cfg in PRICE_CATEGORIES.items():
+            if price_key in df_prices.columns:
+                prefix = cfg['prefix']
+                df_prices[f'Preco_{prefix}_Total'] = df_prices[price_key].apply(_price_total)
+                df_prices[f'Preco_{prefix}_Coleta'] = df_prices[price_key].apply(_price_gathering)
+                df_prices[f'Preco_{prefix}_Exame'] = df_prices[price_key].apply(_price_exam)
+
+        # Converter voucher
+        if 'voucherCommission' in df_prices.columns:
+            df_prices['voucherCommission'] = pd.to_numeric(df_prices['voucherCommission'], errors='coerce')
+        else:
+            df_prices['voucherCommission'] = np.nan
+
+        cols_to_drop = [key for key in PRICE_CATEGORIES.keys() if key in df_prices.columns]
+        if cols_to_drop:
+            df_prices = df_prices.drop(columns=cols_to_drop)
+
+        arquivo_path = os.path.join(OUTPUT_DIR, PRICES_FILE)
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        atualizar_csv_incremental(arquivo_path, df_prices, '_id')
+    else:
+        logger.warning("Nenhum price encontrado")
+
+def carregar_dados_csv() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Carrega dados dos CSVs gerados."""
     try:
         # Carregar gatherings 2024
@@ -265,18 +418,57 @@ def carregar_dados_csv() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         else:
             df_representatives = pd.DataFrame()
             logger.warning("Arquivo representatives não encontrado")
+
+        # Carregar chain of custodies
+        arquivo_chain = os.path.join(OUTPUT_DIR, CHAIN_OF_CUSTODIES_FILE)
+        if os.path.exists(arquivo_chain):
+            df_chain = pd.read_csv(arquivo_chain, encoding=ENCODING, low_memory=False)
+            logger.info(f"Chain of custodies carregadas: {len(df_chain)} registros")
+        else:
+            df_chain = pd.DataFrame()
+            logger.warning("Arquivo chain of custodies não encontrado")
+
+        # Carregar prices
+        arquivo_prices = os.path.join(OUTPUT_DIR, PRICES_FILE)
+        if os.path.exists(arquivo_prices):
+            df_prices = pd.read_csv(arquivo_prices, encoding=ENCODING, low_memory=False)
+            logger.info(f"Prices carregados: {len(df_prices)} registros")
+        else:
+            df_prices = pd.DataFrame()
+            logger.warning("Arquivo prices não encontrado")
         
-        return df_gatherings_2024, df_gatherings_2025, df_laboratories, df_representatives
+        return (
+            df_gatherings_2024,
+            df_gatherings_2025,
+            df_laboratories,
+            df_representatives,
+            df_chain,
+            df_prices
+        )
         
     except Exception as e:
         logger.error(f"Erro ao carregar dados CSV: {e}")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame()
+        )
 
 def calcular_metricas_churn():
     """Calcula métricas de churn com agregações vetorizadas (rápidas)."""
     logger.info("Iniciando cálculo de métricas de churn...")
     
-    df_gatherings_2024, df_gatherings_2025, df_laboratories, df_representatives = carregar_dados_csv()
+    (
+        df_gatherings_2024,
+        df_gatherings_2025,
+        df_laboratories,
+        df_representatives,
+        df_chainofcustodies,
+        df_prices
+    ) = carregar_dados_csv()
     
     if df_laboratories.empty:
         logger.warning("Nenhum laboratory encontrado para análise")
@@ -286,6 +478,34 @@ def calcular_metricas_churn():
     def to_str_series(s: pd.Series) -> pd.Series:
         return s.astype(str).fillna("") if s is not None and len(s) else pd.Series(dtype=str)
 
+    def parse_json_safe(value: Any) -> Any:
+        if isinstance(value, (dict, list)):
+            return value
+        if value is None or (isinstance(value, float) and np.isnan(value)):
+            return {}
+        if isinstance(value, str):
+            txt = value.strip()
+            if not txt or txt.lower() == 'nan':
+                return {}
+            try:
+                return json.loads(txt)
+            except json.JSONDecodeError:
+                try:
+                    txt_norm = txt.replace("'", '"')
+                    return json.loads(txt_norm)
+                except Exception:
+                    logger.debug(f"Falha ao converter JSON: {txt[:120]}")
+                    return {}
+        return {}
+
+    def to_float_safe(value: Any) -> float:
+        if value is None or (isinstance(value, float) and np.isnan(value)):
+            return np.nan
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return np.nan
+
     if '_id' in df_laboratories.columns:
         df_laboratories['_id'] = to_str_series(df_laboratories['_id'])
     if '_representative' in df_laboratories.columns:
@@ -294,38 +514,100 @@ def calcular_metricas_churn():
     if not df_representatives.empty and '_id' in df_representatives.columns:
         df_representatives['_id'] = to_str_series(df_representatives['_id'])
 
+    # Mapear recoletas por chain of custody
+    chain_recollection_map: Dict[str, bool] = {}
+    if not df_chainofcustodies.empty and '_id' in df_chainofcustodies.columns:
+        df_chain = df_chainofcustodies.copy()
+        df_chain['_id'] = to_str_series(df_chain['_id'])
+        if 'is_recollection' in df_chain.columns:
+            df_chain['is_recollection'] = df_chain['is_recollection'].fillna(False).astype(bool)
+        elif 'isRecollection' in df_chain.columns:
+            df_chain['is_recollection'] = df_chain['isRecollection'].fillna(False).astype(bool)
+        else:
+            if 'analysisStatus' in df_chain.columns:
+                df_chain['analysisStatus'] = df_chain['analysisStatus'].apply(parse_json_safe)
+            else:
+                df_chain['analysisStatus'] = [{} for _ in range(len(df_chain))]
+
+            def _extract_recollection_status(analysis: Any) -> bool:
+                if isinstance(analysis, dict):
+                    recol = analysis.get('recollection', {})
+                    if isinstance(recol, dict):
+                        status = recol.get('status')
+                        if isinstance(status, bool):
+                            return status
+                        if isinstance(status, (int, float)):
+                            return bool(status)
+                    status_flag = analysis.get('isRecollection')
+                    if isinstance(status_flag, bool):
+                        return status_flag
+                return False
+
+            df_chain['is_recollection'] = df_chain['analysisStatus'].apply(_extract_recollection_status)
+
+        df_chain['is_recollection'] = df_chain['is_recollection'].fillna(False).astype(bool)
+        chain_recollection_map = df_chain.set_index('_id')['is_recollection'].to_dict()
+
     # Preparar gatherings 2024
     meses_nomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
     mes_limite_2025 = min(datetime.now().month, 12)
 
+    df_gatherings_2024_valid = pd.DataFrame()
+    df_gatherings_2024_recoleta = pd.DataFrame()
     if not df_gatherings_2024.empty:
         df_gatherings_2024 = df_gatherings_2024.copy()
         if '_laboratory' in df_gatherings_2024.columns:
             df_gatherings_2024['_laboratory'] = to_str_series(df_gatherings_2024['_laboratory'])
+        if '_chainOfCustody' in df_gatherings_2024.columns:
+            df_gatherings_2024['_chainOfCustody'] = to_str_series(df_gatherings_2024['_chainOfCustody'])
+        else:
+            df_gatherings_2024['_chainOfCustody'] = ''
         df_gatherings_2024['createdAt'] = pd.to_datetime(df_gatherings_2024.get('createdAt'), errors='coerce', utc=True)
         df_gatherings_2024['mes'] = df_gatherings_2024['createdAt'].dt.month
+        df_gatherings_2024['is_recollection'] = df_gatherings_2024['_chainOfCustody'].map(chain_recollection_map).fillna(False).astype(bool)
 
-        total_2024 = df_gatherings_2024.groupby('_laboratory').size().rename('Total_Coletas_2024')
-        m2024 = df_gatherings_2024.groupby(['_laboratory', 'mes']).size().unstack(fill_value=0)
+        df_gatherings_2024_valid = df_gatherings_2024[~df_gatherings_2024['is_recollection']].copy()
+        df_gatherings_2024_recoleta = df_gatherings_2024[df_gatherings_2024['is_recollection']].copy()
+
+        total_2024 = df_gatherings_2024_valid.groupby('_laboratory').size().rename('Total_Coletas_2024')
+        m2024 = df_gatherings_2024_valid.groupby(['_laboratory', 'mes']).size().unstack(fill_value=0)
+        total_recoletas_2024 = df_gatherings_2024_recoleta.groupby('_laboratory').size().rename('Total_Recoletas_2024')
+        m2024_recoleta = df_gatherings_2024_recoleta.groupby(['_laboratory', 'mes']).size().unstack(fill_value=0)
     else:
         total_2024 = pd.Series(dtype=int)
         m2024 = pd.DataFrame()
+        total_recoletas_2024 = pd.Series(dtype=int)
+        m2024_recoleta = pd.DataFrame()
 
     # Preparar gatherings 2025
+    df_gatherings_2025_valid = pd.DataFrame()
+    df_gatherings_2025_recoleta = pd.DataFrame()
     if not df_gatherings_2025.empty:
         df_gatherings_2025 = df_gatherings_2025.copy()
         if '_laboratory' in df_gatherings_2025.columns:
             df_gatherings_2025['_laboratory'] = to_str_series(df_gatherings_2025['_laboratory'])
+        if '_chainOfCustody' in df_gatherings_2025.columns:
+            df_gatherings_2025['_chainOfCustody'] = to_str_series(df_gatherings_2025['_chainOfCustody'])
+        else:
+            df_gatherings_2025['_chainOfCustody'] = ''
         df_gatherings_2025['createdAt'] = pd.to_datetime(df_gatherings_2025.get('createdAt'), errors='coerce', utc=True)
         df_gatherings_2025['mes'] = df_gatherings_2025['createdAt'].dt.month
+        df_gatherings_2025['is_recollection'] = df_gatherings_2025['_chainOfCustody'].map(chain_recollection_map).fillna(False).astype(bool)
 
-        total_2025 = df_gatherings_2025.groupby('_laboratory').size().rename('Total_Coletas_2025')
-        ultima_2025 = df_gatherings_2025.groupby('_laboratory')['createdAt'].max().rename('Data_Ultima_Coleta')
-        m2025 = df_gatherings_2025.groupby(['_laboratory', 'mes']).size().unstack(fill_value=0)
+        df_gatherings_2025_valid = df_gatherings_2025[~df_gatherings_2025['is_recollection']].copy()
+        df_gatherings_2025_recoleta = df_gatherings_2025[df_gatherings_2025['is_recollection']].copy()
+
+        total_2025 = df_gatherings_2025_valid.groupby('_laboratory').size().rename('Total_Coletas_2025')
+        ultima_2025 = df_gatherings_2025_valid.groupby('_laboratory')['createdAt'].max().rename('Data_Ultima_Coleta')
+        m2025 = df_gatherings_2025_valid.groupby(['_laboratory', 'mes']).size().unstack(fill_value=0)
+        total_recoletas_2025 = df_gatherings_2025_recoleta.groupby('_laboratory').size().rename('Total_Recoletas_2025')
+        m2025_recoleta = df_gatherings_2025_recoleta.groupby(['_laboratory', 'mes']).size().unstack(fill_value=0)
     else:
         total_2025 = pd.Series(dtype=int)
         ultima_2025 = pd.Series(dtype='datetime64[ns]')
         m2025 = pd.DataFrame()
+        total_recoletas_2025 = pd.Series(dtype=int)
+        m2025_recoleta = pd.DataFrame()
 
     # Base: um por laboratório
     base = df_laboratories[['_id', 'cnpj', 'legalName', 'fantasyName']].copy() if all(k in df_laboratories.columns for k in ['_id','cnpj','legalName','fantasyName']) else df_laboratories.copy()
@@ -338,19 +620,121 @@ def calcular_metricas_churn():
     for mes in range(1, 13):
         col = f'N_Coletas_{meses_nomes[mes-1]}_24'
         base[col] = m2024.get(mes, pd.Series(0, index=base.index)).reindex(base.index).fillna(0).astype(int)
+        col_reco = f'Recoletas_{meses_nomes[mes-1]}_24'
+        base[col_reco] = m2024_recoleta.get(mes, pd.Series(0, index=base.index)).reindex(base.index).fillna(0).astype(int)
 
     # Meses 2025 (até mês atual)
     for mes in range(1, mes_limite_2025 + 1):
         col = f'N_Coletas_{meses_nomes[mes-1]}_25'
         base[col] = m2025.get(mes, pd.Series(0, index=base.index)).reindex(base.index).fillna(0).astype(int)
+        col_reco = f'Recoletas_{meses_nomes[mes-1]}_25'
+        base[col_reco] = m2025_recoleta.get(mes, pd.Series(0, index=base.index)).reindex(base.index).fillna(0).astype(int)
 
     # Totais e últimas datas
     base['Total_Coletas_2024'] = total_2024.reindex(base.index).fillna(0).astype(int)
     base['Total_Coletas_2025'] = total_2025.reindex(base.index).fillna(0).astype(int)
+    base['Total_Recoletas_2024'] = total_recoletas_2024.reindex(base.index).fillna(0).astype(int)
+    base['Total_Recoletas_2025'] = total_recoletas_2025.reindex(base.index).fillna(0).astype(int)
     base['Data_Ultima_Coleta'] = ultima_2025.reindex(base.index)
 
+    # Preços por laboratório
+    price_update_series = pd.Series(dtype='datetime64[ns]')
+    voucher_series = pd.Series(dtype=float)
+    if not df_prices.empty:
+        df_prices_proc = df_prices.copy()
+        if '_laboratory' in df_prices_proc.columns:
+            df_prices_proc['_laboratory'] = to_str_series(df_prices_proc['_laboratory'])
+        else:
+            df_prices_proc['_laboratory'] = ''
+
+        if 'active' in df_prices_proc.columns:
+            df_prices_proc['active'] = df_prices_proc['active'].apply(
+                lambda x: str(x).strip().lower() in ('true', '1', 'yes') if pd.notna(x) else False
+            )
+        else:
+            df_prices_proc['active'] = False
+
+        for col in ['createdAt', 'updatedAt']:
+            if col in df_prices_proc.columns:
+                df_prices_proc[col] = pd.to_datetime(df_prices_proc[col], errors='coerce', utc=True)
+            else:
+                df_prices_proc[col] = pd.NaT
+
+        df_prices_proc['sort_date'] = df_prices_proc['updatedAt'].combine_first(df_prices_proc['createdAt'])
+        df_prices_proc = df_prices_proc.sort_values(
+            by=['_laboratory', 'active', 'sort_date'],
+            ascending=[True, False, False]
+        )
+        df_prices_latest = df_prices_proc.drop_duplicates(subset=['_laboratory'], keep='first')
+
+        price_records = []
+        for _, row in df_prices_latest.iterrows():
+            lab_id = row['_laboratory']
+            if not lab_id:
+                continue
+
+            record = {
+                '_id': lab_id,
+                'Voucher_Commission': to_float_safe(row.get('voucherCommission')),
+                'Data_Preco_Atualizacao': row.get('sort_date')
+            }
+
+            for price_key, cfg in PRICE_CATEGORIES.items():
+                prefix = cfg['prefix']
+                total_col = f'Preco_{prefix}_Total'
+                coleta_col = f'Preco_{prefix}_Coleta'
+                exame_col = f'Preco_{prefix}_Exame'
+
+                if total_col in row.index or coleta_col in row.index or exame_col in row.index:
+                    total_price = to_float_safe(row.get(total_col))
+                    gathering_price = to_float_safe(row.get(coleta_col))
+                    exam_price = to_float_safe(row.get(exame_col))
+                else:
+                    cat_data = parse_json_safe(row.get(price_key))
+                    fixed_data = cat_data.get('fixed') if isinstance(cat_data, dict) else {}
+                    total_price = to_float_safe(cat_data.get('price')) if isinstance(cat_data, dict) else np.nan
+                    gathering_price = to_float_safe(fixed_data.get('gathering')) if isinstance(fixed_data, dict) else np.nan
+                    exam_price = to_float_safe(fixed_data.get('exam')) if isinstance(fixed_data, dict) else np.nan
+
+                record[f'Preco_{prefix}_Total'] = total_price
+                record[f'Preco_{prefix}_Coleta'] = gathering_price
+                record[f'Preco_{prefix}_Exame'] = exam_price
+
+            price_records.append(record)
+
+        if price_records:
+            df_price_flat = pd.DataFrame(price_records).set_index('_id')
+            price_update_series = df_price_flat.get('Data_Preco_Atualizacao', pd.Series(dtype='datetime64[ns]'))
+            voucher_series = df_price_flat.get('Voucher_Commission', pd.Series(dtype=float))
+            for price_key, cfg in PRICE_CATEGORIES.items():
+                prefix = cfg['prefix']
+                for suffix in ['Total', 'Coleta', 'Exame']:
+                    col_name = f'Preco_{prefix}_{suffix}'
+                    base[col_name] = df_price_flat.get(col_name, pd.Series(dtype=float)).reindex(base.index)
+        else:
+            for price_key, cfg in PRICE_CATEGORIES.items():
+                prefix = cfg['prefix']
+                for suffix in ['Total', 'Coleta', 'Exame']:
+                    col_name = f'Preco_{prefix}_{suffix}'
+                    base[col_name] = np.nan
+    else:
+        for price_key, cfg in PRICE_CATEGORIES.items():
+            prefix = cfg['prefix']
+            for suffix in ['Total', 'Coleta', 'Exame']:
+                col_name = f'Preco_{prefix}_{suffix}'
+                base[col_name] = np.nan
+
+    if not price_update_series.empty:
+        base['Data_Preco_Atualizacao'] = price_update_series.reindex(base.index)
+    else:
+        base['Data_Preco_Atualizacao'] = pd.NaT
+
+    if not voucher_series.empty:
+        base['Voucher_Commission'] = voucher_series.reindex(base.index)
+    else:
+        base['Voucher_Commission'] = np.nan
+
     # Agregação de dados diários para 2025 (para gráficos detalhados)
-    import json
     def agregar_dados_diarios_2025(df_gatherings_2025, base_index):
         """Agrega dados de coletas por dia para cada laboratório em 2025."""
         if df_gatherings_2025.empty:
@@ -398,7 +782,7 @@ def calcular_metricas_churn():
         return resultado
 
     # Adicionar coluna com dados diários de 2025
-    base['Dados_Diarios_2025'] = agregar_dados_diarios_2025(df_gatherings_2025, base.index)
+    base['Dados_Diarios_2025'] = agregar_dados_diarios_2025(df_gatherings_2025_valid, base.index)
 
     # Agregação de dados por dia da semana para 2025 (para gráfico semanal)
     def agregar_dados_semanais_2025(df_gatherings_2025, base_index):
@@ -450,7 +834,7 @@ def calcular_metricas_churn():
         return resultado
 
     # Adicionar coluna com dados semanais de 2025
-    base['Dados_Semanais_2025'] = agregar_dados_semanais_2025(df_gatherings_2025, base.index)
+    base['Dados_Semanais_2025'] = agregar_dados_semanais_2025(df_gatherings_2025_valid, base.index)
 
     # Maior mês 2024 e 2025
     if not m2024.empty:
@@ -535,7 +919,6 @@ def calcular_metricas_churn():
 
     # Estado e Cidade - extrair da coluna 'address' que contém dados JSON
     import re
-    import json
 
     def extrair_estado_cidade_json(address_str):
         """Extrai estado e cidade da string JSON de endereço."""
@@ -624,7 +1007,7 @@ def calcular_metricas_churn():
         return float(mm7), float(mm30)
 
     frames_gatherings = []
-    for df_src in (df_gatherings_2024, df_gatherings_2025):
+    for df_src in (df_gatherings_2024_valid, df_gatherings_2025_valid):
         if not df_src.empty and all(col in df_src.columns for col in ['_laboratory', 'createdAt']):
             frames_gatherings.append(df_src[['_laboratory', 'createdAt']].copy())
 
@@ -703,19 +1086,39 @@ def calcular_metricas_churn():
     ]
     cols_2024 = [f'N_Coletas_{m}_24' for m in meses_nomes]
     cols_2025 = [f'N_Coletas_{m}_25' for m in meses_nomes[:mes_limite_2025]]
+    cols_recoletas_2024 = [f'Recoletas_{m}_24' for m in meses_nomes]
+    cols_recoletas_2025 = [f'Recoletas_{m}_25' for m in meses_nomes[:mes_limite_2025]]
+    cols_precos = []
+    for price_key, cfg in PRICE_CATEGORIES.items():
+        prefix = cfg['prefix']
+        cols_precos.extend([
+            f'Preco_{prefix}_Total',
+            f'Preco_{prefix}_Coleta',
+            f'Preco_{prefix}_Exame'
+        ])
+
     cols_fim = [
         'MM7_BR','MM30_BR','MM7_UF','MM30_UF','MM7_CIDADE','MM30_CIDADE',
         'Data_Ultima_Coleta','Dias_Sem_Coleta','Media_Coletas_Mensal_2024','Media_Coletas_Mensal_2025',
         'Variacao_Percentual','Tendencia','Status_Risco','Motivo_Risco','Data_Analise',
-        'Total_Coletas_2024','Total_Coletas_2025','Dados_Diarios_2025','Dados_Semanais_2025'
+        'Total_Coletas_2024','Total_Coletas_2025','Total_Recoletas_2024','Total_Recoletas_2025',
+        'Voucher_Commission','Data_Preco_Atualizacao','Dados_Diarios_2025','Dados_Semanais_2025'
     ]
 
     # Garantir colunas existentes
-    for c in cols_inicio + cols_2024 + cols_2025 + cols_fim:
+    for c in cols_inicio + cols_2024 + cols_recoletas_2024 + cols_2025 + cols_recoletas_2025 + cols_precos + cols_fim:
         if c not in base.columns:
             base[c] = '' if c in ['CNPJ_PCL','Razao_Social_PCL','Nome_Fantasia_PCL','Estado','Cidade','Representante_Nome','Representante_ID','Mes_Historico','Tendencia','Status_Risco','Motivo_Risco'] else 0
 
-    df_churn = base[cols_inicio + cols_2024 + cols_2025 + cols_fim].reset_index(drop=False)
+    df_churn = base[
+        cols_inicio +
+        cols_2024 +
+        cols_recoletas_2024 +
+        cols_2025 +
+        cols_recoletas_2025 +
+        cols_precos +
+        cols_fim
+    ].reset_index(drop=False)
     logger.info(f"Análise de churn concluída: {len(df_churn)} laboratórios processados")
     
     if df_churn.empty:
@@ -776,6 +1179,8 @@ def executar_extracoes():
     extrair_gatherings_2025()
     extrair_laboratories()
     extrair_representatives()
+    extrair_chainofcustodies()
+    extrair_prices()
     
     # Calcular métricas de churn
     calcular_metricas_churn()

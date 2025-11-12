@@ -49,6 +49,8 @@ GATHERINGS_2024_FILE = "gatherings2024.csv"
 GATHERINGS_2025_FILE = "gatherings2025.csv"
 LABORATORIES_FILE = "laboratories.csv"
 REPRESENTATIVES_FILE = "representatives.csv"
+CHAIN_OF_CUSTODIES_FILE = "chainofcustodies.csv"
+PRICES_FILE = "prices.csv"
 CHURN_ANALYSIS_FILE = "churn_analysis_latest.parquet"
 
 # Critérios de churn
@@ -91,7 +93,9 @@ ARQUIVOS_PRESERVAR = ['churn_analysis_latest.parquet',
                       'gatherings2024.csv',
                       'gatherings2025.csv',
                       'laboratories.csv',
-                      'representatives.csv']  # Arquivos que nunca devem ser removidos
+                      'representatives.csv',
+                      'chainofcustodies.csv',
+                      'prices.csv']  # Arquivos que nunca devem ser removidos
 
 # ========================================
 # DICIONÁRIO DE TRADUÇÕES PARA CHURN
@@ -118,6 +122,17 @@ CATEGORIAS_RISCO = {
     'Médio Risco': ['Médio'],
     'Baixo Risco': ['Baixo'],
     'Inativo': ['Inativo']
+}
+
+# Categorias de preços por laboratório
+PRICE_CATEGORIES = {
+    'clt': {'prefix': 'CLT'},
+    'cnh': {'prefix': 'CNH'},
+    'civilService': {'prefix': 'Civil_Service'},
+    'civilServiceAnalysis50': {'prefix': 'Civil_Service50'},
+    'cltCnh': {'prefix': 'CLT_CNH'},
+    'other': {'prefix': 'Outros'},
+    'otherAnalysis50': {'prefix': 'Outros50'}
 }
 
 # Estados brasileiros para filtros

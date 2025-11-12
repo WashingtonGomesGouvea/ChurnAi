@@ -53,6 +53,17 @@ CHAIN_OF_CUSTODIES_FILE = "chainofcustodies.csv"
 PRICES_FILE = "prices.csv"
 CHURN_ANALYSIS_FILE = "churn_analysis_latest.parquet"
 
+# Caminhos padrão no SharePoint (ajustáveis via secrets)
+SHAREPOINT_CHURN_FOLDER = os.getenv('SHAREPOINT_CHURN_FOLDER', "Data Analysis/Churn PCLs")
+CHAIN_OF_CUSTODIES_REMOTE_PATH = os.getenv(
+    'CHAIN_OF_CUSTODIES_REMOTE_PATH',
+    f"{SHAREPOINT_CHURN_FOLDER}/{CHAIN_OF_CUSTODIES_FILE}"
+)
+PRICES_REMOTE_PATH = os.getenv(
+    'PRICES_REMOTE_PATH',
+    f"{SHAREPOINT_CHURN_FOLDER}/{PRICES_FILE}"
+)
+
 # Critérios de churn
 DIAS_INATIVO = int(os.getenv('DIAS_INATIVO', 90))  # Sem coletas = Inativo
 DIAS_RISCO_ALTO = int(os.getenv('DIAS_RISCO_ALTO', 60))  # Alto risco

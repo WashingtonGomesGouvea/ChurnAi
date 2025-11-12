@@ -637,16 +637,46 @@ class DataManager:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
 
-        # Normalizar colunas de preço
-        price_cols = []
+        # Garantir colunas de preço mesmo quando não presentes no arquivo (fallback SharePoint)
+        price_cols_expected: List[str] = []
+        price_prefixes: List[str] = []
         for cfg in PRICE_CATEGORIES.values():
             prefix = cfg['prefix']
-            price_cols.extend([
+            price_prefixes.append(prefix)
+            price_cols_expected.extend([
                 f'Preco_{prefix}_Total',
                 f'Preco_{prefix}_Coleta',
                 f'Preco_{prefix}_Exame'
             ])
-        for col in price_cols:
+        extra_price_cols = ['Voucher_Commission', 'Data_Preco_Atualizacao']
+        precisa_precos = any(col not in df.columns for col in price_cols_expected) or any(
+            col not in df.columns for col in extra_price_cols
+        )
+        if precisa_precos:
+            df_prices_extra = DataManager.carregar_prices()
+            if df_prices_extra is not None and not df_prices_extra.empty and '_laboratory' in df_prices_extra.columns:
+                df_prices_extra = df_prices_extra.copy()
+                df_prices_extra['_laboratory'] = df_prices_extra['_laboratory'].astype(str)
+                merge_col = None
+                for candidate in ['_id', 'Laboratory_ID', 'LaboratoryId', 'LaboratoryID', 'Lab_ID', 'LabId', 'id']:
+                    if candidate in df.columns:
+                        merge_col = candidate
+                        df[merge_col] = df[merge_col].astype(str)
+                        break
+                if merge_col:
+                    lookup = df_prices_extra.set_index('_laboratory')
+                    mapping_cache = {}
+                    for col in price_cols_expected + extra_price_cols:
+                        if col in lookup.columns:
+                            mapping_cache[col] = lookup[col].to_dict()
+                    for col, mapping in mapping_cache.items():
+                        if col not in df.columns:
+                            df[col] = np.nan
+                        df[col] = df[col].fillna(df[merge_col].map(mapping))
+                else:
+                    st.warning("⚠️ Não foi possível vincular preços aos laboratórios (ID ausente).")
+
+        for col in price_cols_expected:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
 
@@ -823,6 +853,31 @@ class DataManager:
         except Exception as e:
             # Erro silencioso - será tratado onde a função é chamada
             return None
+    
+    @staticmethod
+    @st.cache_data(ttl=CACHE_TTL)
+    def carregar_prices(force: bool = False) -> Optional[pd.DataFrame]:
+        """Carrega dados de prices.csv com fallback para SharePoint."""
+        try:
+            arquivo_local = os.path.join(OUTPUT_DIR, PRICES_FILE)
+            if os.path.exists(arquivo_local) and not force:
+                return pd.read_csv(arquivo_local, encoding=ENCODING, low_memory=False)
+
+            files_cfg = {}
+            try:
+                files_cfg = st.secrets.get('files', {})
+            except Exception:
+                files_cfg = {}
+
+            arquivo_remoto = files_cfg.get('prices', PRICES_REMOTE_PATH)
+            if arquivo_remoto:
+                arquivo_remoto = arquivo_remoto.replace("\\", "/")
+            caminho = baixar_sharepoint(arquivo_remoto=arquivo_remoto, force=force)
+            if caminho and os.path.exists(caminho):
+                return pd.read_csv(caminho, encoding=ENCODING, low_memory=False)
+        except Exception as e:
+            st.warning(f"⚠️ Falha ao carregar tabela de preços: {e}")
+        return None
     
     @staticmethod
     @st.cache_data(ttl=14400)  # Cache de 4 horas
@@ -4476,6 +4531,18 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                                 email = lab_info.get('Email', 'N/A')
                             # Se contato ainda estiver vazio, deixar como 'N/A' (não há fallback no lab_info)
                             
+                            # Aceita voucher (onlineVoucher)
+                            aceita_voucher_flag = None
+                            if info_lab:
+                                aceita_voucher_flag = info_lab.get('onlineVoucher')
+                            if aceita_voucher_flag is None:
+                                aceita_voucher_flag = lab_info.get('onlineVoucher')
+                            aceita_voucher_txt = (
+                                'Sim' if aceita_voucher_flag is True else
+                                'Não' if aceita_voucher_flag is False else
+                                'Não informado'
+                            )
+                            
                             representante = lab_info.get('Representante_Nome', 'N/A')
                             
                             # Limpar dados vazios
@@ -4678,9 +4745,9 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                                     f"</div>"
                                 )
 
-                            if possui_preco or pd.notna(lab_info.get('Voucher_Commission', np.nan)):
+                            if possui_preco or pd.notna(lab_info.get('Voucher_Commission', np.nan)) or aceita_voucher_txt != 'Não informado':
                                 voucher_valor = lab_info.get('Voucher_Commission', np.nan)
-                                voucher_fmt = f"{float(voucher_valor):.0f}%" if pd.notna(voucher_valor) else "N/A"
+                                voucher_fmt = f"{float(voucher_valor):.0f}%" if pd.notna(voucher_valor) else None
                                 data_preco = lab_info.get('Data_Preco_Atualizacao')
                                 if isinstance(data_preco, pd.Timestamp):
                                     data_preco_fmt = data_preco.tz_localize(None).strftime("%d/%m/%Y %H:%M")
@@ -4700,7 +4767,7 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                                             <div style="font-size: 0.9rem; color: #0d6efd; font-weight: 700; text-transform: uppercase;">Tabela de Preços</div>
                                             <div style="font-size: 0.8rem; color: #6c757d;">
-                                                Atualizado em <strong>{data_preco_fmt}</strong> • Voucher: <strong>{voucher_fmt}</strong>
+                                                Atualizado em <strong>{data_preco_fmt}</strong> • Aceita voucher: <strong>{aceita_voucher_txt}</strong>{f" • Comissão: <strong>{voucher_fmt}</strong>" if voucher_fmt else ""}
                                             </div>
                                         </div>
                                         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem;">
@@ -5438,6 +5505,75 @@ Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em
                             {status_movimentacao}
                         </div>
                         """, unsafe_allow_html=True)
+
+                        # Comparativo com nossos preços
+                        def _to_float_preco(valor):
+                            if isinstance(valor, str):
+                                valor = valor.replace('R$', '').replace(' ', '').replace('.', '').replace(',', '.')
+                            return pd.to_numeric(valor, errors='coerce')
+
+                        def _to_float_local(valor):
+                            return pd.to_numeric(valor, errors='coerce')
+
+                        comparacoes_precos = []
+                        nosso_preco_clt = _to_float_local(lab_info.get('Preco_CLT_Total'))
+                        nosso_preco_cnh = _to_float_local(lab_info.get('Preco_CNH_Total'))
+                        nosso_preco_civil = _to_float_local(lab_info.get('Preco_Civil_Service_Total'))
+                        if pd.isna(nosso_preco_civil):
+                            nosso_preco_civil = _to_float_local(lab_info.get('Preco_Civil_Service50_Total'))
+
+                        comparacoes_dados = [
+                            ("CLT", nosso_preco_clt, _to_float_preco(preco_clt)),
+                            ("CNH", nosso_preco_cnh, _to_float_preco(preco_cnh)),
+                            ("Concurso Público", nosso_preco_civil, _to_float_preco(preco_concurso))
+                        ]
+
+                        def _formatar_delta(valor):
+                            if pd.isna(valor):
+                                return "—"
+                            sinal = "+" if valor > 0 else ""
+                            return f"{sinal}R$ {abs(valor):.2f}".replace('.', ',')
+
+                        for label, nosso_val, conc_val in comparacoes_dados:
+                            if pd.isna(nosso_val) and pd.isna(conc_val):
+                                continue
+                            delta_val = nosso_val - conc_val if pd.notna(nosso_val) and pd.notna(conc_val) else np.nan
+                            cor_delta = '#6c757d'
+                            if pd.notna(delta_val):
+                                if delta_val > 0:
+                                    cor_delta = '#dc3545'
+                                elif delta_val < 0:
+                                    cor_delta = '#198754'
+                            comparacoes_precos.append(
+                                f"<div style=\"background: white; border-radius: 10px; padding: 1rem; box-shadow: 0 2px 6px rgba(0,0,0,0.08);\">"
+                                f"<div style=\"font-size: 0.9rem; color: #6c757d; font-weight: 700; text-transform: uppercase; margin-bottom: 0.6rem;\">{label}</div>"
+                                f"<div style=\"display: flex; justify-content: space-between; font-size: 0.85rem; color: #6c757d; margin-bottom: 0.3rem;\">"
+                                f"<span>Nosso preço</span>"
+                                f"<strong style=\"color: #2c3e50;\">{_formatar_preco_valor(nosso_val)}</strong>"
+                                f"</div>"
+                                f"<div style=\"display: flex; justify-content: space-between; font-size: 0.85rem; color: #6c757d; margin-bottom: 0.3rem;\">"
+                                f"<span>Concorrente</span>"
+                                f"<strong style=\"color: #2c3e50;\">{_formatar_preco_valor(conc_val)}</strong>"
+                                f"</div>"
+                                f"<div style=\"display: flex; justify-content: space-between; font-size: 0.85rem; color: #6c757d;\">"
+                                f"<span>Diferença</span>"
+                                f"<strong style=\"color: {cor_delta};\">{_formatar_delta(delta_val)}</strong>"
+                                f"</div>"
+                                f"</div>"
+                            )
+
+                        if comparacoes_precos:
+                            st.markdown(f"""
+                                <div style="background: #eef2ff; border-radius: 10px; padding: 1rem 1.5rem; margin-top: 1rem; border-left: 5px solid #6366f1;">
+                                    <div style="font-size: 0.95rem; color: #4338ca; font-weight: 700; margin-bottom: 0.8rem; text-transform: uppercase;">
+                                        Comparativo de Preços
+                                    </div>
+                                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem;">
+                                        {''.join(comparacoes_precos)}
+                                    </div>
+                                </div>
+                            """, unsafe_allow_html=True)
+
                     else:
                         st.info("ℹ️ Este laboratório não está cadastrado na base do Gralab (CunhaLab)")
                 else:

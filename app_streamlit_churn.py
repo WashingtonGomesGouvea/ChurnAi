@@ -1611,6 +1611,18 @@ class FilterManager:
         )
 
         st.sidebar.markdown("---")
+        
+        # Filtro de análise diária vs semanal (requisito Gabi: 50+ coletas/mês)
+        st.sidebar.markdown("**📊 Tipo de Análise**")
+        tipo_analise_opcoes = ["Todos", "Análise Diária (≥50 coletas/mês)", "Análise Semanal (<50 coletas/mês)"]
+        filtros['tipo_analise'] = st.sidebar.radio(
+            "Filtrar por volume:",
+            options=tipo_analise_opcoes,
+            index=0,
+            help="Análise Diária: laboratórios com 50+ coletas no mês atual. Análise Semanal: laboratórios com menos de 50 coletas/mês."
+        )
+
+        st.sidebar.markdown("---")
         # Filtro por período - Anos e Meses (dados mensais)
         st.sidebar.markdown("**📅 Período de Análise (Mensal)**")
         # Verificar anos disponíveis nos dados
@@ -1742,6 +1754,16 @@ class FilterManager:
         representantes_sel = filtros.get('representantes', [])
         if representantes_sel and 'Representante_Nome' in df_filtrado.columns:
             df_filtrado = df_filtrado[df_filtrado['Representante_Nome'].isin(representantes_sel)]
+        
+        # Filtro de análise diária vs semanal (requisito Gabi: 50+ coletas/mês)
+        tipo_analise = filtros.get('tipo_analise', 'Todos')
+        if 'Analise_Diaria' in df_filtrado.columns:
+            if tipo_analise == "Análise Diária (≥50 coletas/mês)":
+                df_filtrado = df_filtrado[df_filtrado['Analise_Diaria'] == True]
+            elif tipo_analise == "Análise Semanal (<50 coletas/mês)":
+                df_filtrado = df_filtrado[df_filtrado['Analise_Diaria'] == False]
+            # Se "Todos", não aplica filtro
+        
         # Para dados mensais, o filtro principal será usado nos cálculos dos gráficos
         # Os filtros 'ano_selecionado', 'meses_selecionados' e 'sufixo_ano' são usados
         # diretamente nas funções de cálculo dos gráficos

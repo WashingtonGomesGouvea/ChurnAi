@@ -52,6 +52,19 @@ MM7_CIDADE / MM30_CIDADE (Médias Móveis por Cidade)
 Definição: Médias móveis de 7 e 30 dias calculadas para os laboratórios da mesma cidade (quando disponíveis), em dias úteis.
 Uso: Contexto local que mostra a curva de comportamento daquele município.
 
+COLETAS_MES_ATUAL (Coletas do Mês Atual)
+Definição: Número de coletas registradas no mês atual (mês corrente) para o laboratório.
+Uso: Utilizada para determinar se o laboratório tem volume suficiente para análise diária ou semanal.
+Exemplo: Em novembro/2025, se um laboratório teve 75 coletas no mês, Coletas_Mes_Atual = 75.
+
+ANALISE_DIARIA (Flag de Análise Diária)
+Definição: Indicador booleano que determina se o laboratório deve ser analisado diariamente ou semanalmente.
+Critério: True se Coletas_Mes_Atual >= 50, False se Coletas_Mes_Atual < 50.
+Uso: Laboratórios com 50+ coletas/mês têm volume suficiente para análise diária. Os demais são analisados semanalmente.
+Exemplo:
+- Laboratório A: 75 coletas/mês → Analise_Diaria = True
+- Laboratório B: 30 coletas/mês → Analise_Diaria = False
+
 Redução Máxima vs Contextos (Maior_Reducao)
 Definição: Percentual de queda do volume do dia em relação às médias móveis disponíveis (MM7_BR, MM7_UF, MM7_CIDADE).
 Fórmula Conceitual: Maior_Reducao = max( 1 - Vol_Hoje / MM7_contexto ).
@@ -533,19 +546,25 @@ Tipo: Multiselect
 O que faz: Restringe os dados aos laboratórios atribuídos aos representantes selecionados.
 Lógica: A lista é populada a partir da coluna `Representante_Nome` do dataset filtrado. O filtro opera antes dos KPIs e das demais análises, garantindo consistência nos números exibidos.
 
-Filtro 2: Estado
+Filtro 2.5: Tipo de Análise (50+ coletas/mês)
+Tipo: Radio button (seleção única)
+O que faz: Filtra laboratórios por volume mensal, separando análise diária de análise semanal.
+Opções:
+- "Todos": Mostra todos os laboratórios (padrão)
+- "Análise Diária (≥50 coletas/mês)": Mostra apenas laboratórios com 50 ou mais coletas no mês atual
+- "Análise Semanal (<50 coletas/mês)": Mostra apenas laboratórios com menos de 50 coletas no mês atual
+Lógica: Usa a coluna `Analise_Diaria` (booleana) para filtrar. Laboratórios com alto volume (50+) têm dados suficientes para análise diária detalhada, enquanto laboratórios com baixo volume são mais apropriados para análise semanal agregada.
+Requisito: Implementado conforme solicitação da Gabi - "Para PCL com pelo menos 50 coletas no mês, acho válido fazer análise diária. Os outros aí eu acho que cai mais em fazer uma análise semanal."
+
+Filtro 3: Estado
 Tipo: Multiselect (seleção múltipla)
 O que faz: Filtra laboratórios por estado (UF)
 Opções: Todos os estados brasileiros
 
-Filtro 3: Cidade
+Filtro 4: Cidade
 Tipo: Multiselect
 O que faz: Filtra laboratórios por cidade
 Dependência: Depende da seleção de estado
-
-Filtro 4: Representante
-Tipo: Multiselect
-O que faz: Filtra laboratórios por representante responsável
 
 Filtro 5: Risco Diário
 Tipo: Multiselect
@@ -651,6 +670,18 @@ Condições:
 - Média dos últimos 3 dias < 90% da MM7
 Fórmula: Recuperacao = True se todas as condições acima forem verdadeiras
 
+16. Coletas do Mês Atual
+Fórmula: Coletas_Mes_Atual = N_Coletas_[MesAtual]_25
+Onde [MesAtual] é o mês corrente (Jan, Fev, Mar, etc.)
+Exemplo: Em novembro de 2025, Coletas_Mes_Atual = N_Coletas_Nov_25
+
+17. Flag de Análise Diária
+Fórmula: Analise_Diaria = (Coletas_Mes_Atual >= 50)
+Retorna: True (análise diária) ou False (análise semanal)
+Lógica:
+- Se Coletas_Mes_Atual >= 50 → Analise_Diaria = True (volume suficiente para análise diária)
+- Se Coletas_Mes_Atual < 50 → Analise_Diaria = False (melhor analisar semanalmente)
+
 EXEMPLO COMPLETO DE CÁLCULO
 ----------------------------
 
@@ -720,6 +751,39 @@ RESULTADO FINAL:
 - Risco_Diario: 🟢 Normal / Estável
 - Recuperacao: True
 
+EXEMPLO DE CÁLCULO - FILTRO DE VOLUME
+--------------------------------------
+
+Cenário: Determinar tipo de análise para dois laboratórios em novembro/2025
+
+LABORATÓRIO A:
+Coletas em novembro: 75 coletas
+Cálculo:
+- Coletas_Mes_Atual = 75
+- 75 >= 50? SIM
+- Analise_Diaria = True
+
+Resultado: Este laboratório deve ser analisado DIARIAMENTE (tem volume suficiente)
+Filtro aplicável: "Análise Diária (≥50 coletas/mês)"
+
+LABORATÓRIO B:
+Coletas em novembro: 30 coletas
+Cálculo:
+- Coletas_Mes_Atual = 30
+- 30 >= 50? NÃO
+- Analise_Diaria = False
+
+Resultado: Este laboratório deve ser analisado SEMANALMENTE (volume insuficiente para análise diária)
+Filtro aplicável: "Análise Semanal (<50 coletas/mês)"
+
+ESTATÍSTICAS DO SISTEMA (Exemplo Real):
+- Total de laboratórios: 5.628
+- Análise Diária (≥50 coletas/mês): 120 labs (2.1%)
+- Análise Semanal (<50 coletas/mês): 5.508 labs (97.9%)
+- Média de coletas/mês por laboratório: 4.6 coletas
+
+Interpretação: A maioria dos laboratórios (97.9%) tem baixo volume mensal e deve ser analisada semanalmente. Apenas 2.1% têm volume suficiente para justificar análise diária detalhada.
+
 FIM DA DOCUMENTAÇÃO
 ===================
 
@@ -729,5 +793,23 @@ Esta documentação cobre todos os aspectos do sistema Churn PCLs:
 - Explicação tela por tela
 - Fórmulas e cálculos detalhados
 - Exemplos práticos passo a passo
+
+HISTÓRICO DE ATUALIZAÇÕES
+=========================
+
+Versão 2.1 - 12/11/2025
+-----------------------
+✅ Adicionado filtro de tipo de análise (50+ coletas/mês)
+✅ Novas colunas: Coletas_Mes_Atual e Analise_Diaria
+✅ Separação de laboratórios para análise diária vs semanal
+✅ Estatísticas: 120 labs (2.1%) em análise diária, 5.508 labs (97.9%) em análise semanal
+
+Versão 2.0 - 10/11/2025
+-----------------------
+✅ Implementação de variáveis de controle (MM7_BR, MM7_UF, MM7_CIDADE)
+✅ Todas as médias móveis calculadas apenas com dias úteis (segunda a sexta)
+✅ D-1 sempre refere-se ao último dia útil anterior
+✅ Regras de risco usando REDUCAO_MEDIO_RISCO (30%) e REDUCAO_ALTO_RISCO (50%)
+✅ Comparação de Vol_Hoje com contextos BR/UF/Cidade
 
 Para dúvidas ou esclarecimentos adicionais, consulte o código-fonte ou entre em contato com a equipe de desenvolvimento.

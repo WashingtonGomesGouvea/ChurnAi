@@ -636,6 +636,21 @@ def calcular_metricas_churn():
     base['Total_Recoletas_2024'] = total_recoletas_2024.reindex(base.index).fillna(0).astype(int)
     base['Total_Recoletas_2025'] = total_recoletas_2025.reindex(base.index).fillna(0).astype(int)
     base['Data_Ultima_Coleta'] = ultima_2025.reindex(base.index)
+    
+    # Coletas do mês atual e flag de análise diária (requisito Gabi: 50+ coletas/mês)
+    mes_atual = datetime.now().month
+    if mes_atual <= mes_limite_2025 and mes_atual >= 1:
+        # Pegar coletas do mês atual (último mês disponível em 2025)
+        col_mes_atual = f'N_Coletas_{meses_nomes[mes_atual-1]}_25'
+        if col_mes_atual in base.columns:
+            base['Coletas_Mes_Atual'] = base[col_mes_atual]
+        else:
+            base['Coletas_Mes_Atual'] = 0
+    else:
+        base['Coletas_Mes_Atual'] = 0
+    
+    # Flag de análise diária: True se >= 50 coletas no mês, False caso contrário
+    base['Analise_Diaria'] = (base['Coletas_Mes_Atual'] >= 50).astype(bool)
 
     # Preços por laboratório
     price_update_series = pd.Series(dtype='datetime64[ns]')
@@ -1102,6 +1117,7 @@ def calcular_metricas_churn():
         'Data_Ultima_Coleta','Dias_Sem_Coleta','Media_Coletas_Mensal_2024','Media_Coletas_Mensal_2025',
         'Variacao_Percentual','Tendencia','Status_Risco','Motivo_Risco','Data_Analise',
         'Total_Coletas_2024','Total_Coletas_2025','Total_Recoletas_2024','Total_Recoletas_2025',
+        'Coletas_Mes_Atual','Analise_Diaria',
         'Voucher_Commission','Data_Preco_Atualizacao','Dados_Diarios_2025','Dados_Semanais_2025'
     ]
 

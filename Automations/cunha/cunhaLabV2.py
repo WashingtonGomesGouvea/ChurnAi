@@ -26,13 +26,53 @@ from dotenv import load_dotenv
 # Carregar variáveis de ambiente
 load_dotenv()
 
+def detectar_maquina():
+    """
+    Detecta automaticamente qual máquina está rodando o script
+    
+    Returns:
+        tuple: (BASE_DIR, DEFAULT_THREADS, MACHINE_NAME)
+    """
+    import socket
+    import getpass
+    
+    # Pegar informações do sistema
+    hostname = socket.gethostname().lower()
+    username = getpass.getuser().lower()
+    
+    # NOTEBOOK SYNVIA (Intel i7-1165G7 - 4 cores / 8 threads)
+    # Detectar por username ou hostname específico
+    if username == 'washington.gouvea' or 'synvia' in hostname or 'washington' in hostname:
+        base_dir = r'C:\Users\washington.gouvea\OneDrive - Synvia Group\Data Analysis\Churn PCLs\Automations\cunha'
+        threads = 8  # i7-1165G7: 4 cores / 8 threads - usar todos
+        machine = 'Notebook Synvia (i7-1165G7)'
+    # PC CASA (Ryzen 7 7500X - 6 cores / 12 threads) 
+    else:
+        base_dir = r'D:\OneDrive - Synvia Group\Data Analysis\Churn PCLs\Automations\cunha'
+        threads = 16  # Ryzen: pode usar mais por ser I/O bound
+        machine = 'PC Casa (Ryzen 7 7500X)'
+    
+    return base_dir, threads, machine
+
+# Detectar máquina automaticamente
+BASE_DIR, DEFAULT_THREADS, MACHINE_NAME = detectar_maquina()
+
+# Criar diretório se não existir
+if not os.path.exists(BASE_DIR):
+    os.makedirs(BASE_DIR)
+    print(f"✓ Diretório criado: {BASE_DIR}")
+
 # Configurar logging
-logging.basicConfig(filename='D:\\OneDrive - Synvia Group\\Data Analysis\\Churn PCLs\\Automations\\cunha\\logs.txt',
+logging.basicConfig(filename=os.path.join(BASE_DIR, 'logs.txt'),
                     level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Caminho base para salvamento
-BASE_DIR = r'D:\OneDrive - Synvia Group\Data Analysis\Churn PCLs\Automations\cunha'
+# Log de inicialização
+logging.info(f"="*70)
+logging.info(f"Script iniciado em: {MACHINE_NAME}")
+logging.info(f"Diretório base: {BASE_DIR}")
+logging.info(f"Threads padrão: {DEFAULT_THREADS}")
+logging.info(f"="*70)
 
 MUNICIPIOS_POR_ESTADO = {
     "AC": [
@@ -928,12 +968,13 @@ class LabScraperV2:
         return str(valor)
     
     @staticmethod
-    def extrair_precos_servicos(servicos_str):
+    def extrair_precos_servicos(servicos_str, debug=False):
         """
         Extrai os preços de CNH, Concurso e CLT da coluna Servicos
         
         Args:
             servicos_str: String representando lista de serviços (ex: "['Concurso - R$ 180.00', ...]")
+            debug: Se True, imprime logs de debug
             
         Returns:
             Dict com {'preco_cnh': '139.00', 'preco_concurso': '180.00', 'preco_clt': '139.00'}
@@ -943,16 +984,49 @@ class LabScraperV2:
         precos = {'preco_cnh': '', 'preco_concurso': '', 'preco_clt': ''}
         
         try:
-            if pd.isna(servicos_str) or servicos_str == '' or servicos_str is None:
+            # Verificar se é vazio/None (precisa tratar lista/array antes de pd.isna)
+            if servicos_str is None or servicos_str == '':
+                if debug:
+                    logging.debug("Servicos None ou string vazia")
                 return precos
+            
+            # Para listas, verificar se está vazia
+            if isinstance(servicos_str, list):
+                if len(servicos_str) == 0:
+                    if debug:
+                        logging.debug("Servicos lista vazia")
+                    return precos
+            # Para strings/scalars, usar pd.isna
+            elif isinstance(servicos_str, str):
+                # Já verificamos acima se é string vazia
+                pass
+            else:
+                # Para outros tipos (números, etc), verificar com pd.isna
+                try:
+                    if pd.isna(servicos_str):
+                        if debug:
+                            logging.debug("Servicos é NaN/NA")
+                        return precos
+                except (ValueError, TypeError):
+                    # Se pd.isna() falhar, considerar inválido
+                    if debug:
+                        logging.debug(f"Tipo inesperado que falhou em pd.isna: {type(servicos_str)}")
+                    return precos
             
             # Converter string para lista
             if isinstance(servicos_str, str):
+                if debug:
+                    logging.debug(f"Convertendo string para lista: {servicos_str[:100]}")
                 servicos = ast.literal_eval(servicos_str)
             elif isinstance(servicos_str, list):
                 servicos = servicos_str
             else:
+                if debug:
+                    logging.debug(f"Tipo inesperado: {type(servicos_str)}")
                 return precos
+            
+            if debug:
+                logging.debug(f"Servicos convertido: {servicos}")
             
             # Extrair preços de cada serviço
             for servico in servicos:
@@ -962,27 +1036,42 @@ class LabScraperV2:
                     try:
                         preco = servico.split('R$')[1].strip().split()[0]
                         precos['preco_concurso'] = preco
-                    except:
-                        pass
+                        if debug:
+                            logging.debug(f"Preço Concurso extraído: {preco}")
+                    except Exception as e:
+                        if debug:
+                            logging.debug(f"Erro ao extrair preço Concurso: {e}")
                         
                 elif 'C.N.H' in servico_upper or 'CNH' in servico_upper:
                     if 'R$' in servico:
                         try:
                             preco = servico.split('R$')[1].strip().split()[0]
                             precos['preco_cnh'] = preco
-                        except:
-                            pass
+                            if debug:
+                                logging.debug(f"Preço CNH extraído: {preco}")
+                        except Exception as e:
+                            if debug:
+                                logging.debug(f"Erro ao extrair preço CNH: {e}")
                             
                 elif 'CLT' in servico_upper or 'EMPREGADO' in servico_upper:
                     if 'R$' in servico:
                         try:
                             preco = servico.split('R$')[1].strip().split()[0]
                             precos['preco_clt'] = preco
-                        except:
-                            pass
+                            if debug:
+                                logging.debug(f"Preço CLT extraído: {preco}")
+                        except Exception as e:
+                            if debug:
+                                logging.debug(f"Erro ao extrair preço CLT: {e}")
+            
+            if debug:
+                logging.debug(f"Preços finais: {precos}")
             
         except Exception as e:
-            logging.warning(f"Erro ao extrair preços de serviços: {e}")
+            logging.warning(f"Erro ao extrair preços de serviços: {e} | Entrada: {str(servicos_str)[:100]}")
+            if debug:
+                import traceback
+                logging.debug(f"Traceback completo:\n{traceback.format_exc()}")
         
         return precos
     
@@ -1112,6 +1201,8 @@ class LabScraperV2:
         
         def processar_municipio(args):
             """Função worker para processar um município"""
+            nonlocal municipios_com_labs, municipios_sem_labs, municipios_processados
+            
             idx, municipio, uf = args
             
             try:
@@ -1152,6 +1243,7 @@ class LabScraperV2:
                 }
             except Exception as e:
                 logging.error(f"Erro ao processar {municipio}-{uf}: {e}")
+                # Não precisa de nonlocal aqui porque já foi declarado no início da função
                 with lock_contadores:
                     municipios_sem_labs += 1
                     municipios_processados += 1
@@ -1238,6 +1330,47 @@ class LabScraperV2:
         
         if todos_postos:
             df = pd.DataFrame(todos_postos)
+            
+            # IMPORTANTE: Extrair preços ANTES de salvar o CSV
+            # para garantir que as colunas de preços existam no DataFrame
+            logging.info("Extraindo preços dos serviços...")
+            print("\n🔍 Extraindo preços dos serviços...")
+            
+            # Verificar se coluna Servicos existe
+            if 'Servicos' not in df.columns:
+                logging.error("ERRO: Coluna 'Servicos' não encontrada no DataFrame!")
+                df['Preco_CNH'] = ''
+                df['Preco_Concurso'] = ''
+                df['Preco_CLT'] = ''
+            else:
+                # DEBUG: Testar extração com primeiros registros
+                print("   🧪 Testando extração de preços com primeiros registros...")
+                logging.info("DEBUG: Testando extração com primeiros registros")
+                for idx in range(min(3, len(df))):
+                    servicos_sample = df.iloc[idx]['Servicos']
+                    nome_lab = df.iloc[idx].get('Nome', 'Desconhecido')
+                    logging.info(f"   Teste {idx+1} - Lab: {nome_lab}")
+                    logging.info(f"   Servicos tipo: {type(servicos_sample)}")
+                    logging.info(f"   Servicos valor: {servicos_sample}")
+                    precos_teste = self.extrair_precos_servicos(servicos_sample, debug=True)
+                    logging.info(f"   Preços extraídos: {precos_teste}")
+                
+                print("   🔄 Extraindo preços de todos os registros...")
+                precos_list = df['Servicos'].apply(self.extrair_precos_servicos)
+                df['Preco_CNH'] = precos_list.apply(lambda x: x.get('preco_cnh', '') if isinstance(x, dict) else '')
+                df['Preco_Concurso'] = precos_list.apply(lambda x: x.get('preco_concurso', '') if isinstance(x, dict) else '')
+                df['Preco_CLT'] = precos_list.apply(lambda x: x.get('preco_clt', '') if isinstance(x, dict) else '')
+                
+                # Contar quantos preços foram extraídos (não vazios)
+                cnh_count = (df['Preco_CNH'].astype(str).str.strip() != '').sum()
+                concurso_count = (df['Preco_Concurso'].astype(str).str.strip() != '').sum()
+                clt_count = (df['Preco_CLT'].astype(str).str.strip() != '').sum()
+                
+                logging.info(f"Preços extraídos: CNH={cnh_count}/{len(df)}, Concurso={concurso_count}/{len(df)}, CLT={clt_count}/{len(df)}")
+                print(f"   ✓ CNH: {cnh_count}/{len(df)} ({cnh_count/len(df)*100:.1f}%)")
+                print(f"   ✓ Concurso: {concurso_count}/{len(df)} ({concurso_count/len(df)*100:.1f}%)")
+                print(f"   ✓ CLT: {clt_count}/{len(df)} ({clt_count/len(df)*100:.1f}%)\n")
+            
             today = datetime.now().strftime('%Y-%m-%d')
             daily_file = os.path.join(BASE_DIR, f"dados_{today}.csv")
             df.to_csv(daily_file, index=False, encoding='utf-8-sig')
@@ -1701,10 +1834,41 @@ class LabScraperV2:
         
         # Extrair preços da coluna Servicos e adicionar ao DataFrame
         df_com_precos = df.copy()
-        precos_list = df_com_precos['Servicos'].apply(self.extrair_precos_servicos)
-        df_com_precos['Preço CNH'] = precos_list.apply(lambda x: x['preco_cnh'])
-        df_com_precos['Preço Concurso'] = precos_list.apply(lambda x: x['preco_concurso'])
-        df_com_precos['Preço CLT'] = precos_list.apply(lambda x: x['preco_clt'])
+        
+        # Verificar se os preços já foram extraídos E SE TÊM DADOS
+        # Não basta verificar se as colunas existem, é preciso verificar se têm valores
+        precos_ja_extraidos = False
+        if 'Preco_CNH' in df_com_precos.columns and 'Preco_Concurso' in df_com_precos.columns and 'Preco_CLT' in df_com_precos.columns:
+            # Verificar se as colunas têm pelo menos ALGUNS valores não vazios
+            cnh_count = (df_com_precos['Preco_CNH'].astype(str).str.strip() != '').sum()
+            concurso_count = (df_com_precos['Preco_Concurso'].astype(str).str.strip() != '').sum()
+            clt_count = (df_com_precos['Preco_CLT'].astype(str).str.strip() != '').sum()
+            
+            # Se pelo menos 10% dos registros têm preços, considerar que já foram extraídos
+            total = len(df_com_precos)
+            if total > 0 and (cnh_count + concurso_count + clt_count) > (total * 0.1):
+                precos_ja_extraidos = True
+                logging.info(f"Usando preços já extraídos do DataFrame (CNH: {cnh_count}, Concurso: {concurso_count}, CLT: {clt_count})")
+                df_com_precos['Preço CNH'] = df_com_precos['Preco_CNH']
+                df_com_precos['Preço Concurso'] = df_com_precos['Preco_Concurso']
+                df_com_precos['Preço CLT'] = df_com_precos['Preco_CLT']
+            else:
+                logging.info(f"Colunas de preços existem mas estão VAZIAS (CNH: {cnh_count}, Concurso: {concurso_count}, CLT: {clt_count}). Extraindo novamente...")
+        
+        if not precos_ja_extraidos:
+            logging.info("Extraindo preços da coluna Servicos...")
+            print("   🔄 Extraindo preços da coluna Servicos para relatório...")
+            precos_list = df_com_precos['Servicos'].apply(self.extrair_precos_servicos)
+            df_com_precos['Preço CNH'] = precos_list.apply(lambda x: x.get('preco_cnh', '') if isinstance(x, dict) else '')
+            df_com_precos['Preço Concurso'] = precos_list.apply(lambda x: x.get('preco_concurso', '') if isinstance(x, dict) else '')
+            df_com_precos['Preço CLT'] = precos_list.apply(lambda x: x.get('preco_clt', '') if isinstance(x, dict) else '')
+            
+            # Log de verificação
+            cnh_final = (df_com_precos['Preço CNH'].astype(str).str.strip() != '').sum()
+            concurso_final = (df_com_precos['Preço Concurso'].astype(str).str.strip() != '').sum()
+            clt_final = (df_com_precos['Preço CLT'].astype(str).str.strip() != '').sum()
+            logging.info(f"Preços extraídos para relatório: CNH={cnh_final}/{len(df_com_precos)}, Concurso={concurso_final}/{len(df_com_precos)}, CLT={clt_final}/{len(df_com_precos)}")
+            print(f"   ✓ Extraídos: CNH={cnh_final}, Concurso={concurso_final}, CLT={clt_final}")
         
         # Reordenar colunas para colocar preços após Telefone
         colunas_base = ['Nome', 'Cnpj', 'Telefone', 'Preço CNH', 'Preço Concurso', 'Preço CLT',
@@ -1715,6 +1879,13 @@ class LabScraperV2:
         # Usar apenas colunas que existem
         colunas_ordenadas = [col for col in colunas_base if col in df_com_precos.columns]
         df_com_precos = df_com_precos[colunas_ordenadas]
+        
+        # Log de debug: verificar quantos preços foram extraídos
+        total_labs = len(df_com_precos)
+        precos_cnh = df_com_precos['Preço CNH'].astype(str).str.strip().replace('', pd.NA).notna().sum()
+        precos_concurso = df_com_precos['Preço Concurso'].astype(str).str.strip().replace('', pd.NA).notna().sum()
+        precos_clt = df_com_precos['Preço CLT'].astype(str).str.strip().replace('', pd.NA).notna().sum()
+        logging.info(f"Preços para Excel - CNH: {precos_cnh}/{total_labs}, Concurso: {precos_concurso}/{total_labs}, CLT: {precos_clt}/{total_labs}")
         
         # Converter DataFrame para formato compatível com Excel
         df_excel = df_com_precos.copy()
@@ -1878,22 +2049,40 @@ class LabScraperV2:
         today = datetime.now().strftime('%Y-%m-%d')
         daily_file = os.path.join(BASE_DIR, f"dados_{today}.csv")
         
-        # ====== ETAPA 1: COLETAR/CARREGAR DADOS DO DIA ======
+        # ====== ETAPA 1: VERIFICAR SE PIPELINE JÁ FOI COMPLETAMENTE EXECUTADO ======
+        # IMPORTANTE: Verificar ANTES de carregar/coletar dados para evitar processamento desnecessário
+        if self.verificar_pipeline_completo(today):
+            print(f"\n{'='*70}")
+            print(f"⚠️  Pipeline já foi completamente executado hoje!")
+            print(f"{'='*70}")
+            print(f"📅 Data: {today}")
+            print(f"✓ Dados já coletados: {os.path.basename(daily_file)}")
+            print(f"✓ Churn já processado")
+            print(f"✓ Relatórios já gerados")
+            print(f"\n💡 Se deseja reprocessar, use: python cunhaLabV2.py --force")
+            print(f"   Ou delete manualmente: .pipeline_completo_{today}.flag")
+            print(f"{'='*70}\n")
+            
+            logging.info(f"Pipeline já executado completamente para {today}. Pulando tudo.")
+            return
+        
+        # ====== ETAPA 2: COLETAR/CARREGAR DADOS DO DIA ======
         if os.path.exists(daily_file):
             print(f"\n{'='*70}")
             print(f"✓ Arquivo do dia atual já existe!")
             print(f"{'='*70}")
             print(f"📁 Arquivo: {os.path.basename(daily_file)}")
             print(f"⏭️  Pulando coleta de dados...")
-            print(f"📊 Carregando dados existentes...\n")
+            print(f"📊 Carregando dados existentes para processamento...\n")
             
             logging.info(f"Arquivo do dia atual já existe: {daily_file}")
-            logging.info("Pulando coleta de dados. Carregando dados existentes...")
+            logging.info("Pulando coleta. Carregando dados para processar churn e relatórios...")
             
             try:
                 df = pd.read_csv(daily_file, encoding='utf-8-sig')
-                print(f"✓ Dados carregados: {len(df)} laboratórios encontrados\n")
-                logging.info(f"Dados carregados: {len(df)} laboratórios encontrados")
+                print(f"✓ Dados carregados: {len(df)} laboratórios encontrados")
+                print(f"➡️  Continuando para processamento de churn e relatórios...\n")
+                logging.info(f"Dados carregados: {len(df)} laboratórios. Continuando pipeline...")
             except Exception as e:
                 print(f"✗ Erro ao carregar arquivo: {e}")
                 print(f"⚠️  Executando coleta completa...\n")
@@ -1913,23 +2102,12 @@ class LabScraperV2:
             print(f"✓ Coleta concluída: {len(df)} laboratórios encontrados")
             print(f"✓ Arquivo salvo: {os.path.basename(daily_file)}\n")
         
-        # ====== ETAPA 2: VERIFICAR SE PROCESSAMENTO JÁ FOI FEITO ======
-        if self.verificar_pipeline_completo(today):
-            print(f"\n{'='*70}")
-            print(f"⚠️  Pipeline já foi completamente executado hoje!")
-            print(f"{'='*70}")
-            print(f"📅 Data: {today}")
-            print(f"✓ Churn já processado")
-            print(f"✓ Relatórios já gerados")
-            print(f"\n💡 Se deseja reprocessar, delete o arquivo:")
-            print(f"   .pipeline_completo_{today}.flag")
-            print(f"{'='*70}\n")
-            
-            logging.info(f"Pipeline já executado completamente para {today}. Pulando processamento.")
-            return
-        
         # ====== ETAPA 3: PROCESSAR CHURN (COMPARAÇÃO COM DIA ANTERIOR) ======
-        print("🔄 Processando churn (comparando com dia anterior)...")
+        print(f"\n{'='*70}")
+        print("🔄 PROCESSANDO ANÁLISES E RELATÓRIOS")
+        print(f"{'='*70}\n")
+        
+        print("📊 [1/4] Processando churn (comparando com dia anterior)...")
         
         # Verificar se existe dia anterior
         yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
@@ -1948,45 +2126,84 @@ class LabScraperV2:
             print(f"   ✓ Arquivo churn_{today}.xlsx salvo\n")
         
         # ====== ETAPA 4: ATUALIZAR ANÁLISES E RELATÓRIOS ======
-        print("📝 Atualizando aba EntradaSaida (apenas movimentações)...")
+        pipeline_sucesso = True
+        erros_pipeline = []
+        
+        print("\n📝 [2/4] Atualizando aba EntradaSaida (apenas movimentações)...")
         try:
             total_mov, credenc, descredenc = self.atualizar_entrada_saida()
             print(f"   ✓ {total_mov} movimentações (+{credenc} credenciamentos, -{descredenc} descredenciamentos)\n")
         except Exception as e:
             print(f"   ✗ Erro ao atualizar EntradaSaida: {e}\n")
             logging.error(f"Erro ao atualizar EntradaSaida: {e}")
+            pipeline_sucesso = False
+            erros_pipeline.append(f"EntradaSaida: {e}")
         
-        print("📊 Gerando/atualizando relatório global...")
-        self.gerar_relatorio_global(df)
-        print("   ✓ Relatório atualizado\n")
+        print("📊 [3/4] Gerando/atualizando relatório global...")
+        try:
+            self.gerar_relatorio_global(df)
+            print("   ✓ Relatório atualizado\n")
+        except Exception as e:
+            print(f"   ✗ Erro ao gerar relatório global: {e}\n")
+            logging.error(f"Erro ao gerar relatório global: {e}")
+            pipeline_sucesso = False
+            erros_pipeline.append(f"Relatório Global: {e}")
         
-        print("📈 Gerando resumo de credenciamentos...")
-        self.gerar_resumo_credenciamentos()
-        print("   ✓ Resumo gerado\n")
+        print("📈 [4/4] Gerando resumo de credenciamentos...")
+        try:
+            self.gerar_resumo_credenciamentos()
+            print("   ✓ Resumo gerado\n")
+        except Exception as e:
+            print(f"   ✗ Erro ao gerar resumo: {e}\n")
+            logging.error(f"Erro ao gerar resumo de credenciamentos: {e}")
+            pipeline_sucesso = False
+            erros_pipeline.append(f"Resumo Credenciamentos: {e}")
         
-        # ====== ETAPA 5: MARCAR PIPELINE COMO COMPLETO ======
-        self.marcar_pipeline_completo(today)
-        
-        print(f"{'='*70}")
-        print("✅ Pipeline concluído com sucesso!")
-        print(f"{'='*70}")
-        print(f"📅 Data: {today}")
-        print(f"📊 Total de laboratórios: {len(df)}")
-        print(f"➕ Credenciamentos: {len(df_novos)}")
-        print(f"➖ Descredenciamentos: {len(df_removidos)}")
-        print(f"{'='*70}\n")
-        
-        logging.info(f"Pipeline concluído com sucesso para {today}.")
+        # ====== ETAPA 5: MARCAR PIPELINE COMO COMPLETO (APENAS SE SUCESSO) ======
+        if pipeline_sucesso:
+            self.marcar_pipeline_completo(today)
+            
+            print(f"{'='*70}")
+            print("✅ Pipeline concluído com sucesso!")
+            print(f"{'='*70}")
+            print(f"📅 Data: {today}")
+            print(f"📊 Total de laboratórios: {len(df)}")
+            print(f"➕ Credenciamentos: {len(df_novos)}")
+            print(f"➖ Descredenciamentos: {len(df_removidos)}")
+            print(f"{'='*70}\n")
+            
+            logging.info(f"Pipeline concluído com sucesso para {today}.")
+        else:
+            print(f"{'='*70}")
+            print("⚠️  Pipeline concluído COM ERROS!")
+            print(f"{'='*70}")
+            print(f"📅 Data: {today}")
+            print(f"📊 Total de laboratórios: {len(df)}")
+            print(f"➕ Credenciamentos: {len(df_novos)}")
+            print(f"➖ Descredenciamentos: {len(df_removidos)}")
+            print(f"\n❌ Erros encontrados:")
+            for erro in erros_pipeline:
+                print(f"   - {erro}")
+            print(f"\n💡 O arquivo flag NÃO foi criado. Execute novamente para reprocessar.")
+            print(f"{'='*70}\n")
+            
+            logging.error(f"Pipeline concluído COM ERROS para {today}. Erros: {erros_pipeline}")
 
 def main():
     scraper = LabScraperV2()
     
-    # Verificar argumentos de linha de comando
-    max_workers = 16  # Padrão: 16 threads (otimizado para Ryzen 7 7500X - 8 cores / 16 threads)
-                       # Para operações I/O bound (requisições HTTP), pode usar mais threads (ex: 24-32)
+    # Usar threads padrão detectado automaticamente pela máquina
+    max_workers = DEFAULT_THREADS
     daemon_mode = False
     gerar_relatorio_apenas = False
     force_reprocess = False
+    
+    # Mostrar informações da máquina detectada
+    print(f"\n{'='*70}")
+    print(f"🖥️  MÁQUINA DETECTADA: {MACHINE_NAME}")
+    print(f"📁 Diretório: {BASE_DIR}")
+    print(f"🧵 Threads padrão: {DEFAULT_THREADS}")
+    print(f"{'='*70}\n")
     
     for arg in sys.argv[1:]:
         if arg == '--daemon':
@@ -1998,10 +2215,11 @@ def main():
         elif arg.startswith('--threads='):
             try:
                 max_workers = int(arg.split('=')[1])
-                logging.info(f"Usando {max_workers} threads conforme especificado.")
+                print(f"⚙️  Threads customizadas: {max_workers} (padrão era {DEFAULT_THREADS})")
+                logging.info(f"Usando {max_workers} threads conforme especificado (padrão: {DEFAULT_THREADS}).")
             except ValueError:
-                logging.warning(f"Valor inválido para threads: {arg}. Usando padrão: 16")
-                max_workers = 16
+                logging.warning(f"Valor inválido para threads: {arg}. Usando padrão: {DEFAULT_THREADS}")
+                max_workers = DEFAULT_THREADS
     
     # Se --force foi usado, remover flag de pipeline completo
     if force_reprocess:
@@ -2047,8 +2265,17 @@ def main():
             print(f"Arquivo não encontrado: {daily_file}")
             print("Execute o script normalmente para coletar os dados primeiro.")
     elif daemon_mode:
-        schedule.every().day.at("02:00").do(scraper.run_pipeline, max_workers=max_workers)
-        logging.info(f"Daemon iniciado. Agendado para 02:00 diariamente com {max_workers} threads.")
+        schedule.every().day.at("23:00").do(scraper.run_pipeline, max_workers=max_workers)
+        logging.info(f"Daemon iniciado. Agendado para 23:00 diariamente com {max_workers} threads.")
+        print(f"\n{'='*70}")
+        print("🤖 MODO DAEMON ATIVADO")
+        print(f"{'='*70}")
+        print(f"⏰ Horário de execução: 23:00 (todos os dias)")
+        print(f"🧵 Threads configuradas: {max_workers}")
+        print(f"📅 Próxima execução: Hoje às 23:00" if datetime.now().hour < 23 else "📅 Próxima execução: Amanhã às 23:00")
+        print(f"\n💡 Mantenha esta janela aberta para execução automática")
+        print(f"   Pressione Ctrl+C para interromper")
+        print(f"{'='*70}\n")
         while True:
             schedule.run_pending()
             time.sleep(60)

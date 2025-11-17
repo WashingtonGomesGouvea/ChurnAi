@@ -24,10 +24,10 @@ PORTE_MEDIO_GRANDE_MAX = 150
 PORTE_MEDIO_MIN = PORTE_PEQUENO_MAX + 1
 PORTE_GRANDE_MIN = PORTE_MEDIO_GRANDE_MAX + 1
 RISCO_DIAS_SEM_COLETA_RULES: Dict[str, Dict[str, Union[int, bool]]] = {
-    'Pequeno': {'habilita': False},
-    'Médio': {'habilita': True, 'min_dias_uteis': 2, 'max_dias_corridos': 15},
-    'Médio/Grande': {'habilita': True, 'min_dias_uteis': 1, 'max_dias_corridos': 15},
-    'Grande': {'habilita': True, 'min_dias_uteis': 1, 'max_dias_uteis': 5},
+    'Pequeno': {'habilita': True, 'min_dias_uteis': 5},
+    'Médio': {'habilita': True, 'min_dias_uteis': 3, 'max_dias_corridos': 15},
+    'Médio/Grande': {'habilita': True, 'min_dias_uteis': 2, 'max_dias_corridos': 15},
+    'Grande': {'habilita': True, 'min_dias_uteis': 2, 'max_dias_uteis': 5},
 }
 PERDA_RECENTE_RULES: Dict[str, Dict[str, Union[int, bool]]] = {
     'Pequeno': {'min_dias_corridos': 30, 'max_dias_corridos': 180},
@@ -223,9 +223,9 @@ def classificar_perda_por_dias_sem_coleta(dias_corridos: int,
 
 
 def obter_limiar_dias_sem_coleta(porte: str,
-                                  limiar_grande: int = 1,
-                                  limiar_medio: int = 2,
-                                  limiar_pequeno: int = 3) -> int:
+                                  limiar_grande: int = 2,
+                                  limiar_medio: int = 3,
+                                  limiar_pequeno: int = 5) -> int:
     """
     Retorna o limiar de dias sem coleta baseado no porte do laboratório.
     
@@ -240,11 +240,11 @@ def obter_limiar_dias_sem_coleta(porte: str,
         
     Exemplos:
         >>> obter_limiar_dias_sem_coleta('Grande')
-        1
-        >>> obter_limiar_dias_sem_coleta('Médio')
         2
-        >>> obter_limiar_dias_sem_coleta('Pequeno')
+        >>> obter_limiar_dias_sem_coleta('Médio')
         3
+        >>> obter_limiar_dias_sem_coleta('Pequeno')
+        5
     """
     if porte == 'Grande':
         return limiar_grande
@@ -256,9 +256,9 @@ def obter_limiar_dias_sem_coleta(porte: str,
 
 def verificar_gatilho_dias_sem_coleta(dias_sem_coleta: int,
                                       porte: str,
-                                      limiar_grande: int = 1,
-                                      limiar_medio: int = 2,
-                                      limiar_pequeno: int = 3) -> bool:
+                                      limiar_grande: int = 2,
+                                      limiar_medio: int = 3,
+                                      limiar_pequeno: int = 5) -> bool:
     """
     Verifica se o número de dias sem coleta ultrapassa o limiar para o porte.
     
@@ -273,11 +273,11 @@ def verificar_gatilho_dias_sem_coleta(dias_sem_coleta: int,
         True se ultrapassou o limiar (deve acionar alerta), False caso contrário
         
     Exemplos:
-        >>> verificar_gatilho_dias_sem_coleta(1, 'Grande')
+        >>> verificar_gatilho_dias_sem_coleta(2, 'Grande')
         True
         >>> verificar_gatilho_dias_sem_coleta(1, 'Médio')
         False
-        >>> verificar_gatilho_dias_sem_coleta(3, 'Pequeno')
+        >>> verificar_gatilho_dias_sem_coleta(5, 'Pequeno')
         True
     """
     limiar = obter_limiar_dias_sem_coleta(porte, limiar_grande, limiar_medio, limiar_pequeno)

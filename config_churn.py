@@ -191,21 +191,22 @@ PORTE_GRANDE_MIN = PORTE_MEDIO_GRANDE_MAX + 1  # >150 coletas/mês (Grande)
 # Regras de dias sem coleta por porte (alertas ativos)
 RISCO_DIAS_SEM_COLETA_RULES = {
     'Pequeno': {
-        'habilita': False  # não considera risco por dias sem coleta
+        'habilita': True,
+        'min_dias_uteis': 5
     },
     'Médio': {
         'habilita': True,
-        'min_dias_uteis': 2,
+        'min_dias_uteis': 3,
         'max_dias_corridos': 15
     },
     'Médio/Grande': {
         'habilita': True,
-        'min_dias_uteis': 1,
+        'min_dias_uteis': 2,
         'max_dias_corridos': 15
     },
     'Grande': {
         'habilita': True,
-        'min_dias_uteis': 1,
+        'min_dias_uteis': 2,
         'max_dias_uteis': 5
     }
 }

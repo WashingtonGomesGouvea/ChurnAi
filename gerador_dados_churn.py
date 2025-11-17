@@ -31,6 +31,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Importar novos módulos do sistema v2
+try:
+    from feriados_brasil import is_dia_util, dias_uteis_entre, obter_dias_uteis_no_periodo
+    from porte_laboratorio import (
+        aplicar_porte_dataframe, 
+        aplicar_gatilho_dataframe,
+        calcular_porte,
+        avaliar_risco_por_dias_sem_coleta,
+        classificar_perda_por_dias_sem_coleta
+    )
+    from alertas_manager import (
+        aplicar_cap_alertas,
+        processar_alertas_por_uf,
+        gerar_relatorio_alertas,
+        formatar_relatorio_texto
+    )
+    MODULOS_V2_DISPONIVEIS = True
+except ImportError as e:
+    logger.warning(f"Módulos v2 não disponíveis: {e}. Sistema funcionará em modo legado.")
+    MODULOS_V2_DISPONIVEIS = False
+
 # Fuso horário
 timezone_br = pytz.timezone(TIMEZONE)
 
@@ -47,6 +68,171 @@ def format_datetime_br(dt: datetime) -> Optional[str]:
     if dt is None:
         return None
     return dt.strftime(DATETIME_FORMAT)
+
+
+def calcular_dias_sem_coleta_uteis(data_ultima: Optional[pd.Timestamp],
+                                   estado: Optional[str],
+                                   hoje: Optional[datetime] = None) -> int:
+    """Calcula dias úteis entre a última coleta e hoje (excluindo o dia da coleta)."""
+    if data_ultima is None or pd.isna(data_ultima):
+        return 0
+    if hoje is None:
+        hoje = datetime.now(timezone_br)
+    if data_ultima.tzinfo is None:
+        data_ultima = pytz.utc.localize(data_ultima)
+    data_local = data_ultima.astimezone(timezone_br).date()
+    fim = hoje.date()
+    if fim <= data_local:
+        return 0
+    start = data_local + timedelta(days=1)
+    try:
+        return max(dias_uteis_entre(start, fim, estado), 0)
+    except Exception:
+        return 0
+
+
+def gerar_resumo_semanal_mes(base_df: pd.DataFrame,
+                             df_gatherings_2025: pd.DataFrame) -> Tuple[pd.Series, dict]:
+    """
+    Gera resumo semanal (por laboratório) do mês corrente e metadados globais.
+
+    Returns:
+        (Series com JSON por laboratório, dict de metadados)
+    """
+    if base_df is None or base_df.empty:
+        return pd.Series(dtype=object), {}
+
+    base_index = base_df.index
+    vazio_series = pd.Series(['[]'] * len(base_index), index=base_index, dtype=object)
+    hoje = datetime.now(timezone_br)
+    ano_ref = hoje.year
+    mes_ref = hoje.month
+
+    meta = {
+        "referencia": {"ano": ano_ref, "mes": mes_ref},
+        "semanas_fechadas": 0,
+        "total_semanas": 0,
+        "weeks": []
+    }
+
+    if df_gatherings_2025 is None or df_gatherings_2025.empty:
+        return vazio_series, meta
+
+    df_mes = df_gatherings_2025.copy()
+    df_mes['createdAt'] = pd.to_datetime(df_mes.get('createdAt'), errors='coerce', utc=True)
+    df_mes = df_mes.dropna(subset=['createdAt'])
+    if df_mes.empty:
+        return vazio_series, meta
+
+    df_mes['createdAt'] = df_mes['createdAt'].dt.tz_convert(timezone_br)
+    df_mes = df_mes[
+        (df_mes['createdAt'].dt.year == ano_ref) &
+        (df_mes['createdAt'].dt.month == mes_ref)
+    ].copy()
+    if df_mes.empty:
+        return vazio_series, meta
+
+    df_mes['weekday'] = df_mes['createdAt'].dt.weekday
+    df_mes = df_mes[df_mes['weekday'] < 5].copy()
+    if df_mes.empty:
+        return vazio_series, meta
+
+    iso = df_mes['createdAt'].dt.isocalendar()
+    df_mes['iso_week'] = iso.week.astype(int)
+    df_mes['iso_year'] = iso.year.astype(int)
+    df_mes['semana_inicio'] = (df_mes['createdAt'] - pd.to_timedelta(df_mes['weekday'], unit='D')).dt.date
+
+    week_meta_map = {}
+    unique_weeks = (
+        df_mes[['iso_year', 'iso_week', 'semana_inicio']]
+        .drop_duplicates()
+        .sort_values(['iso_year', 'iso_week'])
+        .reset_index(drop=True)
+    )
+    for idx, row in unique_weeks.iterrows():
+        iso_year = int(row['iso_year'])
+        iso_week = int(row['iso_week'])
+        semana_no_mes = idx + 1
+        semana_inicio = row['semana_inicio']
+        semana_fim_util = semana_inicio + timedelta(days=4)
+        try:
+            semana_fim_util = datetime.fromisocalendar(iso_year, iso_week, 5).date()
+        except ValueError:
+            semana_fim_util = semana_inicio + timedelta(days=4)
+        fechada = hoje.date() > semana_fim_util
+        week_meta_map[(iso_year, iso_week)] = {
+            "semana_no_mes": semana_no_mes,
+            "fechada": fechada,
+            "week_end": semana_fim_util
+        }
+
+    if not week_meta_map:
+        return vazio_series, meta
+
+    meta['total_semanas'] = len(week_meta_map)
+    meta['semanas_fechadas'] = len([1 for info in week_meta_map.values() if info['fechada']])
+
+    df_mes['semana_no_mes'] = df_mes.apply(
+        lambda r: week_meta_map.get((int(r['iso_year']), int(r['iso_week'])), {}).get('semana_no_mes'),
+        axis=1
+    )
+    df_mes = df_mes.dropna(subset=['semana_no_mes'])
+    if df_mes.empty:
+        return vazio_series, meta
+
+    volumes = (
+        df_mes.groupby(['_laboratory', 'iso_year', 'iso_week', 'semana_no_mes'])
+        .size()
+        .reset_index(name='volume')
+    )
+
+    if volumes.empty:
+        return vazio_series, meta
+
+    # Metadados globais por semana
+    weeks_meta_list = []
+    prev_total = None
+    for _, row in volumes.groupby(['iso_year', 'iso_week', 'semana_no_mes'])['volume'].sum().reset_index().sort_values('semana_no_mes').iterrows():
+        iso_year = int(row['iso_year'])
+        iso_week = int(row['iso_week'])
+        semana_no_mes = int(row['semana_no_mes'])
+        total_volume = int(row['volume'])
+        weeks_meta_list.append({
+            "semana": semana_no_mes,
+            "iso_week": iso_week,
+            "iso_year": iso_year,
+            "volume_total": total_volume,
+            "volume_semana_anterior": prev_total,
+            "fechada": week_meta_map[(iso_year, iso_week)]['fechada']
+        })
+        prev_total = total_volume
+    meta['weeks'] = weeks_meta_list
+
+    # JSON por laboratório
+    lab_json_map: Dict[str, str] = {}
+    for lab_id, grupo in volumes.groupby('_laboratory'):
+        grupo = grupo.sort_values('semana_no_mes')
+        registros = []
+        prev_volume_lab = None
+        for _, row in grupo.iterrows():
+            iso_year = int(row['iso_year'])
+            iso_week = int(row['iso_week'])
+            key = (iso_year, iso_week)
+            info_semana = week_meta_map.get(key, {})
+            registros.append({
+                "semana": int(row['semana_no_mes']),
+                "iso_week": iso_week,
+                "iso_year": iso_year,
+                "volume_util": int(row['volume']),
+                "volume_semana_anterior": prev_volume_lab,
+                "fechada": info_semana.get('fechada', False)
+            })
+            prev_volume_lab = int(row['volume'])
+        lab_json_map[lab_id] = json.dumps(registros, ensure_ascii=False)
+
+    series_result = base_index.to_series().apply(lambda idx: lab_json_map.get(str(idx), '[]'))
+    series_result.index = base_index
+    return series_result, meta
 
 def connect_mongodb():
     """Conecta ao MongoDB com tratamento de erro."""
@@ -456,6 +642,331 @@ def carregar_dados_csv() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.D
             pd.DataFrame(),
             pd.DataFrame()
         )
+
+# ========================================
+# FUNÇÕES DO SISTEMA V2
+# ========================================
+
+def calcular_baseline_mensal_robusta(base_df: pd.DataFrame, meses_nomes: List[str], top_n: int = BASELINE_TOP_N) -> pd.Series:
+    """
+    Calcula baseline mensal robusta como média dos top N meses de 2024 E 2025.
+    
+    Args:
+        base_df: DataFrame com dados dos laboratórios
+        meses_nomes: Lista com nomes dos meses
+        top_n: Número de maiores meses a considerar (padrão: 3)
+        
+    Returns:
+        Série com baseline mensal para cada laboratório
+    """
+    logger.info(f"Calculando baseline mensal robusta (top-{top_n} meses de 2024 e 2025)")
+    
+    # Colunas de coletas de 2024
+    colunas_2024 = [f'N_Coletas_{m}_24' for m in meses_nomes]
+    colunas_2024_existentes = [col for col in colunas_2024 if col in base_df.columns]
+    
+    # Colunas de coletas de 2025 (até mês atual)
+    mes_atual = datetime.now().month
+    meses_2025_disponiveis = meses_nomes[:mes_atual]
+    colunas_2025 = [f'N_Coletas_{m}_25' for m in meses_2025_disponiveis]
+    colunas_2025_existentes = [col for col in colunas_2025 if col in base_df.columns]
+    
+    # Combinar todas as colunas disponíveis
+    todas_colunas = colunas_2024_existentes + colunas_2025_existentes
+    
+    if not todas_colunas:
+        logger.warning("Nenhuma coluna de coletas encontrada. Baseline será 0.")
+        return pd.Series(0, index=base_df.index)
+    
+    # Calcular média dos top N meses de ambos os anos combinados
+    baseline = base_df[todas_colunas].apply(
+        lambda row: row.nlargest(min(top_n, len(row))).mean() if row.sum() > 0 else 0,
+        axis=1
+    )
+    
+    logger.info(f"Baseline calculada (2024+2025): média={baseline.mean():.2f}, mediana={baseline.median():.2f}")
+    return baseline
+
+
+def extrair_componentes_baseline(base_df: pd.DataFrame,
+                                 meses_nomes: List[str],
+                                 top_n: int = BASELINE_TOP_N) -> pd.Series:
+    """
+    Retorna, para cada laboratório, os meses que compõem a baseline robusta.
+    """
+    colunas_2024 = [f'N_Coletas_{m}_24' for m in meses_nomes]
+    mes_atual = datetime.now().month
+    colunas_2025 = [f'N_Coletas_{m}_25' for m in meses_nomes[:mes_atual]]
+    todas_colunas = [col for col in colunas_2024 + colunas_2025 if col in base_df.columns]
+
+    if not todas_colunas:
+        return pd.Series(['[]'] * len(base_df), index=base_df.index, dtype=object)
+
+    def _label_coluna(col: str) -> str:
+        partes = col.split('_')
+        if len(partes) == 4:
+            mes = partes[2]
+            ano = partes[3]
+            ano_completo = f"20{ano}"
+            return f"{mes}/{ano_completo}"
+        return col
+
+    coluna_rotulo = {col: _label_coluna(col) for col in todas_colunas}
+
+    def _componentes(row: pd.Series) -> str:
+        itens = []
+        for col in todas_colunas:
+            valor = row.get(col, 0)
+            if pd.notna(valor) and float(valor) > 0:
+                itens.append({"mes": coluna_rotulo[col], "volume": float(valor)})
+        itens.sort(key=lambda x: x['volume'], reverse=True)
+        selecionados = [{"mes": item["mes"], "volume": int(round(item["volume"]))} for item in itens[:top_n]]
+        return json.dumps(selecionados, ensure_ascii=False)
+
+    return base_df.apply(_componentes, axis=1)
+
+
+def calcular_wow_iso(base_df: pd.DataFrame, df_gatherings_2025: pd.DataFrame, uf: Optional[str] = None) -> pd.DataFrame:
+    """
+    Calcula variação Week over Week (WoW) usando semanas ISO com apenas dias úteis.
+    
+    Args:
+        base_df: DataFrame com dados dos laboratórios
+        df_gatherings_2025: DataFrame com coletas de 2025
+        uf: UF para considerar feriados estaduais (opcional)
+        
+    Returns:
+        DataFrame com colunas WoW_Semana_Atual, WoW_Semana_Anterior, WoW_Percentual
+    """
+    logger.info(f"Calculando WoW (Week over Week) com semanas ISO e dias úteis{f' para UF={uf}' if uf else ''}")
+    
+    if df_gatherings_2025.empty:
+        logger.warning("Sem dados de 2025 para calcular WoW")
+        return pd.DataFrame({
+            'WoW_Semana_Atual': 0,
+            'WoW_Semana_Anterior': 0,
+            'WoW_Percentual': 0
+        }, index=base_df.index)
+    
+    # Preparar dados
+    df_wow = df_gatherings_2025.copy()
+    if '_laboratory' not in df_wow.columns or 'createdAt' not in df_wow.columns:
+        logger.error("Colunas necessárias não encontradas para WoW")
+        return pd.DataFrame({
+            'WoW_Semana_Atual': 0,
+            'WoW_Semana_Anterior': 0,
+            'WoW_Percentual': 0
+        }, index=base_df.index)
+    
+    df_wow['createdAt'] = pd.to_datetime(df_wow['createdAt'], errors='coerce')
+    df_wow = df_wow.dropna(subset=['createdAt'])
+    
+    # Obter semana ISO e ano
+    df_wow['iso_year'] = df_wow['createdAt'].dt.isocalendar().year
+    df_wow['iso_week'] = df_wow['createdAt'].dt.isocalendar().week
+    df_wow['data_apenas'] = df_wow['createdAt'].dt.date
+    
+    # Filtrar apenas dias úteis se módulo disponível
+    if MODULOS_V2_DISPONIVEIS:
+        df_wow['is_util'] = df_wow['data_apenas'].apply(lambda d: is_dia_util(d, uf))
+        df_wow = df_wow[df_wow['is_util']].copy()
+    
+    # Identificar semana ISO atual
+    hoje = datetime.now()
+    semana_atual = hoje.isocalendar().week
+    ano_atual = hoje.isocalendar().year
+    
+    # Semana anterior
+    data_semana_anterior = hoje - timedelta(days=7)
+    semana_anterior = data_semana_anterior.isocalendar().week
+    ano_anterior = data_semana_anterior.isocalendar().year
+    
+    # Agregar por laboratório e semana
+    df_atual = df_wow[(df_wow['iso_year'] == ano_atual) & (df_wow['iso_week'] == semana_atual)]
+    df_anterior = df_wow[(df_wow['iso_year'] == ano_anterior) & (df_wow['iso_week'] == semana_anterior)]
+    
+    vol_atual = df_atual.groupby('_laboratory').size().to_dict()
+    vol_anterior = df_anterior.groupby('_laboratory').size().to_dict()
+    
+    # Calcular para cada laboratório
+    wow_data = []
+    for lab_id in base_df.index:
+        v_atual = vol_atual.get(lab_id, 0)
+        v_anterior = vol_anterior.get(lab_id, 0)
+        
+        if v_anterior > 0:
+            wow_pct = ((v_atual - v_anterior) / v_anterior) * 100
+        else:
+            wow_pct = 0.0 if v_atual == 0 else 100.0
+        
+        wow_data.append({
+            '_id': lab_id,
+            'WoW_Semana_Atual': v_atual,
+            'WoW_Semana_Anterior': v_anterior,
+            'WoW_Percentual': round(wow_pct, 2)
+        })
+    
+    df_wow_result = pd.DataFrame(wow_data).set_index('_id')
+    logger.info(f"WoW calculado: {len(df_wow_result)} laboratórios")
+    
+    return df_wow_result.reindex(base_df.index, fill_value=0)
+
+
+def integrar_dados_gralab(base_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Integra dados de concorrência do Gralab (últimos 7-14 dias).
+    
+    Args:
+        base_df: DataFrame com dados dos laboratórios
+        
+    Returns:
+        DataFrame com colunas Apareceu_Gralab, Gralab_Data, Gralab_Tipo
+    """
+    logger.info("Integrando dados de concorrência do Gralab")
+    
+    # Inicializar colunas
+    base_df = base_df.copy()
+    base_df['Apareceu_Gralab'] = False
+    base_df['Gralab_Data'] = pd.NaT
+    base_df['Gralab_Tipo'] = ''
+    
+    # Verificar se arquivo existe
+    gralab_excel = os.path.join(OUTPUT_DIR, "Automations", "cunha", "relatorio_completo_laboratorios_gralab.xlsx")
+    
+    if not os.path.exists(gralab_excel):
+        logger.warning(f"Arquivo Gralab não encontrado: {gralab_excel}")
+        return base_df
+    
+    try:
+        # Ler aba EntradaSaida
+        df_entrada_saida = pd.read_excel(gralab_excel, sheet_name='EntradaSaida', engine='openpyxl')
+        logger.info(f"Dados Gralab carregados: {len(df_entrada_saida)} registros")
+        
+        # Verificar colunas necessárias
+        if 'CNPJ' not in df_entrada_saida.columns or 'Data' not in df_entrada_saida.columns:
+            logger.error("Colunas esperadas não encontradas no arquivo Gralab")
+            return base_df
+        
+        # Filtrar últimos N dias
+        df_entrada_saida['Data'] = pd.to_datetime(df_entrada_saida['Data'], errors='coerce')
+        hoje = datetime.now()
+        janela_dias = GRALAB_JANELA_DIAS if 'GRALAB_JANELA_DIAS' in globals() else 14
+        
+        df_recente = df_entrada_saida[
+            (df_entrada_saida['Data'].notna()) &
+            ((hoje - df_entrada_saida['Data']).dt.days <= janela_dias)
+        ].copy()
+        
+        logger.info(f"Registros Gralab recentes (últimos {janela_dias} dias): {len(df_recente)}")
+        
+        if df_recente.empty:
+            return base_df
+        
+        # Normalizar CNPJ
+        def normalizar_cnpj(cnpj):
+            if pd.isna(cnpj):
+                return ''
+            cnpj_str = str(cnpj).strip()
+            # Remover caracteres não numéricos e garantir 14 dígitos
+            cnpj_limpo = ''.join(filter(str.isdigit, cnpj_str))
+            if len(cnpj_limpo) == 0:
+                return ''
+            # Garantir 14 dígitos (preencher com zeros à esquerda se necessário)
+            return cnpj_limpo.zfill(14)[:14]
+        
+        # Normalizar CNPJs em ambos os DataFrames
+        df_recente['CNPJ_Normalizado'] = df_recente['CNPJ'].apply(normalizar_cnpj)
+        # Verificar se CNPJ_PCL existe, caso contrário tentar outras colunas
+        if 'CNPJ_PCL' in base_df.columns:
+            base_df['CNPJ_Normalizado'] = base_df['CNPJ_PCL'].apply(normalizar_cnpj)
+        elif 'cnpj' in base_df.columns:
+            base_df['CNPJ_Normalizado'] = base_df['cnpj'].apply(normalizar_cnpj)
+        else:
+            logger.warning("Coluna CNPJ não encontrada no base_df. Tentando colunas disponíveis...")
+            logger.warning(f"Colunas disponíveis: {list(base_df.columns)[:10]}")
+            return base_df
+        
+        # Remover CNPJs vazios ou inválidos
+        df_recente = df_recente[df_recente['CNPJ_Normalizado'] != ''].copy()
+        
+        logger.info(f"CNPJs normalizados - Gralab: {len(df_recente)}, Base: {base_df['CNPJ_Normalizado'].notna().sum()}")
+        
+        # Pegar registro mais recente por CNPJ
+        df_recente = df_recente.sort_values('Data', ascending=False)
+        df_recente_unique = df_recente.drop_duplicates(subset=['CNPJ_Normalizado'], keep='first')
+        
+        logger.info(f"CNPJs únicos no Gralab (últimos {janela_dias} dias): {len(df_recente_unique)}")
+        
+        # Merge usando merge do pandas para melhor performance
+        base_df_merged = base_df.merge(
+            df_recente_unique[['CNPJ_Normalizado', 'Data', 'Tipo']].rename(columns={'Data': 'Gralab_Data', 'Tipo': 'Gralab_Tipo'}),
+            on='CNPJ_Normalizado',
+            how='left'
+        )
+        
+        # Atualizar flags
+        base_df_merged['Apareceu_Gralab'] = base_df_merged['Gralab_Data'].notna()
+        
+        # Se Gralab_Tipo não existir na merge, criar coluna vazia
+        if 'Gralab_Tipo' not in base_df_merged.columns:
+            base_df_merged['Gralab_Tipo'] = ''
+        else:
+            base_df_merged['Gralab_Tipo'] = base_df_merged['Gralab_Tipo'].fillna('')
+        
+        qtd_com_gralab = base_df_merged['Apareceu_Gralab'].sum()
+        logger.info(f"Integração Gralab concluída: {qtd_com_gralab} laboratórios com sinal de concorrência")
+        
+        # Log de exemplo para debug
+        if qtd_com_gralab > 0:
+            exemplo = base_df_merged[base_df_merged['Apareceu_Gralab']].head(1)
+            if not exemplo.empty:
+                logger.info(f"Exemplo de match: CNPJ={exemplo.iloc[0].get('CNPJ_PCL', 'N/A')}, Data={exemplo.iloc[0].get('Gralab_Data', 'N/A')}")
+        
+        return base_df_merged
+        
+    except Exception as e:
+        logger.error(f"Erro ao integrar dados Gralab: {e}")
+    
+    return base_df
+
+
+def classificar_risco_v2(row: pd.Series) -> Tuple[str, str]:
+    """
+    Classifica o status de risco conforme regras atualizadas (queda vs baseline/WoW e perda por dias).
+    """
+    total_coletas_2025 = row.get('Total_Coletas_2025', 0) or 0
+    coletas_mes_atual = row.get('Coletas_Mes_Atual', 0) or 0
+    porte = row.get('Porte', 'Pequeno')
+    dias_corridos = row.get('Dias_Sem_Coleta', 0) or 0
+
+    if total_coletas_2025 == 0:
+        return 'Normal', 'Sem coletas em 2025 - não considerado risco'
+
+    perda_tipo = row.get('Classificacao_Perda_V2')
+    if perda_tipo and perda_tipo != 'Sem Perda':
+        return perda_tipo, f"Sem coletas há {int(dias_corridos)} dias (porte {porte})"
+
+    motivos = []
+
+    baseline = row.get('Baseline_Mensal', 0)
+    coletas_atual = row.get('Coletas_Mes_Atual', 0)
+    if baseline > 0:
+        queda_baseline_pct = ((baseline - coletas_atual) / baseline) * 100
+        if queda_baseline_pct > (REDUCAO_BASELINE_RISCO_ALTO * 100):
+            motivos.append(f"Queda de {queda_baseline_pct:.1f}% vs baseline mensal")
+
+    wow_pct = row.get('WoW_Percentual', 0)
+    if wow_pct < -(REDUCAO_WOW_RISCO_ALTO * 100):
+        motivos.append(f"Queda WoW de {abs(wow_pct):.1f}%")
+
+    if row.get('Risco_Por_Dias_Sem_Coleta', False):
+        motivos.append(f"{int(dias_corridos)} dia(s) sem coleta impactando o porte {porte}")
+
+    if motivos:
+        return 'Perda (Risco Alto)', '; '.join(motivos)
+
+    return 'Normal', 'Volume dentro do esperado'
+
 
 def calcular_metricas_churn():
     """Calcula métricas de churn com agregações vetorizadas (rápidas)."""
@@ -874,6 +1385,13 @@ def calcular_metricas_churn():
     base['Dias_Sem_Coleta'] = (now_dt - base['Data_Ultima_Coleta']).dt.days
     base.loc[base['Data_Ultima_Coleta'].isna(), 'Dias_Sem_Coleta'] = 0
     base['Dias_Sem_Coleta'] = base['Dias_Sem_Coleta'].astype(int)
+    base['Dias_Sem_Coleta_Uteis'] = base.apply(
+        lambda row: calcular_dias_sem_coleta_uteis(
+            row.get('Data_Ultima_Coleta'),
+            row.get('Estado')
+        ),
+        axis=1
+    ).astype(int)
 
     # Médias e variação
     meses_ate_agora_2025 = mes_limite_2025 if mes_limite_2025 > 0 else 1
@@ -1090,6 +1608,193 @@ def calcular_metricas_churn():
         dtype=float
     )
 
+    # ================================
+    # SISTEMA DE ALERTAS V2
+    # ================================
+    if MODULOS_V2_DISPONIVEIS:
+        logger.info("Aplicando sistema de alertas v2...")
+        
+        try:
+            # 1. Calcular baseline mensal robusta
+            base['Baseline_Mensal'] = calcular_baseline_mensal_robusta(base, meses_nomes, BASELINE_TOP_N)
+            base['Baseline_Componentes'] = extrair_componentes_baseline(base, meses_nomes, BASELINE_TOP_N)
+            
+            # 2. Calcular WoW (Week over Week)
+            df_wow = calcular_wow_iso(base, df_gatherings_2025_valid, uf=None)
+            base = base.join(df_wow)
+            
+            # Adicionar coluna de queda para cálculo de severidade
+            base['Queda_Baseline_Pct'] = np.where(
+                base['Baseline_Mensal'] > 0,
+                ((base['Baseline_Mensal'] - base['Coletas_Mes_Atual']) / base['Baseline_Mensal']) * 100,
+                0
+            )
+            
+            # 3. Aplicar classificação de porte
+            base = aplicar_porte_dataframe(
+                base,
+                coluna_volume='Media_Coletas_Mensal_2025',
+                coluna_destino='Porte',
+                limiar_grande=PORTE_GRANDE_MIN,
+                limiar_medio=PORTE_MEDIO_MIN
+            )
+            base['Risco_Por_Dias_Sem_Coleta'] = base.apply(
+                lambda row: avaliar_risco_por_dias_sem_coleta(
+                    row.get('Dias_Sem_Coleta', 0),
+                    row.get('Dias_Sem_Coleta_Uteis', 0),
+                    row.get('Porte', 'Pequeno')
+                ),
+                axis=1
+            )
+            base['Classificacao_Perda_V2'] = base.apply(
+                lambda row: classificar_perda_por_dias_sem_coleta(
+                    row.get('Dias_Sem_Coleta', 0),
+                    row.get('Dias_Sem_Coleta_Uteis', 0),
+                    row.get('Porte', 'Pequeno')
+                ) or 'Sem Perda',
+                axis=1
+            )
+            
+            # 4. Aplicar gatilho de dias sem coleta por porte
+            base = aplicar_gatilho_dataframe(
+                base,
+                coluna_dias='Dias_Sem_Coleta',
+                coluna_porte='Porte',
+                coluna_destino='Gatilho_Dias_Sem_Coleta',
+                coluna_dias_uteis='Dias_Sem_Coleta_Uteis'
+            )
+            
+            # 5. Integrar dados de concorrência (Gralab)
+            base = integrar_dados_gralab(base)
+            
+            # 6. Aplicar classificação de risco v2 (binária)
+            risco_v2_results = base.apply(classificar_risco_v2, axis=1)
+            base['Status_Risco_V2'] = risco_v2_results.apply(lambda x: x[0])
+            base['Motivo_Risco_V2'] = risco_v2_results.apply(lambda x: x[1])
+            
+            # 7. Filtrar laboratórios sem coletas em 2025 antes de calcular severidade
+            # Isso garante que labs como MARICONDI (sem coletas desde 2024) não apareçam nos alertas
+            # Critérios rigorosos: deve ter coletas em 2025 E última coleta deve ser em 2025
+            base['Total_Coletas_2025'] = base['Total_Coletas_2025'].fillna(0).astype(int)
+            base['Coletas_Mes_Atual'] = base['Coletas_Mes_Atual'].fillna(0).astype(int)
+            
+            # Verificar se Data_Ultima_Coleta existe e é de 2025
+            if 'Data_Ultima_Coleta' in base.columns:
+                base['Data_Ultima_Coleta'] = pd.to_datetime(base['Data_Ultima_Coleta'], errors='coerce')
+                # Filtrar: deve ter coletas em 2025 E última coleta deve ser de 2025 ou posterior
+                mask_coletas_2025 = (
+                    (base['Total_Coletas_2025'] > 0) & 
+                    (base['Data_Ultima_Coleta'].notna()) &
+                    (base['Data_Ultima_Coleta'].dt.year >= 2025)
+                )
+            else:
+                # Fallback: apenas verificar Total_Coletas_2025
+                mask_coletas_2025 = (base['Total_Coletas_2025'] > 0)
+            
+            base_com_coletas_2025 = base[mask_coletas_2025].copy()
+            
+            # Log detalhado para debug
+            labs_filtrados = len(base) - len(base_com_coletas_2025)
+            logger.info(f"Filtro de coletas 2025: {len(base)} labs → {len(base_com_coletas_2025)} labs com coletas em 2025 ({labs_filtrados} filtrados)")
+            
+            # Log de exemplo de labs filtrados (para debug)
+            if labs_filtrados > 0:
+                labs_sem_coleta = base[~mask_coletas_2025].head(5)
+                for idx, lab in labs_sem_coleta.iterrows():
+                    nome = lab.get('Nome_Fantasia_PCL', lab.get('Razao_Social_PCL', 'N/A'))
+                    total_2025 = lab.get('Total_Coletas_2025', 0)
+                    ultima_coleta = lab.get('Data_Ultima_Coleta', 'N/A')
+                    logger.info(f"  Lab filtrado: {nome} - Total_2025={total_2025}, Ultima_Coleta={ultima_coleta}")
+            
+            # 8. Preparar alertas prioritários
+            df_alto_risco = base_com_coletas_2025[base_com_coletas_2025['Status_Risco_V2'] == 'Perda (Risco Alto)'].copy()
+            
+            if not df_alto_risco.empty:
+                # 9. Aplicar cap de alertas (global)
+                df_alertas_cap = aplicar_cap_alertas(df_alto_risco, cap=ALERTA_CAP_DEFAULT)
+                
+                # 10. Processar por UF (usar base_com_coletas_2025 para garantir que apenas labs com coletas sejam considerados)
+                alertas_por_uf = processar_alertas_por_uf(
+                    base_com_coletas_2025,
+                    cap_global=ALERTA_CAP_DEFAULT,
+                    coluna_uf='Estado',
+                    coluna_risco='Status_Risco_V2'
+                )
+                
+                # 11. Gerar e salvar relatório
+                relatorio = gerar_relatorio_alertas(df_alertas_cap)
+                relatorio_texto = formatar_relatorio_texto(relatorio)
+                logger.info(f"\n{relatorio_texto}")
+                
+                # Salvar alertas prioritários em arquivo separado
+                arquivo_alertas = os.path.join(OUTPUT_DIR, "alertas_prioritarios.csv")
+                df_alertas_cap.to_csv(arquivo_alertas, index=False, encoding=ENCODING)
+                logger.info(f"Alertas prioritários salvos: {arquivo_alertas}")
+                
+                # Salvar alertas por UF
+                for uf, df_uf_alertas in alertas_por_uf.items():
+                    arquivo_uf = os.path.join(OUTPUT_DIR, f"alertas_uf_{uf}.csv")
+                    df_uf_alertas.to_csv(arquivo_uf, index=False, encoding=ENCODING)
+                
+                logger.info(f"Sistema v2: {len(df_alto_risco)} alertas identificados, {len(df_alertas_cap)} após cap")
+            else:
+                logger.info("Sistema v2: Nenhum alerta de risco alto identificado")
+            
+        except Exception as e:
+            logger.error(f"Erro ao aplicar sistema v2: {e}. Continuando com sistema legado.", exc_info=True)
+    else:
+        logger.warning("Módulos v2 não disponíveis. Usando sistema legado de alertas.")
+        # Adicionar colunas vazias do sistema v2 para compatibilidade
+        base['Baseline_Mensal'] = 0
+        base['Baseline_Componentes'] = '[]'
+        base['WoW_Semana_Atual'] = 0
+        base['WoW_Semana_Anterior'] = 0
+        base['WoW_Percentual'] = 0
+        base['Queda_Baseline_Pct'] = 0
+        base['Porte'] = 'Desconhecido'
+        base['Gatilho_Dias_Sem_Coleta'] = False
+        base['Risco_Por_Dias_Sem_Coleta'] = False
+        base['Classificacao_Perda_V2'] = 'Sem Perda'
+        base['Apareceu_Gralab'] = False
+        base['Gralab_Data'] = pd.NaT
+        base['Gralab_Tipo'] = ''
+        base['Status_Risco_V2'] = base['Status_Risco']
+        base['Motivo_Risco_V2'] = base['Motivo_Risco']
+
+    # Resumos semanais/mensais
+    semanas_json, semanas_meta = gerar_resumo_semanal_mes(base, df_gatherings_2025_valid)
+    if semanas_json.empty:
+        base['Semanas_Mes_Atual'] = '[]'
+    else:
+        base['Semanas_Mes_Atual'] = semanas_json.reindex(base.index).fillna('[]')
+    meta_fechamento = semanas_meta or {}
+    base['Semanas_Fechadas_Mes'] = meta_fechamento.get('semanas_fechadas', 0)
+
+    semanas_correntes_ano = max(1, datetime.now(timezone_br).isocalendar()[1])
+    media_semanal_2024 = float(base['Total_Coletas_2024'].sum() / 52) if len(base) else 0.0
+    media_semanal_2025 = float(base['Total_Coletas_2025'].sum() / semanas_correntes_ano) if len(base) else 0.0
+    base['Media_Semanal_BR_2024'] = media_semanal_2024
+    base['Media_Semanal_BR_2025'] = media_semanal_2025
+    media_uf = (
+        base.groupby('Estado')['Total_Coletas_2025'].sum() / semanas_correntes_ano
+        if len(base) else pd.Series(dtype=float)
+    )
+    media_uf_dict = media_uf.fillna(0).to_dict() if isinstance(media_uf, pd.Series) else {}
+    base['Media_Semanal_UF_Atual'] = base['Estado'].map(media_uf_dict).fillna(0)
+
+    meta_fechamento.update({
+        "media_semanal_pais_2024": media_semanal_2024,
+        "media_semanal_pais_2025": media_semanal_2025,
+        "media_semanal_por_uf": media_uf_dict
+    })
+
+    try:
+        meta_path = os.path.join(OUTPUT_DIR, "fechamentos_meta.json")
+        with open(meta_path, 'w', encoding='utf-8') as fp:
+            json.dump(meta_fechamento, fp, ensure_ascii=False, indent=2, default=str)
+    except Exception as e:
+        logger.warning(f"Não foi possível salvar metadados de fechamento: {e}")
+
     # Metadados
     base['Data_Analise'] = datetime.now()
 
@@ -1118,7 +1823,16 @@ def calcular_metricas_churn():
         'Variacao_Percentual','Tendencia','Status_Risco','Motivo_Risco','Data_Analise',
         'Total_Coletas_2024','Total_Coletas_2025','Total_Recoletas_2024','Total_Recoletas_2025',
         'Coletas_Mes_Atual','Analise_Diaria',
-        'Voucher_Commission','Data_Preco_Atualizacao','Dados_Diarios_2025','Dados_Semanais_2025'
+        'Voucher_Commission','Data_Preco_Atualizacao','Dados_Diarios_2025','Dados_Semanais_2025',
+        # Colunas do Sistema v2
+        'Baseline_Mensal','Baseline_Componentes',
+        'WoW_Semana_Atual','WoW_Semana_Anterior','WoW_Percentual',
+        'Queda_Baseline_Pct','Porte','Gatilho_Dias_Sem_Coleta',
+        'Dias_Sem_Coleta_Uteis','Risco_Por_Dias_Sem_Coleta','Classificacao_Perda_V2',
+        'Semanas_Mes_Atual','Semanas_Fechadas_Mes',
+        'Media_Semanal_BR_2024','Media_Semanal_BR_2025','Media_Semanal_UF_Atual',
+        'Apareceu_Gralab','Gralab_Data','Gralab_Tipo',
+        'Status_Risco_V2','Motivo_Risco_V2'
     ]
 
     # Garantir colunas existentes

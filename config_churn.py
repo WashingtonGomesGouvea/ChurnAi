@@ -170,6 +170,75 @@ except:
     SMTP_PASSWORD = os.getenv('SMTP_PASSWORD', 'pass')
 ALERTA_THRESHOLD_ALTO = 5  # Número de labs em alto risco para enviar alerta
 
+# ========================================
+# CONFIGURAÇÕES DO SISTEMA DE ALERTAS V2
+# ========================================
+
+# Baseline mensal robusta
+BASELINE_TOP_N = int(os.getenv('BASELINE_TOP_N', 3))  # Top N meses de 2024 (3 ou 6)
+
+# Limiares de risco v2 (apenas alto risco - sistema binário)
+REDUCAO_BASELINE_RISCO_ALTO = float(os.getenv('REDUCAO_BASELINE_RISCO_ALTO', 0.50))  # 50% queda vs baseline
+REDUCAO_WOW_RISCO_ALTO = float(os.getenv('REDUCAO_WOW_RISCO_ALTO', 0.50))  # 50% queda WoW
+
+# Porte de laboratório (baseado em volume médio mensal)
+PORTE_PEQUENO_MAX = int(os.getenv('PORTE_PEQUENO_MAX', 40))   # ≤40 coletas/mês
+PORTE_MEDIO_MAX = int(os.getenv('PORTE_MEDIO_MAX', 80))       # 41-80 coletas/mês
+PORTE_MEDIO_GRANDE_MAX = int(os.getenv('PORTE_MEDIO_GRANDE_MAX', 150))  # 81-150 coletas/mês
+PORTE_MEDIO_MIN = PORTE_PEQUENO_MAX + 1
+PORTE_GRANDE_MIN = PORTE_MEDIO_GRANDE_MAX + 1  # >150 coletas/mês (Grande)
+
+# Regras de dias sem coleta por porte (alertas ativos)
+RISCO_DIAS_SEM_COLETA_RULES = {
+    'Pequeno': {
+        'habilita': False  # não considera risco por dias sem coleta
+    },
+    'Médio': {
+        'habilita': True,
+        'min_dias_uteis': 2,
+        'max_dias_corridos': 15
+    },
+    'Médio/Grande': {
+        'habilita': True,
+        'min_dias_uteis': 1,
+        'max_dias_corridos': 15
+    },
+    'Grande': {
+        'habilita': True,
+        'min_dias_uteis': 1,
+        'max_dias_uteis': 5
+    }
+}
+
+# Regras de perda recente por porte
+PERDA_RECENTE_RULES = {
+    'Pequeno': {
+        'min_dias_corridos': 30,
+        'max_dias_corridos': 180
+    },
+    'Médio': {
+        'min_dias_corridos': 15,
+        'max_dias_corridos': 180
+    },
+    'Médio/Grande': {
+        'min_dias_corridos': 15,
+        'max_dias_corridos': 180
+    },
+    'Grande': {
+        'min_dias_uteis': 5,
+        'max_dias_corridos': 180
+    }
+}
+PERDA_ANTIGA_LIMITE_CORRIDOS = int(os.getenv('PERDA_ANTIGA_LIMITE_CORRIDOS', 180))
+
+# Cap de alertas (budget de alertas diários)
+ALERTA_CAP_MIN = int(os.getenv('ALERTA_CAP_MIN', 30))           # Mínimo de alertas/dia
+ALERTA_CAP_MAX = int(os.getenv('ALERTA_CAP_MAX', 50))           # Máximo de alertas/dia
+ALERTA_CAP_DEFAULT = int(os.getenv('ALERTA_CAP_DEFAULT', 40))   # Padrão: 40 alertas/dia
+
+# Janela de concorrência Gralab (dias para considerar aparição recente)
+GRALAB_JANELA_DIAS = int(os.getenv('GRALAB_JANELA_DIAS', 14))  # Últimos 14 dias
+
 # Configurações para KPIs
 DIAS_ATIVO_REcente_7 = 7
 DIAS_ATIVO_REcente_30 = 30
@@ -213,3 +282,13 @@ VIP_AUTO_BACKUP = True  # Criar backup automático antes de alterações
 VIP_VALIDATE_CNPJ_FORMAT = True
 VIP_VALIDATE_CNPJ_EXISTS = True  # Verificar se CNPJ existe nos dados de laboratórios
 VIP_AUTO_COMPLETE_FROM_LABS = True  # Auto-completar dados do arquivo latest
+
+# ========================================
+# CONFIGURAÇÕES DE SEVERIDADE (PESOS)
+# ========================================
+
+# Pesos para cálculo de severidade de alertas
+PESO_PERCENTUAL_QUEDA = int(os.getenv('PESO_PERCENTUAL_QUEDA', 100))       # Até 100 pts pela queda percentual
+PESO_VOLUME_HISTORICO = int(os.getenv('PESO_VOLUME_HISTORICO', 50))        # Até 50 pts pelo volume histórico
+PESO_DIAS_SEM_COLETA = int(os.getenv('PESO_DIAS_SEM_COLETA', 30))          # Até 30 pts por dias sem coleta
+PESO_BONUS_CONCORRENTE = int(os.getenv('PESO_BONUS_CONCORRENTE', 50))      # Bônus de 50 pts se apareceu no concorrente

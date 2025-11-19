@@ -763,14 +763,58 @@ class DataManager:
             return None
     @staticmethod
     def preparar_dados(df: pd.DataFrame) -> pd.DataFrame:
-        """Prepara e limpa os dados carregados - Atualizado para coerência entre telas."""
+        """Prepara os dados e enriquece com VIP/Rede globalmente."""
         if df is None or df.empty:
             return pd.DataFrame()
-        # Removido bloco de debug da sidebar para manter interface limpa
-        # Garantir tipos de dados corretos
+        
+        # 1. Tratamentos Básicos
         if 'Data_Analise' in df.columns:
             df['Data_Analise'] = pd.to_datetime(df['Data_Analise'], errors='coerce')
-        # Calcular volume total se não existir (até o mês atual)
+
+        # Normalizar CNPJ
+        if 'CNPJ_PCL' in df.columns:
+            df['CNPJ_Normalizado'] = df['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
+        elif 'cnpj' in df.columns:
+             df['CNPJ_Normalizado'] = df['cnpj'].apply(DataManager.normalizar_cnpj)
+
+        # Filtro Active == True
+        if 'Active' in df.columns:
+            df = df[df['Active'] == True]
+
+        # 2. INTEGRAÇÃO GLOBAL VIP (Para uso nas abas que mostram tudo)
+        try:
+            df_vip = DataManager.carregar_dados_vip()
+            
+            if df_vip is not None and not df_vip.empty:
+                if 'CNPJ_Normalizado' not in df_vip.columns:
+                     df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
+                
+                # Colunas para trazer
+                cols_vip = ['CNPJ_Normalizado', 'Rede', 'Ranking', 'Ranking Rede']
+                cols_vip = [c for c in cols_vip if c in df_vip.columns]
+                
+                # Merge mantendo TODOS os laboratórios (Left Join)
+                df = df.merge(df_vip[cols_vip], on='CNPJ_Normalizado', how='left', suffixes=('', '_vip'))
+                
+                # Consolidar Rede
+                if 'Rede' not in df.columns and 'Rede_vip' in df.columns:
+                    df['Rede'] = df['Rede_vip']
+                elif 'Rede' in df.columns and 'Rede_vip' in df.columns:
+                    df['Rede'] = df['Rede'].fillna(df['Rede_vip'])
+                
+                # Criar flags
+                df['VIP'] = np.where(df['Ranking'].notna(), 'Sim', 'Não')
+                df['Rede'] = df['Rede'].fillna('-')
+            else:
+                df['VIP'] = 'Não'
+                df['Rede'] = '-'
+        except Exception as e:
+            # Log erro silencioso para não travar app
+            print(f"Erro integração VIP: {e}")
+            df['VIP'] = 'Não'
+            df['Rede'] = '-'
+
+        # 3. Manter lógica original de volumes e risco
         try:
             # Função inline para evitar dependência circular
             meses_ordem = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
@@ -784,12 +828,7 @@ class DataManager:
         colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses_2025_dyn]
         if 'Volume_Total_2025' not in df.columns:
             df['Volume_Total_2025'] = df[colunas_meses].sum(axis=1, skipna=True) if colunas_meses else 0
-        # Adicionar coluna CNPJ normalizado para match com dados VIP
-        if 'CNPJ_PCL' in df.columns:
-            df['CNPJ_Normalizado'] = df['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
-        # Filtro Active == True para coerência
-        if 'Active' in df.columns:
-            df = df[df['Active'] == True]
+
         # === Nova régua de risco diário ===
         colunas_novas = [
             "Vol_Hoje", "Vol_D1", "MM7", "MM30", "MM90", "DOW_Media",
@@ -2084,133 +2123,118 @@ def formatar_tabela_storytelling(df, config_colunas):
 # ============================================
 
 def renderizar_aba_fechamento_semanal(df: pd.DataFrame, metrics: KPIMetrics, filtros: Dict[str, Any]):
-    """
-    Aba Tática: Foco em "O que aconteceu esta semana?"
-    Comparativo: Semana Atual vs Semana Anterior vs Média Histórica Semanal.
-    """
     st.markdown("## 📅 Fechamento Semanal (Visão Tática)")
-    st.markdown("Identificação rápida de quebras de fluxo e riscos imediatos.")
-
-    # Calcular métricas da semana
-    metricas_sem = calcular_metricas_fechamento_semanal(df)
+    st.caption("Monitoramento de todos os laboratórios. Ordenado por maior queda de volume.")
     
-    # 1. KPIs de Topo (Simples e Diretos)
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Semana ISO", f"{metricas_sem['semanas_fechadas'] + 1}", "Em andamento")
-    with col2:
-        st.metric("Volume Semana Atual", f"{metricas_sem['volume_atual']:,}", help="Coletas úteis da semana corrente")
-    with col3:
-        delta_vol = metricas_sem['volume_atual'] - metricas_sem['volume_anterior']
-        st.metric("vs Semana Anterior", f"{metricas_sem['volume_anterior']:,}", f"{delta_vol:+}", delta_color="normal")
-    with col4:
-        # Impacto da Régua
-        vol_total = metricas_sem.get('volume_semana_atual_total', 0)
-        vol_sem_risco = metricas_sem.get('volume_semana_atual_sem_risco', 0)
-        impacto = vol_total - vol_sem_risco
-        st.metric("Volume em Risco (Dias)", f"{impacto:,}", "Retido pela régua", delta_color="inverse")
-
-    st.markdown("---")
-
-    # 2. Separação Clara: RISCO (Ainda salvável) vs PERDA (Já consolidado)
+    # 1. Cálculos Específicos da Aba
+    cols_num = ['WoW_Semana_Atual', 'WoW_Semana_Anterior', 'Media_Semanal_2025']
+    for c in cols_num:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+            
+    # Queda Absoluta (Anterior - Atual). Positivo = Perda de volume.
+    df['Queda_Semanal_Abs'] = df['WoW_Semana_Anterior'] - df['WoW_Semana_Atual']
     
-    # Preparar dados
-    # Se Media_Semanal_2025 não veio do gerador, calcula on-the-fly
-    if 'Media_Semanal_2025' not in df.columns:
-        semana_atual = datetime.now().isocalendar()[1]
-        df['Media_Semanal_2025'] = (df['Total_Coletas_2025'] / max(1, semana_atual)).fillna(0)
-
-    # Filtros de dados
-    df_ativos = df[df['Classificacao_Perda_V2'] == 'Sem Perda'].copy()
-    df_perdas = df[df['Classificacao_Perda_V2'] != 'Sem Perda'].copy()
-
-    # Filtro de Queda WoW para a tabela de Risco
-    # Regra: Queda > 30% OU Risco por Dias Sem Coleta
-    df_risco_semanal = df_ativos[
-        (df_ativos['WoW_Percentual'] < -30) | 
-        (df_ativos['Risco_Por_Dias_Sem_Coleta'] == True)
-    ].copy()
-
-    # Ordenar por Impacto Absoluto (Diferença de volume) para priorizar grandes contas
-    # Corrigido: Usando colunas corretas do gerador (WoW_Semana_Anterior e WoW_Semana_Atual)
-    df_risco_semanal['Impacto_Absoluto'] = df_risco_semanal['WoW_Semana_Anterior'] - df_risco_semanal['WoW_Semana_Atual']
-    df_risco_semanal = df_risco_semanal.sort_values('Impacto_Absoluto', ascending=False)
-
-    # --- TABELA 1: RISCO OPERACIONAL (Onde agir agora) ---
-    st.subheader("🚨 Risco Operacional (Queda WoW ou Dias s/ Coleta)")
-    st.caption("Laboratórios ativos com queda brusca na semana ou falha de coleta recente. Priorizado por perda de volume.")
-
-    colunas_risco = [
-        'Nome_Fantasia_PCL', 'Estado', 'Porte', 'Representante_Nome',
-        'Media_Semanal_2025', 
-        'WoW_Semana_Anterior', 'WoW_Semana_Atual', 
-        'WoW_Percentual', 
-        'Dias_Sem_Coleta', 'Motivo_Risco_V2'
-    ]
-    
-    # Garantir colunas existentes
-    colunas_exibir = [c for c in colunas_risco if c in df_risco_semanal.columns]
-    
-    st.dataframe(
-        df_risco_semanal[colunas_exibir].head(50), # Top 50 para não travar
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", width="medium"),
-            "Estado": st.column_config.TextColumn("UF", width="small"),
-            "Media_Semanal_2025": st.column_config.NumberColumn("Média Semanal (Hist)", format="%.1f", help="Média de coletas semanais em 2025"),
-            "WoW_Semana_Anterior": st.column_config.NumberColumn("Semana Ant.", format="%d"),
-            "WoW_Semana_Atual": st.column_config.NumberColumn("Semana Atual", format="%d"),
-            "WoW_Percentual": st.column_config.ProgressColumn(
-                "Variação WoW", 
-                format="%.0f%%", 
-                min_value=-100, 
-                max_value=0,
-                help="Barras mostram a intensidade da queda"
-            ),
-            "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta", format="%d ⚠️"),
-            "Motivo_Risco_V2": st.column_config.TextColumn("Diagnóstico")
-        }
+    # % Diferença da Média Histórica
+    df['Pct_Dif_Media_Historica'] = np.where(
+        df['Media_Semanal_2025'] > 0,
+        (df['WoW_Semana_Atual'] - df['Media_Semanal_2025']) / df['Media_Semanal_2025'],
+        0
     )
 
-    # --- TABELA 2: PERDAS CONSOLIDADAS (Monitoramento) ---
-    if not df_perdas.empty:
-        st.markdown("---")
-        st.subheader("📉 Perdas Consolidadas (>15/30 dias)")
-        with st.expander("Ver laboratórios classificados como Perda Recente ou Antiga"):
-            st.dataframe(
-                df_perdas[['Nome_Fantasia_PCL', 'Estado', 'Dias_Sem_Coleta', 'Classificacao_Perda_V2', 'Data_Ultima_Coleta']].sort_values('Dias_Sem_Coleta'),
-                use_container_width=True,
-                hide_index=True
-            )
-    
-    # --- GRÁFICO: FOTO POR PORTE ---
-    st.markdown("---")
-    st.subheader("🏗️ Performance por Porte (WoW)")
-    
-    # Agregação simples
-    # Corrigido: Usando colunas corretas do gerador
-    if 'WoW_Semana_Atual' in df.columns and 'WoW_Semana_Anterior' in df.columns:
-        df_porte = df.groupby('Porte')[['WoW_Semana_Anterior', 'WoW_Semana_Atual']].sum().reset_index()
-        df_porte['Variação'] = ((df_porte['WoW_Semana_Atual'] - df_porte['WoW_Semana_Anterior']) / df_porte['WoW_Semana_Anterior'] * 100).fillna(0)
-        
-        # Visualização limpa (Barras)
-        fig_porte = px.bar(
-            df_porte, 
-            x='Porte', 
-            y='Variação',
-            text='Variação',
-            title="Variação de Volume por Porte (Semana vs Semana Ant.)",
-            color='Variação',
-            color_continuous_scale=['#ef4444', '#e5e7eb', '#22c55e'], # Vermelho -> Cinza -> Verde
-            range_color=[-50, 50]
-        )
-        fig_porte.update_layout(yaxis_title="Variação %", xaxis_title=None, showlegend=False)
-        fig_porte.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-        st.plotly_chart(fig_porte, use_container_width=True)
-    else:
-        st.info("Dados para o gráfico por porte não disponíveis.")
+    # Variável Controle: Média do Estado nesta semana
+    if 'Controle_Semanal_Estado' not in df.columns:
+        media_estado = df.groupby('Estado')['WoW_Semana_Atual'].transform('mean')
+        df['Controle_Semanal_Estado'] = media_estado
 
+    # Configuração das Colunas
+    col_config = {
+        "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório (🔍)", width="medium", help="Use a busca na aba Análise Detalhada"),
+        "VIP": st.column_config.TextColumn("VIP", width="small"),
+        "Rede": st.column_config.TextColumn("Rede", width="medium"),
+        "Estado": st.column_config.TextColumn("UF", width="small"),
+        "Media_Semanal_2025": st.column_config.NumberColumn("Média Hist.", format="%d"),
+        "WoW_Semana_Anterior": st.column_config.NumberColumn("Vol. Ant.", format="%d"),
+        "WoW_Semana_Atual": st.column_config.NumberColumn("Vol. Atual", format="%d"),
+        "Queda_Semanal_Abs": st.column_config.NumberColumn("Queda (Vol)", format="%d"), # Ordenador
+        "Pct_Dif_Media_Historica": st.column_config.NumberColumn("% vs Média", format="%.1f%%"),
+        "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias Off", format="%d ⚠️"),
+        "Controle_Semanal_Estado": st.column_config.NumberColumn("Média UF (Ctrl)", format="%.1f", help="Média realizada pelos labs deste estado na semana")
+    }
+    
+    cols_view = ['Nome_Fantasia_PCL', 'VIP', 'Rede', 'Estado', 'Porte', 
+                 'Media_Semanal_2025', 'WoW_Semana_Anterior', 'WoW_Semana_Atual', 
+                 'Queda_Semanal_Abs', 'Pct_Dif_Media_Historica', 'Dias_Sem_Coleta', 'Controle_Semanal_Estado']
+
+    # --- TABELA 1: RISCO OPERACIONAL & QUEDAS RECENTES ---
+    st.subheader("🚨 Risco & Quedas Recentes")
+    
+    # Filtro: Risco Ativo OU Queda Brusca (>30%), excluindo Perdas Antigas
+    df_risco = df[
+        (
+            (df['Status_Risco_V2'].isin(['Perda (Risco Alto)', 'Atenção', 'Perda'])) |
+            (df['WoW_Percentual'] < -30)
+        ) & 
+        (~df['Classificacao_Perda_V2'].isin(['Perda Antiga']))
+    ].copy()
+    
+    # Ordenação: Maior queda absoluta primeiro (Decrescente) 
+    df_risco = df_risco.sort_values('Queda_Semanal_Abs', ascending=False)
+    
+    st.dataframe(df_risco[cols_view], use_container_width=True, hide_index=True, column_config=col_config)
+
+    # --- TABELA 2: PERDAS RECENTES (Consolidadas) ---
+    st.subheader("📉 Perdas Recentes (Consolidadas)")
+    df_perda_recente = df[df['Classificacao_Perda_V2'] == 'Perda Recente'].copy()
+    df_perda_recente = df_perda_recente.sort_values('Queda_Semanal_Abs', ascending=False)
+    
+    if not df_perda_recente.empty:
+        st.dataframe(df_perda_recente[cols_view], use_container_width=True, hide_index=True, column_config=col_config)
+    else:
+        st.info("Nenhuma perda recente identificada.")
+
+    # --- TABELA 3: PERDAS ANTIGAS (Expansível) ---
+    with st.expander("🗄️ Ver Perdas Antigas / Inativos (+180 dias)"):
+        df_antigas = df[df['Classificacao_Perda_V2'] == 'Perda Antiga'].copy()
+        st.dataframe(df_antigas[cols_view], use_container_width=True, hide_index=True, column_config=col_config)
+        
+    st.markdown("---")
+
+    # --- GRÁFICOS: EVOLUÇÃO POR PORTE  ---
+    st.subheader("📊 Evolução de Volume por Porte (Semana Anterior vs Atual)")
+    
+    portes = ['Grande', 'Médio/Grande', 'Médio', 'Pequeno']
+    
+    # Layout 2x2 para os gráficos
+    c1, c2 = st.columns(2)
+    c3, c4 = st.columns(2)
+    cols_layout = [c1, c2, c3, c4]
+    
+    for i, porte in enumerate(portes):
+        with cols_layout[i]:
+            df_porte = df[df['Porte'] == porte]
+            if not df_porte.empty:
+                vol_ant = df_porte['WoW_Semana_Anterior'].sum()
+                vol_atu = df_porte['WoW_Semana_Atual'].sum()
+                
+                # Gráfico de barras comparativo simples
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=['Semana Ant.', 'Semana Atual'],
+                    y=[vol_ant, vol_atu],
+                    text=[f"{vol_ant:,.0f}", f"{vol_atu:,.0f}"],
+                    textposition='auto',
+                    marker_color=['#d1d5db', '#6BBF47' if vol_atu >= vol_ant else '#ef4444']
+                ))
+                fig.update_layout(
+                    title=f"<b>{porte}</b>",
+                    height=250,
+                    margin=dict(l=20, r=20, t=40, b=20),
+                    yaxis_visible=False
+                )
+                st.plotly_chart(fig, use_container_width=True, key=f"chart_porte_{i}")
+            else:
+                st.warning(f"Sem dados para porte: {porte}")
 
 
 # ============================================
@@ -2218,99 +2242,89 @@ def renderizar_aba_fechamento_semanal(df: pd.DataFrame, metrics: KPIMetrics, fil
 # ============================================
 
 def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filtros: Dict[str, Any]):
-    """
-    Aba Estratégica: Foco em "Meta Mensal e Baseline".
-    Tabela Única Consolidada.
-    """
-    st.markdown("## 📊 Fechamento Mensal (Consolidado)")
-    st.markdown("Acompanhamento do realizado mês atual vs Baseline Robusta (Top 3 Histórico).")
+    st.markdown("## 📊 Fechamento Mensal (Estratégico)")
+    st.caption("Comparativo: Realizado Mês Atual vs Potencial (Média dos Top 3 Melhores Meses Históricos).")
 
-    metricas_mes = calcular_metricas_fechamento_mensal(df)
+    # 1. Cálculo do Potencial (Top 3 Meses) 
+    # Identificar colunas de histórico (2024 e 2025)
+    cols_meses = [c for c in df.columns if 'N_Coletas_' in c and ('_24' in c or '_25' in c)]
     
-    # 1. Cards de Topo
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Volume Mês Atual", f"{metricas_mes['volume_mes_atual']:,}")
-    c2.metric("Baseline Média", f"{metricas_mes['baseline_media']:,.0f}", help="Média dos Top 3 meses (2024/25)")
-    c3.metric("Delta vs Baseline", f"{metricas_mes['delta_pct']:.1f}%", delta_color="normal" if metricas_mes['delta_pct'] >=0 else "inverse")
-    
-    # Projeção Linear (Simples: Volume / Dias Decorridos * Dias Totais)
-    dias_uteis_mes = 22 # Aproximação, ideal usar feriados_brasil
-    dias_uteis_hoje = min(22, max(1, metricas_mes['dia_atual'])) # Simplificação
-    projecao = (metricas_mes['volume_mes_atual'] / dias_uteis_hoje) * dias_uteis_mes
-    c4.metric("Projeção Linear", f"{int(projecao):,}", help="Projeção linear simples baseada em dias corridos")
+    def calcular_top3(row):
+        # Extrair valores válidos (>0)
+        valores = [row[c] for c in cols_meses if pd.notna(row[c]) and row[c] > 0]
+        if not valores:
+            return 0, "Sem histórico"
+        # Ordenar e pegar top 3
+        top3 = sorted(valores, reverse=True)[:3]
+        media = sum(top3) / len(top3)
+        # String detalhada para coluna
+        detalhe = " | ".join([str(int(v)) for v in top3])
+        return media, detalhe
 
+    # Calcular se não existir
+    if 'Potencial_Media_Top3' not in df.columns:
+        res = df.apply(calcular_top3, axis=1)
+        df['Potencial_Media_Top3'] = res.apply(lambda x: x[0])
+        df['Potencial_Detalhe'] = res.apply(lambda x: x[1])
+
+    # Variável Controle Mensal (Média Estado)
+    if 'Controle_Mensal_Estado' not in df.columns:
+        media_estado = df.groupby('Estado')['Coletas_Mes_Atual'].transform('mean')
+        df['Controle_Mensal_Estado'] = media_estado
+
+    # Cards Simplificados
+    vol_mes = int(df['Coletas_Mes_Atual'].sum()) if 'Coletas_Mes_Atual' in df.columns else 0
+    media_grande = df[df['Porte']=='Grande']['Coletas_Mes_Atual'].mean() if 'Porte' in df.columns else 0
+    
+    c1, c2 = st.columns(2)
+    c1.metric("Volume Total Mês", f"{vol_mes:,.0f}")
+    c2.metric("Média Labs Grandes", f"{media_grande:,.0f}")
+    
     st.markdown("---")
 
-    # 2. Tabela Única Consolidada (O "Coração" da aba)
-    st.subheader("📋 Tabela Mestra de Performance")
+    # Tabela Principal
+    st.subheader("📋 Performance vs Potencial")
     
-    # Preparar colunas
-    colunas_mensal = [
-        'Nome_Fantasia_PCL', 'Estado', 'Representante_Nome', 'Porte', 'Rede',
-        'Baseline_Mensal',          # A Meta
-        'Coletas_Mes_Atual',        # O Realizado
-        'Queda_Baseline_Pct',       # O Desvio
-        'Media_Mensal_UF_2025',     # Contexto Regional
-        'Mes_Maior_Coleta_2025',    # Referência de Pico
-        'Volume_Maior_Coleta_2025', 
-        'Data_Ultima_Coleta'
+    # Métricas de Gap
+    df['Gap_Potencial'] = df['Coletas_Mes_Atual'] - df['Potencial_Media_Top3']
+    df['Pct_Atingimento'] = np.where(
+        df['Potencial_Media_Top3'] > 0,
+        df['Coletas_Mes_Atual'] / df['Potencial_Media_Top3'],
+        0
+    )
+    
+    # Ordenação: Quem está mais longe do potencial (Gap negativo maior)
+    df_sorted = df.sort_values('Gap_Potencial', ascending=True)
+    
+    cols_mensal = [
+        'Nome_Fantasia_PCL', 'VIP', 'Rede', 'Estado', 'Porte',
+        'Potencial_Media_Top3', 'Coletas_Mes_Atual',
+        'Pct_Atingimento', 'Gap_Potencial', 
+        'Controle_Mensal_Estado', 'Potencial_Detalhe', 'Data_Ultima_Coleta'
     ]
     
     # Filtrar colunas existentes
-    cols_existentes = [c for c in colunas_mensal if c in df.columns]
-    df_tabela = df[cols_existentes].copy()
-
-    # Ordenação Inteligente:
-    # Se dia < 20: Ordenar por Volume Absoluto (Grandes primeiro)
-    # Se dia >= 20: Ordenar por Queda Baseline (Quem não bateu a meta)
-    dia_hoje = datetime.now().day
-    if dia_hoje >= 20:
-        df_tabela = df_tabela.sort_values('Queda_Baseline_Pct', ascending=False) # Maior queda primeiro (valores positivos em Queda_Baseline_Pct indicam queda se calculado como (Base-Atual)/Base)
-        # Ajuste: No gerador, Queda_Baseline_Pct = ((Baseline - Atual) / Baseline) * 100
-        # Então valores ALTOS positivos são RUINS.
-    else:
-        df_tabela = df_tabela.sort_values('Baseline_Mensal', ascending=False)
-
-    # Adicionar Comparativo Visual UF (Setinha)
-    if 'Media_Mensal_UF_2025' in df_tabela.columns and 'Coletas_Mes_Atual' in df_tabela.columns:
-        # Comparação grosseira (apenas ilustrativa, pois compara lab individual com média do estado)
-        # Melhor seria: Variação do Lab vs Variação do Estado. Mas vamos simplificar para visual.
-        pass 
-
-    # Renderizar Tabela
+    cols_final = [c for c in cols_mensal if c in df.columns]
+    
     st.dataframe(
-        df_tabela,
+        df_sorted[cols_final],
         use_container_width=True,
         hide_index=True,
         column_config={
             "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", width="medium"),
-            "Baseline_Mensal": st.column_config.NumberColumn(
-                "🎯 Baseline (Meta)", 
-                format="%d",
-                help="Média dos 3 melhores meses (Potencial Real)"
+            "VIP": st.column_config.TextColumn("VIP", width="small"),
+            "Rede": st.column_config.TextColumn("Rede", width="medium"),
+            "Potencial_Media_Top3": st.column_config.NumberColumn("🎯 Potencial (Top 3)", format="%d"),
+            "Coletas_Mes_Atual": st.column_config.NumberColumn("📊 Realizado", format="%d"),
+            "Pct_Atingimento": st.column_config.ProgressColumn(
+                "% Atingimento", format="%.1f%%", min_value=0, max_value=1.5
             ),
-            "Coletas_Mes_Atual": st.column_config.NumberColumn(
-                "📊 Realizado", 
-                format="%d"
-            ),
-            "Queda_Baseline_Pct": st.column_config.NumberColumn(
-                "Desvio %", 
-                format="%.1f%%",
-                help="Quanto falta para atingir a Baseline (positivo = queda)"
-            ),
-            "Media_Mensal_UF_2025": st.column_config.NumberColumn(
-                "Média UF", 
-                format="%d", 
-                help="Variável de controle regional"
-            ),
-            "Mes_Maior_Coleta_2025": st.column_config.TextColumn("Mês Pico 25"),
-            "Volume_Maior_Coleta_2025": st.column_config.NumberColumn("Vol. Pico", format="%d"),
-            "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY")
+            "Gap_Potencial": st.column_config.NumberColumn("Gap (Vol)", format="%d"),
+            "Controle_Mensal_Estado": st.column_config.NumberColumn("Média Estado", format="%.1f"),
+            "Potencial_Detalhe": st.column_config.TextColumn("Vols. Top 3", width="small", help="Volumes dos 3 melhores meses históricos"),
+            "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Data da última coleta registrada (independente do ano)")
         }
     )
-
-    # Legenda rápida
-    st.caption("ℹ️ **Dica de Leitura:** A 'Baseline' representa o potencial comprovado do laboratório (Top 3 meses). O 'Desvio' mostra o gap de performance atual.")
 
 
 # ============================================
@@ -2433,6 +2447,7 @@ class FilterManager:
      
         # Separador visual
         st.sidebar.markdown("---")
+        
         # Filtro por representante
         if 'Representante_Nome' in df.columns:
             representantes_lista = (
@@ -2448,6 +2463,26 @@ class FilterManager:
             "👤 Representantes",
             options=representantes_opcoes,
             help="Selecione um ou mais representantes para filtrar os laboratórios exibidos."
+        )
+
+        # Filtro por Porte
+        if 'Porte' in df.columns:
+            portes_lista = (
+                df['Porte']
+                .astype(str)
+                .str.strip()
+                .replace({'nan': '', 'None': ''})
+            )
+            # Ordem desejada
+            ordem_porte = {'Grande': 0, 'Médio/Grande': 1, 'Médio': 2, 'Pequeno': 3}
+            portes_opcoes = sorted({p for p in portes_lista if p}, key=lambda x: ordem_porte.get(x, 99))
+        else:
+            portes_opcoes = []
+        
+        filtros['portes'] = st.sidebar.multiselect(
+            "🏗️ Porte do Laboratório",
+            options=portes_opcoes,
+            help="Selecione um ou mais portes para filtrar os laboratórios exibidos."
         )
 
         st.sidebar.markdown("---")
@@ -2592,6 +2627,10 @@ class FilterManager:
         if representantes_sel and 'Representante_Nome' in df_filtrado.columns:
             df_filtrado = df_filtrado[df_filtrado['Representante_Nome'].isin(representantes_sel)]
         
+        # Filtro por porte
+        portes_sel = filtros.get('portes', [])
+        if portes_sel and 'Porte' in df_filtrado.columns:
+            df_filtrado = df_filtrado[df_filtrado['Porte'].isin(portes_sel)]
         
         # Para dados mensais, o filtro principal será usado nos cálculos dos gráficos
         # Os filtros 'ano_selecionado', 'meses_selecionados' e 'sufixo_ano' são usados
@@ -4367,105 +4406,20 @@ def main():
     # RENDERIZAÇÃO DA PÁGINA SELECIONADA - Atualizado com tabs
     # ========================================
     if st.session_state.page == "📅 Fechamento Semanal":
-        st.header("📅 Fechamento Semanal & Alertas")
-        st.markdown("""
-        Foco tático: Monitoramento de **alertas críticos** do dia e análise de fechamento da semana (WoW).
-        """)
+        # REGRA: Ignorar filtro VIP da sidebar
+        df_view = df.copy()
+        if filtros.get('uf_selecionada') and filtros['uf_selecionada'] != 'Todas':
+             df_view = df_view[df_view['Estado'] == filtros['uf_selecionada']]
         
-        # Verificar se sistema v2 está disponível
-        tem_sistema_v2 = all(col in df_filtrado.columns for col in ['Status_Risco_V2', 'Baseline_Mensal', 'WoW_Percentual', 'Porte'])
-        
-        if not tem_sistema_v2:
-            st.warning("⚠️ Sistema v2 não disponível. Execute o gerador de dados.")
-        else:
-            # --- PARTE A: ALERTAS DE PERDA (Lógica prioritária trazida da antiga Visão Geral) ---
-            st.subheader("🎯 Alertas de Perda Prioritários")
-            
-            if df_filtrado.empty:
-                st.info("📊 Nenhum laboratório disponível com os filtros aplicados.")
-            else:
-                # Aplicação dos Filtros de Segurança (V2)
-                # 1. Labs sem coletas em 2025
-                if 'Total_Coletas_2025' in df_filtrado.columns:
-                    df_filtrado['Total_Coletas_2025'] = df_filtrado['Total_Coletas_2025'].fillna(0).astype(int)
-                    df_filtrado = df_filtrado[df_filtrado['Total_Coletas_2025'] > 0].copy()
-                
-                # 2. Labs com data muito antiga ou inativos
-                if 'Dias_Sem_Coleta' in df_filtrado.columns:
-                    df_filtrado['Dias_Sem_Coleta'] = pd.to_numeric(df_filtrado['Dias_Sem_Coleta'], errors='coerce').fillna(0).astype(int)
-                    df_filtrado = df_filtrado[df_filtrado['Dias_Sem_Coleta'] <= 90].copy()
-                
-                # Atualização Gralab (Simplificada para visualização)
-                with st.expander("🔄 Status da Integração Gralab"):
-                    try:
-                        dados_gralab = DataManager.carregar_dados_gralab()
-                        if dados_gralab:
-                            st.success("✅ Dados do concorrente carregados e sincronizados.")
-                        else:
-                            st.warning("⚠️ Dados do concorrente desatualizados ou indisponíveis.")
-                    except:
-                        pass
-                
-                # Filtrar Alertas de Risco Alto
-                labs_perda = df_filtrado[df_filtrado['Status_Risco_V2'] == 'Perda (Risco Alto)'].copy()
-                
-                # Cards de Resumo dos Alertas
-                total_perda = len(labs_perda)
-                com_concorrencia = labs_perda['Apareceu_Gralab'].sum() if 'Apareceu_Gralab' in labs_perda.columns else 0
-                
-                kpi1, kpi2, kpi3 = st.columns(3)
-                with kpi1:
-                    st.metric("🚨 Alertas Ativos", total_perda, help="Labs com queda >50% (Baseline ou WoW) ou dias sem coleta acima do porte.")
-                with kpi2:
-                    st.metric("⚠️ Risco Concorrência", com_concorrencia, help="Labs em alerta que apareceram no Gralab.")
-                with kpi3:
-                    # Mostrar quantos estão dentro do Cap ideal
-                    status_cap = "Dentro da Meta" if 30 <= total_perda <= 50 else "Fora da Faixa Ideal"
-                    st.metric("📊 Status do Cap", status_cap, help="Meta: 30-50 alertas/dia")
-                
-                if not labs_perda.empty:
-                    st.markdown("### 📋 Lista de Ação Imediata")
-                    
-                    # Ordenar e preparar tabela
-                    if 'Queda_Baseline_Pct' in labs_perda.columns:
-                        labs_perda = labs_perda.sort_values('Queda_Baseline_Pct', ascending=True)
-                    
-                    cols_view = [
-                        'Nome_Fantasia_PCL', 'Estado', 'Representante_Nome', 'Porte',
-                        'Baseline_Mensal', 'Coletas_Mes_Atual', 'Queda_Baseline_Pct',
-                        'WoW_Percentual', 'Dias_Sem_Coleta', 'Motivo_Risco_V2', 'Apareceu_Gralab'
-                    ]
-                    cols_existentes = [c for c in cols_view if c in labs_perda.columns]
-                    
-                    st.dataframe(
-                        _formatar_df_exibicao(labs_perda[cols_existentes].head(50)),
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
-                            "Queda_Baseline_Pct": st.column_config.NumberColumn("📉 Δ Baseline", format="%.1f%%"),
-                            "WoW_Percentual": st.column_config.NumberColumn("🔁 WoW", format="%.1f%%"),
-                            "Apareceu_Gralab": st.column_config.CheckboxColumn("Gralab?")
-                        }
-                    )
-                else:
-                    st.success("✅ Nenhum laboratório em Risco Alto identificado hoje!")
-            
-            st.markdown("---")
-            
-            # --- PARTE B: ANÁLISE WOW (Renderiza a função existente) ---
-            # Chama a função que já constrói os gráficos de semanas fechadas/abertas
-            renderizar_aba_fechamento_semanal(df_filtrado, metrics, filtros)
+        renderizar_aba_fechamento_semanal(df_view, metrics, filtros)
 
     elif st.session_state.page == "📊 Fechamento Mensal":
-        st.header("📊 Fechamento Mensal Consolidado")
-        st.markdown("""
-        Foco estratégico: Análise do mês corrente versus **Baseline Robusta** (Top 3 meses de 2024/25).
-        Identifica desvios estruturais de volume.
-        """)
-        
-        # Usa a função existente que já monta os KPIs mensais, a tabela de baseline detalhada, etc.
-        renderizar_aba_fechamento_mensal(df_filtrado, metrics, filtros)
+        # REGRA: Ignorar filtro VIP da sidebar
+        df_view = df.copy()
+        if filtros.get('uf_selecionada') and filtros['uf_selecionada'] != 'Todas':
+             df_view = df_view[df_view['Estado'] == filtros['uf_selecionada']]
+             
+        renderizar_aba_fechamento_mensal(df_view, metrics, filtros)
     
     elif st.session_state.page == "🏢 Ranking Rede":
         st.header("🏢 Ranking por Rede")

@@ -83,10 +83,10 @@ HELPERS_V2 = {
     **Gatilho de alerta:** Queda > 50% WoW
     
     **Régua de dias sem coleta aplicada conforme porte:**
-    - Pequeno (≤40/mês): mín 5 dias úteis consecutivos
-    - Médio (41-80): mín 3 dias úteis, máx 15 dias corridos
-    - Médio/Grande (81-150): mín 2 dias úteis, máx 15 dias corridos  
-    - Grande (>150): mín 2 dias úteis, máx 5 dias úteis
+    - Pequeno (≤40/mês): Monitorado apenas por queda de volume (não aciona por dias sem coleta)
+    - Médio (41-80): mín 2 dias úteis sem coleta
+    - Médio/Grande (81-150): mín 1 dia útil sem coleta
+    - Grande (>150): mín 1 dia útil sem coleta
     """,
     
     'fechamento_mensal': """
@@ -2444,7 +2444,7 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
         # Baseline e Performance
         'Baseline_Mensal', 'Baseline_Detalhada', 
         'Coletas_Mes_Atual', 'Queda_Baseline_Pct',
-        'Maior_N_Coletas_Mes_2025', 
+        'Maior_N_Coletas_Mes_2025', 'Mes_Maior_Coleta_2025',
         # Datas e Risco
         'Data_Ultima_Coleta', 'Dias_Sem_Coleta',
         'Status_Risco_V2', 'Classificacao_Perda_V2', 'Risco_Por_Dias_Sem_Coleta',
@@ -2499,6 +2499,8 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
             "Queda_Baseline_Pct": st.column_config.NumberColumn("Δ Base %", format="%.1f%%"),
             "Media_Mensal_UF_2024": st.column_config.NumberColumn("Média UF 24", format="%.0f"),
             "Media_Mensal_UF_2025": st.column_config.NumberColumn("Média UF 25", format="%.0f"),
+            "Maior_N_Coletas_Mes_2025": st.column_config.NumberColumn("Maior Vol. 25", format="%.0f"),
+            "Mes_Maior_Coleta_2025": st.column_config.TextColumn("Mês Pico 25"),
             "Status_Risco_V2": st.column_config.TextColumn("Risco V2"),
             "Classificacao_Perda_V2": st.column_config.TextColumn("Classif. Perda"),
             "Apareceu_Gralab": st.column_config.CheckboxColumn("Concorrente?"),

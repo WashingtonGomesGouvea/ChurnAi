@@ -1380,8 +1380,11 @@ def calcular_metricas_churn():
     if not m2025.empty:
         m25_vals = m2025.reindex(base.index).fillna(0)
         base['Maior_N_Coletas_Mes_2025'] = m25_vals.max(axis=1).astype(int)
+        idx_max_25 = m25_vals.idxmax(axis=1)
+        base['Mes_Maior_Coleta_2025'] = idx_max_25.apply(lambda m: f"{meses_nomes[int(m)-1]}/2025" if pd.notna(m) and m in range(1,13) else "")
     else:
         base['Maior_N_Coletas_Mes_2025'] = 0
+        base['Mes_Maior_Coleta_2025'] = ""
 
     # Dias sem coleta
     # Normalizar timezone: manter tudo em UTC tz-aware para cálculo

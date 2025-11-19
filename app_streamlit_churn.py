@@ -763,21 +763,31 @@ class DataManager:
             return None
     @staticmethod
     def preparar_dados(df: pd.DataFrame) -> pd.DataFrame:
-        """Prepara os dados e enriquece com VIP/Rede globalmente."""
+        """Prepara e limpa os dados carregados - Atualizado para coerência entre telas."""
         if df is None or df.empty:
             return pd.DataFrame()
-        
-        # 1. Tratamentos Básicos
+        # Removido bloco de debug da sidebar para manter interface limpa
+        # Garantir tipos de dados corretos
         if 'Data_Analise' in df.columns:
             df['Data_Analise'] = pd.to_datetime(df['Data_Analise'], errors='coerce')
-
-        # Normalizar CNPJ
+        # Calcular volume total se não existir (até o mês atual)
+        try:
+            # Função inline para evitar dependência circular
+            meses_ordem = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+            ano_atual = pd.Timestamp.today().year
+            limite_mes = pd.Timestamp.today().month if 2025 == ano_atual else 12
+            meses_limite = meses_ordem[:limite_mes]
+            sufixo = str(2025)[-2:]
+            meses_2025_dyn = [m for m in meses_limite if f'N_Coletas_{m}_{sufixo}' in df.columns]
+        except Exception:
+            meses_2025_dyn = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
+        colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses_2025_dyn]
+        if 'Volume_Total_2025' not in df.columns:
+            df['Volume_Total_2025'] = df[colunas_meses].sum(axis=1, skipna=True) if colunas_meses else 0
+        # Adicionar coluna CNPJ normalizado para match com dados VIP
         if 'CNPJ_PCL' in df.columns:
             df['CNPJ_Normalizado'] = df['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
-        elif 'cnpj' in df.columns:
-             df['CNPJ_Normalizado'] = df['cnpj'].apply(DataManager.normalizar_cnpj)
-
-        # Filtro Active == True
+        # Filtro Active == True para coerência
         if 'Active' in df.columns:
             df = df[df['Active'] == True]
 
@@ -813,21 +823,6 @@ class DataManager:
             print(f"Erro integração VIP: {e}")
             df['VIP'] = 'Não'
             df['Rede'] = '-'
-
-        # 3. Manter lógica original de volumes e risco
-        try:
-            # Função inline para evitar dependência circular
-            meses_ordem = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
-            ano_atual = pd.Timestamp.today().year
-            limite_mes = pd.Timestamp.today().month if 2025 == ano_atual else 12
-            meses_limite = meses_ordem[:limite_mes]
-            sufixo = str(2025)[-2:]
-            meses_2025_dyn = [m for m in meses_limite if f'N_Coletas_{m}_{sufixo}' in df.columns]
-        except Exception:
-            meses_2025_dyn = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out']
-        colunas_meses = [f'N_Coletas_{mes}_25' for mes in meses_2025_dyn]
-        if 'Volume_Total_2025' not in df.columns:
-            df['Volume_Total_2025'] = df[colunas_meses].sum(axis=1, skipna=True) if colunas_meses else 0
 
         # === Nova régua de risco diário ===
         colunas_novas = [
@@ -2125,7 +2120,7 @@ def formatar_tabela_storytelling(df, config_colunas):
 def renderizar_aba_fechamento_semanal(df: pd.DataFrame, metrics: KPIMetrics, filtros: Dict[str, Any]):
     st.markdown("## 📅 Fechamento Semanal (Visão Tática)")
     st.caption("Monitoramento de todos os laboratórios. Ordenado por maior queda de volume.")
-    
+
     # 1. Cálculos Específicos da Aba
     cols_num = ['WoW_Semana_Atual', 'WoW_Semana_Anterior', 'Media_Semanal_2025']
     for c in cols_num:
@@ -2180,14 +2175,14 @@ def renderizar_aba_fechamento_semanal(df: pd.DataFrame, metrics: KPIMetrics, fil
     
     # Ordenação: Maior queda absoluta primeiro (Decrescente) 
     df_risco = df_risco.sort_values('Queda_Semanal_Abs', ascending=False)
-    
+
     st.dataframe(df_risco[cols_view], use_container_width=True, hide_index=True, column_config=col_config)
 
     # --- TABELA 2: PERDAS RECENTES (Consolidadas) ---
     st.subheader("📉 Perdas Recentes (Consolidadas)")
     df_perda_recente = df[df['Classificacao_Perda_V2'] == 'Perda Recente'].copy()
     df_perda_recente = df_perda_recente.sort_values('Queda_Semanal_Abs', ascending=False)
-    
+
     if not df_perda_recente.empty:
         st.dataframe(df_perda_recente[cols_view], use_container_width=True, hide_index=True, column_config=col_config)
     else:
@@ -2197,7 +2192,87 @@ def renderizar_aba_fechamento_semanal(df: pd.DataFrame, metrics: KPIMetrics, fil
     with st.expander("🗄️ Ver Perdas Antigas / Inativos (+180 dias)"):
         df_antigas = df[df['Classificacao_Perda_V2'] == 'Perda Antiga'].copy()
         st.dataframe(df_antigas[cols_view], use_container_width=True, hide_index=True, column_config=col_config)
+
+    st.markdown("---")
+
+    # ============================================================
+    # 3. DETALHAMENTO POR SEMANA (O "Filme do Mês")
+    # ============================================================
+    st.subheader("📆 Evolução do Mês (Semana a Semana)")
+    
+    metricas_sem = calcular_metricas_fechamento_semanal(df)
+
+    if metricas_sem.get('semanas_detalhes'):
+        # Preparar dados para a tabela de resumo
+        dados_semanas = []
+        for s in metricas_sem['semanas_detalhes']:
+            vol_atual = s.get('volume_total', 0)
+            vol_ant = s.get('volume_semana_anterior', 0)
+            wow = ((vol_atual - vol_ant) / vol_ant * 100) if vol_ant and vol_ant > 0 else 0.0
+            
+            status_icon = "✅ Fechada" if s.get('fechada') else "🔄 Em Andamento"
+            
+            dados_semanas.append({
+                "Semana": f"Semana {s.get('semana')}",
+                "ISO": s.get('iso_week'),
+                "Volume Útil": vol_atual,
+                "Volume Anterior": vol_ant or 0,
+                "WoW %": wow, # Manter em porcentagem (não dividir por 100)
+                "Status": status_icon,
+                "is_active": not s.get('fechada') # Flag para highlight
+            })
+            
+        df_semanas = pd.DataFrame(dados_semanas)
         
+        # Função de Estilo para destacar a semana em andamento (Storytelling: Foco no Agora)
+        def highlight_active_week(row):
+            if row['is_active']:
+                return ['background-color: #fff3cd; color: #856404'] * len(row) # Amarelo suave para atenção
+            return [''] * len(row)
+            
+        # Remover coluna auxiliar antes de exibir, mas usar no style
+        st.dataframe(
+            df_semanas.style.apply(highlight_active_week, axis=1),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Semana": st.column_config.TextColumn(
+                    "Semana", 
+                    width="small",
+                    help="Número da semana dentro do mês corrente"
+                ),
+                "ISO": st.column_config.NumberColumn(
+                    "ISO Week", 
+                    format="%d",
+                    help="Número da semana ISO no ano (padrão internacional)"
+                ),
+                "Volume Útil": st.column_config.NumberColumn(
+                    "Volume Realizado", 
+                    format="%d",
+                    help="Total de coletas úteis (segunda a sexta, excluindo feriados) realizadas nesta semana"
+                ),
+                "Volume Anterior": st.column_config.NumberColumn(
+                    "Volume Anterior", 
+                    format="%d",
+                    help="Total de coletas úteis da semana anterior (para comparação WoW)"
+                ),
+                "WoW %": st.column_config.ProgressColumn(
+                    "Variação WoW",
+                    format="%.1f%%",
+                    min_value=-100, # -100%
+                    max_value=50, # +50%
+                    help="Variação Week-over-Week: comparação percentual com a semana anterior. Valores negativos (vermelho) indicam queda."
+                ),
+                "Status": st.column_config.TextColumn(
+                    "Status",
+                    help="✅ Fechada: Semana completa e finalizada | 🔄 Em Andamento: Semana atual ainda em curso"
+                ),
+                "is_active": None # Esconder coluna técnica (None em vez de hidden=True)
+            }
+        )
+    else:
+        st.info("Detalhes semanais indisponíveis. Execute o gerador de dados novamente.")
+
     st.markdown("---")
 
     # --- GRÁFICOS: EVOLUÇÃO POR PORTE  ---
@@ -2279,7 +2354,7 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
     c1, c2 = st.columns(2)
     c1.metric("Volume Total Mês", f"{vol_mes:,.0f}")
     c2.metric("Média Labs Grandes", f"{media_grande:,.0f}")
-    
+
     st.markdown("---")
 
     # Tabela Principal
@@ -2295,7 +2370,7 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
     
     # Ordenação: Quem está mais longe do potencial (Gap negativo maior)
     df_sorted = df.sort_values('Gap_Potencial', ascending=True)
-    
+
     cols_mensal = [
         'Nome_Fantasia_PCL', 'VIP', 'Rede', 'Estado', 'Porte',
         'Potencial_Media_Top3', 'Coletas_Mes_Atual',
@@ -2305,7 +2380,7 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
     
     # Filtrar colunas existentes
     cols_final = [c for c in cols_mensal if c in df.columns]
-    
+
     st.dataframe(
         df_sorted[cols_final],
         use_container_width=True,
@@ -4407,6 +4482,7 @@ def main():
     # ========================================
     if st.session_state.page == "📅 Fechamento Semanal":
         # REGRA: Ignorar filtro VIP da sidebar
+        # Usamos 'df' (base completa), mas podemos aplicar filtro de UF se selecionado
         df_view = df.copy()
         if filtros.get('uf_selecionada') and filtros['uf_selecionada'] != 'Todas':
              df_view = df_view[df_view['Estado'] == filtros['uf_selecionada']]

@@ -1803,6 +1803,15 @@ def calcular_metricas_churn():
     except Exception as e:
         logger.warning(f"Não foi possível salvar metadados de fechamento: {e}")
 
+    # CÁLCULO DA MÉDIA SEMANAL POR LABORATÓRIO (Para a aba Fechamento Semanal)
+    # Semanas decorridas em 2025 (considerando a data atual)
+    semana_atual_iso = datetime.now().isocalendar()[1]
+    # Evitar divisão por zero no início do ano
+    divisor_semanas = max(1, semana_atual_iso - 1) 
+    
+    # Calcular média semanal simples (Total / Semanas Decorridas)
+    base['Media_Semanal_2025'] = (base['Total_Coletas_2025'] / divisor_semanas).fillna(0).round(1)
+
     # Metadados
     base['Data_Analise'] = datetime.now()
 
@@ -1832,6 +1841,7 @@ def calcular_metricas_churn():
         'Total_Coletas_2024','Total_Coletas_2025','Total_Recoletas_2024','Total_Recoletas_2025',
         'Coletas_Mes_Atual','Analise_Diaria',
         'Voucher_Commission','Data_Preco_Atualizacao','Dados_Diarios_2025','Dados_Semanais_2025',
+        'Media_Semanal_2025',
         # Colunas do Sistema v2
         'Baseline_Mensal','Baseline_Componentes',
         'WoW_Semana_Atual','WoW_Semana_Anterior','WoW_Percentual',

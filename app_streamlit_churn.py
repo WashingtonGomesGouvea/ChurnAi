@@ -33,11 +33,16 @@ from auth_microsoft import MicrosoftAuth, AuthManager, create_login_page, create
 
 HELPERS_V2 = {
     'perda_risco_alto': """
-    **Perda (Risco Alto)**: Laboratório identificado com risco crítico de perda baseado em:
-    - Queda superior a 50% versus baseline mensal (média dos maiores meses de 2024 e 2025)
-    - Queda superior a 50% WoW (semana ISO atual vs anterior, considerando apenas dias úteis)
-- Dias consecutivos sem coleta acima do limiar para seu porte (Grande: ≥2 dias, Médio: ≥3 dias, Pequeno: ≥5 dias)
-    - IMPORTANTE: Laboratórios sem coletas em 2025 não são classificados como risco
+    **Perda (Risco Alto)** quando, por exemplo:
+    - Queda >50% vs baseline mensal, ou
+    - Queda WoW >50%, ou
+    - **Dias sem coleta no porte**:
+      - **Médio**: ≥2 dias úteis e ≤15 corridos
+      - **Médio/Grande**: ≥1 dia útil e ≤15 corridos
+      - **Grande**: 1 a 5 dias úteis
+      - **Pequeno**: não considerado
+
+    Obs.: Perdas **recentes** começam a partir do **teto do risco** do porte, até 180 corridos; **antigas** >180 corridos.
     """,
     
     'baseline_mensal': """
@@ -51,12 +56,12 @@ HELPERS_V2 = {
     """,
     
     'porte': """
-    **Porte do Laboratório**: Classificação baseada no volume médio mensal de coletas:
-    - **Grande**: ≥ 100 coletas/mês
-    - **Médio**: 50-99 coletas/mês
-    - **Pequeno**: < 50 coletas/mês
-    
-    O porte define o limiar de dias sem coleta para acionar alerta.
+    **Porte do Laboratório** (média mensal 2025):
+
+    - **Pequeno**: até 40
+    - **Médio**: 41–80
+    - **Médio/Grande**: 81–150
+    - **Grande**: >150
     """,
     
     'concorrencia': """
@@ -2499,6 +2504,7 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
         'Pct_Atingimento', 'Gap_Potencial', 
         'Controle_Mensal_Estado', 
         'Top3_Mes1', 'Top3_Mes2', 'Top3_Mes3', # Colunas separadas
+        'Mes_Maior_Coleta_2025', 'Maior_N_Coletas_Mes_2025',
         'Data_Ultima_Coleta'
     ]
     
@@ -2528,6 +2534,8 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
             "Top3_Mes1": st.column_config.TextColumn("Melhor Mês 1", width="small", help="Mês e volume do melhor desempenho histórico"),
             "Top3_Mes2": st.column_config.TextColumn("Melhor Mês 2", width="small", help="Segundo melhor mês histórico"),
             "Top3_Mes3": st.column_config.TextColumn("Melhor Mês 3", width="small", help="Terceiro melhor mês histórico"),
+            "Mes_Maior_Coleta_2025": st.column_config.TextColumn("Maior Mês 2025", width="small", help="Mês com maior volume registrado em 2025"),
+            "Maior_N_Coletas_Mes_2025": st.column_config.NumberColumn("Pico 2025 (Vol)", format="%d", help="Maior número de coletas em um mês de 2025"),
             "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Última coleta registrada (qualquer ano)")
         },
         selection_mode="single-row",
@@ -2697,12 +2705,15 @@ class FilterManager:
             # Ordem desejada
             ordem_porte = {'Grande': 0, 'Médio/Grande': 1, 'Médio': 2, 'Pequeno': 3}
             portes_opcoes = sorted({p for p in portes_lista if p}, key=lambda x: ordem_porte.get(x, 99))
+            default_portes = ['Grande'] if 'Grande' in portes_opcoes else portes_opcoes
         else:
             portes_opcoes = []
+            default_portes = []
         
         filtros['portes'] = st.sidebar.multiselect(
             "🏗️ Porte do Laboratório",
             options=portes_opcoes,
+            default=default_portes,
             help="Selecione um ou mais portes para filtrar os laboratórios exibidos."
         )
 

@@ -1114,16 +1114,27 @@ def calcular_metricas_churn():
         df_gatherings_2025_recoleta = df_gatherings_2025[df_gatherings_2025['is_recollection']].copy()
 
         total_2025 = df_gatherings_2025_valid.groupby('_laboratory').size().rename('Total_Coletas_2025')
-        ultima_2025 = df_gatherings_2025_valid.groupby('_laboratory')['createdAt'].max().rename('Data_Ultima_Coleta')
         m2025 = df_gatherings_2025_valid.groupby(['_laboratory', 'mes']).size().unstack(fill_value=0)
         total_recoletas_2025 = df_gatherings_2025_recoleta.groupby('_laboratory').size().rename('Total_Recoletas_2025')
         m2025_recoleta = df_gatherings_2025_recoleta.groupby(['_laboratory', 'mes']).size().unstack(fill_value=0)
     else:
         total_2025 = pd.Series(dtype=int)
-        ultima_2025 = pd.Series(dtype='datetime64[ns]')
         m2025 = pd.DataFrame()
         total_recoletas_2025 = pd.Series(dtype=int)
         m2025_recoleta = pd.DataFrame()
+
+    # Última coleta considerando 2024 e 2025
+    ultima_coleta_geral = pd.Series(dtype='datetime64[ns]')
+    frames = []
+    for df_src in (df_gatherings_2024_valid, df_gatherings_2025_valid):
+        if not df_src.empty and all(col in df_src.columns for col in ['_laboratory', 'createdAt']):
+            frames.append(df_src[['_laboratory', 'createdAt']].copy())
+
+    if frames:
+        df_all = pd.concat(frames, ignore_index=True)
+        df_all['_laboratory'] = to_str_series(df_all['_laboratory'])
+        df_all['createdAt'] = pd.to_datetime(df_all['createdAt'], errors='coerce', utc=True)
+        ultima_coleta_geral = df_all.groupby('_laboratory')['createdAt'].max().rename('Data_Ultima_Coleta')
 
     # Base: um por laboratório
     base = df_laboratories[['_id', 'cnpj', 'legalName', 'fantasyName']].copy() if all(k in df_laboratories.columns for k in ['_id','cnpj','legalName','fantasyName']) else df_laboratories.copy()
@@ -1151,7 +1162,7 @@ def calcular_metricas_churn():
     base['Total_Coletas_2025'] = total_2025.reindex(base.index).fillna(0).astype(int)
     base['Total_Recoletas_2024'] = total_recoletas_2024.reindex(base.index).fillna(0).astype(int)
     base['Total_Recoletas_2025'] = total_recoletas_2025.reindex(base.index).fillna(0).astype(int)
-    base['Data_Ultima_Coleta'] = ultima_2025.reindex(base.index)
+    base['Data_Ultima_Coleta'] = ultima_coleta_geral.reindex(base.index)
     
     # Coletas do mês atual e flag de análise diária (requisito Gabi: 50+ coletas/mês)
     mes_atual = datetime.now().month

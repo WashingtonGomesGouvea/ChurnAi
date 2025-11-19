@@ -229,6 +229,10 @@ def obter_limiar_dias_sem_coleta(porte: str,
     """
     Retorna o limiar de dias sem coleta baseado no porte do laboratório.
     
+    Nota: lógica LEGACY (2/3/5 dias corridos) mantida por compatibilidade.
+    A régua oficial do Sistema V2 usa `avaliar_risco_por_dias_sem_coleta`
+    com mínimos de dias úteis + teto corrido por porte.
+    
     Args:
         porte: Porte do laboratório ('Grande', 'Médio' ou 'Pequeno')
         limiar_grande: Dias sem coleta para acionar alerta em lab Grande
@@ -261,6 +265,9 @@ def verificar_gatilho_dias_sem_coleta(dias_sem_coleta: int,
                                       limiar_pequeno: int = 5) -> bool:
     """
     Verifica se o número de dias sem coleta ultrapassa o limiar para o porte.
+    
+    Nota: esta função também é LEGACY e só deve ser usada em pipelines antigos.
+    Para o V2 utilize `avaliar_risco_por_dias_sem_coleta`.
     
     Args:
         dias_sem_coleta: Número de dias consecutivos sem coleta

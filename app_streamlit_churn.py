@@ -2118,7 +2118,49 @@ def renderizar_aba_fechamento_semanal(df: pd.DataFrame, metrics: KPIMetrics, fil
     
     st.markdown("---")
     
-    # ===== SEÇÃO 3: Análise com/sem Risco por Dias sem Coleta =====
+    # ===== SEÇÃO 3: Análise por Porte (Foto da Semana) =====
+    st.markdown("### 🏗️ Visão por Porte")
+    
+    if 'Porte' in df.columns and 'WoW_Semana_Atual' in df.columns and 'WoW_Semana_Anterior' in df.columns:
+        # Agrupar por Porte
+        df_porte = df.groupby('Porte').agg({
+            'WoW_Semana_Atual': 'sum',
+            'WoW_Semana_Anterior': 'sum',
+            'Status_Risco_V2': lambda x: (x == 'Perda (Risco Alto)').sum() if 'Status_Risco_V2' in df.columns else 0,
+            'Classificacao_Perda_V2': lambda x: (x == 'Perda Recente').sum() if 'Classificacao_Perda_V2' in df.columns else 0
+        }).reset_index()
+        
+        # Calcular WoW Agregado
+        df_porte['WoW_Agregado'] = np.where(
+            df_porte['WoW_Semana_Anterior'] > 0,
+            ((df_porte['WoW_Semana_Atual'] - df_porte['WoW_Semana_Anterior']) / df_porte['WoW_Semana_Anterior']) * 100,
+            0.0
+        )
+        
+        # Ordenar (Grandes primeiro)
+        ordem_porte = {'Grande': 0, 'Médio/Grande': 1, 'Médio': 2, 'Pequeno': 3}
+        df_porte['Ordem'] = df_porte['Porte'].map(ordem_porte).fillna(99)
+        df_porte = df_porte.sort_values('Ordem').drop('Ordem', axis=1)
+        
+        st.dataframe(
+            df_porte,
+            use_container_width=True,
+            column_config={
+                "Porte": st.column_config.TextColumn("Porte"),
+                "WoW_Semana_Atual": st.column_config.NumberColumn("Vol. Atual", format="%d", help="Volume total desta semana"),
+                "WoW_Semana_Anterior": st.column_config.NumberColumn("Vol. Anterior", format="%d", help="Volume total da semana passada"),
+                "WoW_Agregado": st.column_config.NumberColumn("WoW %", format="%.1f%%", help="Variação percentual agregada"),
+                "Status_Risco_V2": st.column_config.NumberColumn("🚨 Risco Ativo", help="Qtd labs em Risco Alto (Queda ou Dias)"),
+                "Classificacao_Perda_V2": st.column_config.NumberColumn("📉 Perda Recente", help="Qtd labs classificados como Perda Recente")
+            },
+            hide_index=True
+        )
+    else:
+        st.info("ℹ️ Dados por porte não disponíveis para esta visualização.")
+
+    st.markdown("---")
+    
+    # ===== SEÇÃO 4: Impacto da Régua de Dias sem Coleta =====
     st.markdown("### 🔍 Impacto da Régua de Dias sem Coleta")
     
     col_impacto1, col_impacto2 = st.columns(2)
@@ -2365,254 +2407,114 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
     
     st.markdown("---")
     
-    # ===== SEÇÃO 2: Bloco da Baseline (3 meses) =====
-    st.markdown("### 🧮 Composição da Baseline por Laboratório")
-    st.markdown("Mostrando os 3 meses que compõem a baseline de cada laboratório (top volumes de 2024+2025).")
+    # ===== SEÇÃO 2: Tabela Única Consolidada =====
+    st.markdown("### 📋 Visão Detalhada Mensal (Tabela Única)")
     
-    if metricas['labs_detalhados']:
-        labs_exibir = metricas['labs_detalhados'][:40]
-        
-        # Bloco obrigatório com os 3 meses da baseline por laboratório
-        st.markdown("#### 🧱 Bloco dos 3 Meses da Baseline")
-        st.caption("Mostramos, para cada laboratório, os três meses que compõem a baseline robusta (top volumes de 2024/2025).")
-        
-        baseline_rows = []
-        for lab in labs_exibir:
-            meses = lab.get('baseline_meses', []) or []
-            meses_ordenados = sorted(meses, key=lambda x: x.get('volume', 0), reverse=True)
-            formatted = [f"{m.get('mes', 'N/A')} ({m.get('volume', 0):.0f})" for m in meses_ordenados[:3]]
-            while len(formatted) < 3:
-                formatted.append('—')
-            
-            baseline_rows.append({
-                'Laboratório': lab.get('nome', 'N/A'),
-                'UF': lab.get('uf', 'N/A'),
-                'VIP': lab.get('ranking', ''),
-                'Rede': lab.get('rede', ''),
-                'Baseline': lab.get('baseline_mensal', 0),
-                'Mês 1': formatted[0],
-                'Mês 2': formatted[1],
-                'Mês 3': formatted[2]
-            })
-        
-        if baseline_rows:
-            df_baseline_block = pd.DataFrame(baseline_rows)
-            st.dataframe(
-                _formatar_df_exibicao(df_baseline_block),
-                use_container_width=True,
-                column_config={
-                    "Laboratório": st.column_config.TextColumn("🏥 Laboratório", help="Nome do laboratório com baseline consolidada"),
-                    "UF": st.column_config.TextColumn("🗺️ UF", help="Estado"),
-                    "VIP": st.column_config.TextColumn("🏆 VIP", help="Ranking VIP (individual)"),
-                    "Rede": st.column_config.TextColumn("🏢 Rede", help="Rede/Vínculo"),
-                    "Baseline": st.column_config.NumberColumn("🧮 Baseline", format="%.0f", help="Baseline mensal média (top 3 meses)"),
-                    "Mês 1": st.column_config.TextColumn("📌 Mês 1", help="Maior mês que compõe a baseline"),
-                    "Mês 2": st.column_config.TextColumn("📌 Mês 2", help="Segundo mês da baseline"),
-                    "Mês 3": st.column_config.TextColumn("📌 Mês 3", help="Terceiro mês da baseline")
-                },
-                hide_index=True
-            )
-        else:
-            st.info("ℹ️ Nenhum laboratório com baseline detalhada disponível para o filtro atual.")
-        
-        # Exemplo detalhado opcional
-        exemplo_lab = labs_exibir[0] if labs_exibir else None
-        if exemplo_lab and exemplo_lab.get('baseline_meses'):
-            with st.expander(f"💡 Exemplo: {exemplo_lab['nome']}"):
-                st.markdown(f"**Baseline:** {exemplo_lab['baseline_mensal']:.0f} coletas/mês")
-                st.markdown("**Composta pelos meses:**")
-                
-                for mes_info in exemplo_lab['baseline_meses']:
-                    mes_nome = mes_info.get('mes', 'N/A')
-                    volume = mes_info.get('volume', 0)
-                    st.markdown(f"- {mes_nome}: **{volume:.0f}** coletas")
-                
-                media_baseline = sum(m.get('volume', 0) for m in exemplo_lab['baseline_meses']) / len(exemplo_lab['baseline_meses']) if exemplo_lab['baseline_meses'] else 0
-                st.markdown(f"→ **Média:** {media_baseline:.0f} coletas/mês")
-        
-        st.markdown("---")
-        
-        # ===== SEÇÃO 3: Tabela Consolidada do Mês =====
-        st.markdown("### 📋 Laboratórios com Baseline Disponível")
-        
-        # Aplicar cap visual (top 40-50)
-        if len(metricas['labs_detalhados']) > 40:
-            st.info(
-                f"ℹ️ Exibindo os 40 primeiros laboratórios de um total de {len(metricas['labs_detalhados'])}. "
-                "Use os filtros na barra lateral para refinar a análise."
-            )
-        
-        # Preparar DataFrame
-        df_labs_mensal = pd.DataFrame(labs_exibir)
-        
-        # Formatar baseline_meses para exibição
-        if 'baseline_meses' in df_labs_mensal.columns:
-            df_labs_mensal['baseline_detalhada'] = df_labs_mensal['baseline_meses'].apply(
-                lambda meses: ', '.join([f"{m['mes']} ({m['volume']:.0f})" for m in meses]) if meses else 'N/A'
-            )
-        
-        # Selecionar colunas para exibição (removido severidade)
-        colunas_exibir = ['nome', 'uf', 'representante', 'porte', 'ranking', 'ranking_rede', 'rede',
-                          'baseline_mensal', 'coletas_mes_atual', 'queda_baseline_pct']
-        
-        if 'baseline_detalhada' in df_labs_mensal.columns:
-            colunas_exibir.append('baseline_detalhada')
-        
-        colunas_disponiveis = [c for c in colunas_exibir if c in df_labs_mensal.columns]
-        df_exibir = df_labs_mensal[colunas_disponiveis].copy()
-        
-        st.dataframe(
-            _formatar_df_exibicao(df_exibir),
-            use_container_width=True,
-            column_config={
-                "nome": st.column_config.TextColumn("🏥 Laboratório", help="Nome do laboratório"),
-                "uf": st.column_config.TextColumn("🗺️ UF", help="Estado"),
-                "representante": st.column_config.TextColumn("👤 Representante", help="Representante responsável"),
-                "porte": st.column_config.TextColumn("🏗️ Porte", help="Porte do laboratório"),
-                "ranking": st.column_config.TextColumn("🏆 VIP", help="Ranking VIP individual"),
-                "ranking_rede": st.column_config.TextColumn("🏅 VIP Rede", help="Ranking VIP da rede"),
-                "rede": st.column_config.TextColumn("🏢 Rede", help="Nome da rede"),
-                "baseline_mensal": st.column_config.NumberColumn("🧮 Baseline", format="%.0f", help="Baseline mensal robusta (média top 3 meses)"),
-                "coletas_mes_atual": st.column_config.NumberColumn("📆 Mês Atual", format="%d", help="Coletas no mês atual"),
-                "queda_baseline_pct": st.column_config.NumberColumn("📉 Δ Baseline", format="%.1f%%", help="Variação vs baseline"),
-                "baseline_detalhada": st.column_config.TextColumn("📋 Meses da Baseline", help="Detalhamento dos 3 meses que compõem a baseline")
-            },
-            hide_index=True
-        )
+    # Preparar DataFrame consolidado
+    # Adicionar médias por UF como colunas
+    if metricas['medias_por_uf_2024'] or metricas['medias_por_uf_2025']:
+        df['Media_Mensal_UF_2024'] = df['Estado'].map(metricas['medias_por_uf_2024']).fillna(0)
+        df['Media_Mensal_UF_2025'] = df['Estado'].map(metricas['medias_por_uf_2025']).fillna(0)
     else:
-        st.info("ℹ️ Nenhum laboratório com baseline disponível.")
+        df['Media_Mensal_UF_2024'] = 0
+        df['Media_Mensal_UF_2025'] = 0
+        
+    # Formatar Baseline Componentes
+    def formatar_componentes(comp_str):
+        try:
+            if not comp_str or comp_str == '[]':
+                return ""
+            comps = json.loads(comp_str)
+            if not comps:
+                return ""
+            # Formato: "Jan/24 (100); Fev/25 (110)"
+            return "; ".join([f"{c.get('mes', '')} ({int(c.get('volume', 0))})" for c in comps])
+        except:
+            return ""
+            
+    if 'Baseline_Componentes' in df.columns:
+        df['Baseline_Detalhada'] = df['Baseline_Componentes'].apply(formatar_componentes)
+    else:
+        df['Baseline_Detalhada'] = ""
+
+    # Identificar colunas disponíveis
+    colunas_desejadas = [
+        # Identificação
+        'Nome_Fantasia_PCL', 'CNPJ_PCL', 'Estado', 'Representante_Nome', 'Rede', 'Ranking', 'Porte',
+        # Baseline e Performance
+        'Baseline_Mensal', 'Baseline_Detalhada', 
+        'Coletas_Mes_Atual', 'Queda_Baseline_Pct',
+        'Maior_N_Coletas_Mes_2025', 
+        # Datas e Risco
+        'Data_Ultima_Coleta', 'Dias_Sem_Coleta',
+        'Status_Risco_V2', 'Classificacao_Perda_V2', 'Risco_Por_Dias_Sem_Coleta',
+        # Concorrência
+        'Apareceu_Gralab',
+        # Controle UF
+        'Media_Mensal_UF_2024', 'Media_Mensal_UF_2025'
+    ]
+    
+    # Garantir tipos numéricos para formatação
+    numeric_cols = ['Baseline_Mensal', 'Coletas_Mes_Atual', 'Media_Mensal_UF_2024', 'Media_Mensal_UF_2025', 'Maior_N_Coletas_Mes_2025', 'Dias_Sem_Coleta']
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    cols_existentes = [c for c in colunas_desejadas if c in df.columns]
+    df_exibir = df[cols_existentes].copy()
+
+    # Filtros rápidos visuais
+    st.caption("Use os filtros abaixo para focar em grupos específicos na tabela:")
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        filtro_risco = st.checkbox("🚨 Apenas laboratórios em Risco Ativo", help="Status Risco V2 = Perda (Risco Alto)")
+    with col_f2:
+        filtro_perda = st.checkbox("📉 Apenas Perdas (Recente/Antiga)", help="Classificação Perda V2 != Sem Perda")
+        
+    if filtro_risco and 'Status_Risco_V2' in df_exibir.columns:
+        df_exibir = df_exibir[df_exibir['Status_Risco_V2'] == 'Perda (Risco Alto)']
+    if filtro_perda and 'Classificacao_Perda_V2' in df_exibir.columns:
+        df_exibir = df_exibir[df_exibir['Classificacao_Perda_V2'].isin(['Perda Recente', 'Perda Antiga'])]
+
+    # Ordenação padrão: Queda Baseline Descrescente
+    if 'Queda_Baseline_Pct' in df_exibir.columns:
+         df_exibir = df_exibir.sort_values('Queda_Baseline_Pct', ascending=False)
+
+    # Ajuste visual: Renomear "Perda (Risco Alto)" para "Risco Alto" na visualização
+    if 'Status_Risco_V2' in df_exibir.columns:
+        df_exibir['Status_Risco_V2'] = df_exibir['Status_Risco_V2'].replace('Perda (Risco Alto)', 'Risco Alto')
+
+    st.dataframe(
+        _formatar_df_exibicao(df_exibir),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", width="medium"),
+            "CNPJ_PCL": st.column_config.TextColumn("CNPJ"),
+            "Estado": st.column_config.TextColumn("UF", width="small"),
+            "Representante_Nome": st.column_config.TextColumn("Rep"),
+            "Baseline_Mensal": st.column_config.NumberColumn("Baseline", format="%.0f"),
+            "Baseline_Detalhada": st.column_config.TextColumn("Componentes Baseline", width="large", help="Meses que compõem a baseline"),
+            "Coletas_Mes_Atual": st.column_config.NumberColumn("Vol. Mês", format="%.0f"),
+            "Queda_Baseline_Pct": st.column_config.NumberColumn("Δ Base %", format="%.1f%%"),
+            "Media_Mensal_UF_2024": st.column_config.NumberColumn("Média UF 24", format="%.0f"),
+            "Media_Mensal_UF_2025": st.column_config.NumberColumn("Média UF 25", format="%.0f"),
+            "Status_Risco_V2": st.column_config.TextColumn("Risco V2"),
+            "Classificacao_Perda_V2": st.column_config.TextColumn("Classif. Perda"),
+            "Apareceu_Gralab": st.column_config.CheckboxColumn("Concorrente?"),
+            "Data_Ultima_Coleta": st.column_config.DatetimeColumn("Última Coleta", format="DD/MM/YYYY"),
+            "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta"),
+        }
+    )
     
     st.markdown("---")
-    
-    # ===== SEÇÃO 4: Médias Mensais por País e UF =====
-    st.markdown("### 📈 Médias Mensais - Comparação 2024 vs 2025")
-    
-    col_pais1, col_pais2, col_pais3 = st.columns(3)
-    
-    with col_pais1:
-        st.metric(
-            "Média Mensal 2024",
-            f"{metricas['media_mensal_2024']:,.0f}",
-            help="Média mensal de coletas em 2024 (total anual / 12 meses)"
-        )
-    
-    with col_pais2:
-        st.metric(
-            "Média Mensal 2025",
-            f"{metricas['media_mensal_2025']:,.0f}",
-            help="Média mensal de coletas em 2025 até a data atual"
-        )
-    
-    with col_pais3:
-        # Comparação YoY
-        if metricas['media_mensal_2024'] > 0:
-            yoy_pct = ((metricas['media_mensal_2025'] - metricas['media_mensal_2024']) / 
-                      metricas['media_mensal_2024'] * 100)
-            yoy_color = "normal" if yoy_pct >= 0 else "inverse"
-            st.metric(
-                "Comparação YoY",
-                f"{yoy_pct:+.1f}%",
-                delta="2025 vs 2024",
-                delta_color=yoy_color,
-                help="Variação percentual da média mensal 2025 vs 2024"
-            )
-        else:
-            st.metric("Comparação YoY", "N/A")
-    
-    # Breakdown por UF com filtro interativo
-    if metricas['medias_por_uf_2024'] or metricas['medias_por_uf_2025']:
-        st.markdown("#### 🗺️ Breakdown por UF")
-        
-        # Combinar médias de 2024 e 2025
-        ufs_todas = set(metricas['medias_por_uf_2024'].keys()) | set(metricas['medias_por_uf_2025'].keys())
-        
-        breakdown_list = []
-        for uf in sorted(ufs_todas):
-            media_2024 = metricas['medias_por_uf_2024'].get(uf, 0)
-            media_2025 = metricas['medias_por_uf_2025'].get(uf, 0)
-            
-            yoy_uf = 0.0
-            if media_2024 > 0:
-                yoy_uf = ((media_2025 - media_2024) / media_2024) * 100
-            
-            breakdown_list.append({
-                'UF': uf,
-                'Média 2024': media_2024,
-                'Média 2025': media_2025,
-                'YoY %': yoy_uf
-            })
-        
-        df_breakdown = pd.DataFrame(breakdown_list)
-        
-        # Ordenar por média 2025 (maior primeiro)
-        df_breakdown = df_breakdown.sort_values('Média 2025', ascending=False)
-        
-        st.dataframe(
-            df_breakdown,
-            use_container_width=True,
-            column_config={
-                "UF": st.column_config.TextColumn("UF", help="Estado"),
-                "Média 2024": st.column_config.NumberColumn("Média 2024", format="%.0f", help="Média mensal de coletas em 2024"),
-                "Média 2025": st.column_config.NumberColumn("Média 2025", format="%.0f", help="Média mensal de coletas em 2025"),
-                "YoY %": st.column_config.NumberColumn("YoY %", format="%.1f%%", help="Variação Year over Year")
-            },
-            hide_index=True
-        )
-    
-    # Nota informativa sobre dados de baseline
-    if not metricas['labs_detalhados']:
-        st.info("""
-        ℹ️ **Nota sobre Baseline Detalhada**
-        
-        Os indicadores acima foram calculados a partir dos dados agregados disponíveis.
-        
-        Para visualizar o detalhamento completo da baseline por laboratório (incluindo os 3 meses componentes),
-        execute o gerador de dados com a opção de calcular baselines detalhadas.
-        """)
-    
-    # Expander com explicação das regras de perda
-    with st.expander("ℹ️ Entenda as Regras de Perda Recente e Antiga"):
+    with st.expander("ℹ️ Legenda da Tabela Unificada"):
         st.markdown("""
-        ### 📉 Regras de Perda Recente (até 180 dias)
-        
-        Laboratórios sem coletas há menos de 180 dias corridos (≈6 meses):
-        
-        **Porte Pequeno (≤40 coletas/mês):**
-        - 🕐 Mínimo: 30 dias corridos
-        - 🚫 Teto: 180 dias corridos
-        
-        **Porte Médio (41-80 coletas/mês):**
-        - 🕐 Mínimo: 15 dias corridos
-        - 🚫 Teto: 180 dias corridos
-        
-        **Porte Médio/Grande (81-150 coletas/mês):**
-        - 🕐 Mínimo: 15 dias corridos
-        - 🚫 Teto: 180 dias corridos
-        
-        **Porte Grande (>150 coletas/mês):**
-        - 🕐 Mínimo: 5 dias úteis
-        - 🚫 Teto: 180 dias corridos
-        
-        ---
-        
-        ### ⏳ Regra de Perda Antiga
-        
-        **Todos os portes:**
-        - Laboratórios com **>180 dias corridos** sem coleta (equivalente a 6 meses)
-        - Independente do porte, considera-se perda consolidada
-        
-        ---
-        
-        ### 🧮 Baseline Mensal Robusta
-        
-        A baseline é calculada individualmente para cada laboratório:
-        
-        1. **Coleta de dados:** Todos os meses de 2024 e 2025 até a data atual
-        2. **Seleção:** Top 3 maiores meses de volume
-        3. **Cálculo:** Média aritmética dos 3 meses selecionados
-        
-        **Vantagem:** Baseline adaptativa que reflete o pico real de cada laboratório,
-        não sendo afetada por sazonalidade ou períodos atípicos.
+        - **Baseline**: Média dos Top 3 meses de 2024/25.
+        - **Componentes**: Detalhe dos meses usados na baseline.
+        - **Média UF**: Média mensal de coletas da UF do laboratório (comparativo regional).
+        - **Risco V2**: Indica se o laboratório tem comportamento de risco ativo (queda WoW/Baseline ou dias sem coleta recente).
+        - **Classif. Perda**: Indica se o laboratório já é considerado Perda Recente (<180 dias) ou Antiga (>180 dias).
         """)
 
 
@@ -2755,15 +2657,6 @@ class FilterManager:
 
         st.sidebar.markdown("---")
         
-        # Filtro de análise diária vs semanal (requisito Gabi: 50+ coletas/mês)
-        st.sidebar.markdown("**📊 Tipo de Análise**")
-        tipo_analise_opcoes = ["Todos", "Análise Diária (≥50 coletas/mês)", "Análise Semanal (<50 coletas/mês)"]
-        filtros['tipo_analise'] = st.sidebar.radio(
-            "Filtrar por volume:",
-            options=tipo_analise_opcoes,
-            index=0,
-            help="Análise Diária: laboratórios com 50+ coletas no mês atual. Análise Semanal: laboratórios com menos de 50 coletas/mês."
-        )
 
         st.sidebar.markdown("---")
         # Filtro por período - Anos e Meses (dados mensais)
@@ -2904,14 +2797,6 @@ class FilterManager:
         if representantes_sel and 'Representante_Nome' in df_filtrado.columns:
             df_filtrado = df_filtrado[df_filtrado['Representante_Nome'].isin(representantes_sel)]
         
-        # Filtro de análise diária vs semanal (requisito Gabi: 50+ coletas/mês)
-        tipo_analise = filtros.get('tipo_analise', 'Todos')
-        if 'Analise_Diaria' in df_filtrado.columns:
-            if tipo_analise == "Análise Diária (≥50 coletas/mês)":
-                df_filtrado = df_filtrado[df_filtrado['Analise_Diaria'] == True]
-            elif tipo_analise == "Análise Semanal (<50 coletas/mês)":
-                df_filtrado = df_filtrado[df_filtrado['Analise_Diaria'] == False]
-            # Se "Todos", não aplica filtro
         
         # Para dados mensais, o filtro principal será usado nos cálculos dos gráficos
         # Os filtros 'ano_selecionado', 'meses_selecionados' e 'sufixo_ano' são usados
@@ -4621,7 +4506,14 @@ def main():
     # ========================================
     # Removido cabeçalho "Navegação" da sidebar; botões de páginas mantidos abaixo
    
-    pages = ["🏠 Visão Geral", "📋 Análise Detalhada", "🏢 Ranking Rede", "🔧 Manutenção VIPs", "🔍 Análise de Concorrente"]
+    pages = [
+        "📅 Fechamento Semanal", 
+        "📊 Fechamento Mensal", 
+        "📋 Análise Detalhada", 
+        "🏢 Ranking Rede", 
+        "🔧 Manutenção VIPs", 
+        "🔍 Análise de Concorrente"
+    ]
    
     if "page" not in st.session_state:
         st.session_state.page = pages[0]
@@ -4629,6 +4521,7 @@ def main():
     for page in pages:
         if st.sidebar.button(page, key=page, width='stretch'):
             st.session_state.page = page
+            st.rerun()
    
     # Separador visual
     st.sidebar.markdown("---")
@@ -4678,900 +4571,106 @@ def main():
     # ========================================
     # RENDERIZAÇÃO DA PÁGINA SELECIONADA - Atualizado com tabs
     # ========================================
-    if st.session_state.page == "🏠 Visão Geral":
-        st.header("🏠 Visão Geral - Sistema de Alertas v2")
+    if st.session_state.page == "📅 Fechamento Semanal":
+        st.header("📅 Fechamento Semanal & Alertas")
         st.markdown("""
-        Sistema focado em **alertas acionáveis**, limitados a **30-50 por dia**.
-        Usa **Baseline Mensal Robusta** e **Week-over-Week** para identificar perdas reais.
+        Foco tático: Monitoramento de **alertas críticos** do dia e análise de fechamento da semana (WoW).
         """)
         
         # Verificar se sistema v2 está disponível
         tem_sistema_v2 = all(col in df_filtrado.columns for col in ['Status_Risco_V2', 'Baseline_Mensal', 'WoW_Percentual', 'Porte'])
         
         if not tem_sistema_v2:
-            st.warning("""
-            ⚠️ **Sistema v2 não disponível**
-            
-            Execute `python gerador_dados_churn.py` para gerar dados com o novo sistema de alertas.
-            """)
+            st.warning("⚠️ Sistema v2 não disponível. Execute o gerador de dados.")
         else:
-            # ===== SISTEMA V2 COM TABS =====
-            st.markdown("---")
+            # --- PARTE A: ALERTAS DE PERDA (Lógica prioritária trazida da antiga Visão Geral) ---
+            st.subheader("🎯 Alertas de Perda Prioritários")
             
-            # Criar abas para navegação dentro da Visão Geral
-            tab_alertas, tab_semanal, tab_mensal = st.tabs([
-                "🎯 Alertas de Perda",
-                "📅 Fechamento Semanal",
-                "📊 Fechamento Mensal"
-            ])
-            
-            with tab_alertas:
-                st.markdown("### 🎯 Alertas de Perda Identificados")
+            if df_filtrado.empty:
+                st.info("📊 Nenhum laboratório disponível com os filtros aplicados.")
+            else:
+                # Aplicação dos Filtros de Segurança (V2)
+                # 1. Labs sem coletas em 2025
+                if 'Total_Coletas_2025' in df_filtrado.columns:
+                    df_filtrado['Total_Coletas_2025'] = df_filtrado['Total_Coletas_2025'].fillna(0).astype(int)
+                    df_filtrado = df_filtrado[df_filtrado['Total_Coletas_2025'] > 0].copy()
                 
-                if df_filtrado.empty:
-                    st.info("📊 Nenhum laboratório disponível com os filtros aplicados.")
-                else:
-                    # DEBUG: Informações antes do filtro
-                    total_antes_filtro = len(df_filtrado)
-                    st.sidebar.markdown("---")
-                    st.sidebar.markdown("### 🐛 DEBUG - Filtros")
-                    st.sidebar.write(f"**Total antes do filtro:** {total_antes_filtro}")
-                    
-                    # Contar alertas de perda ANTES do filtro de coletas 2025
-                    labs_perda_antes = df_filtrado[df_filtrado['Status_Risco_V2'] == 'Perda (Risco Alto)']
-                    st.sidebar.write(f"**Alertas antes do filtro:** {len(labs_perda_antes)}")
-                    
-                    # Verificar se MARICONDI está presente antes do filtro
-                    if 'Nome_Fantasia_PCL' in df_filtrado.columns:
-                        maricondi_antes = df_filtrado[df_filtrado['Nome_Fantasia_PCL'].str.contains('MARICONDI', case=False, na=False)]
-                        if not maricondi_antes.empty:
-                            st.sidebar.warning(f"⚠️ MARICONDI encontrado ANTES do filtro!")
-                            for idx, row in maricondi_antes.iterrows():
-                                st.sidebar.write(f"  - {row.get('Nome_Fantasia_PCL', 'N/A')}")
-                                st.sidebar.write(f"    Total_2025: {row.get('Total_Coletas_2025', 'N/A')}")
-                                st.sidebar.write(f"    Última Coleta: {row.get('Data_Ultima_Coleta', 'N/A')}")
-                                st.sidebar.write(f"    Status_Risco_V2: {row.get('Status_Risco_V2', 'N/A')}")
-                    
-                    # Contar alertas de perda - FILTRAR labs sem coletas em 2025
-                    # Garantir que labs como MARICONDI (sem coletas desde 2024) não apareçam
-                    if 'Total_Coletas_2025' in df_filtrado.columns:
-                        df_filtrado['Total_Coletas_2025'] = df_filtrado['Total_Coletas_2025'].fillna(0).astype(int)
-                        labs_sem_coleta_2025 = len(df_filtrado[df_filtrado['Total_Coletas_2025'] == 0])
-                        st.sidebar.write(f"**Labs sem coletas em 2025:** {labs_sem_coleta_2025}")
-                        
-                        # Filtrar apenas labs com coletas em 2025
-                        df_filtrado = df_filtrado[df_filtrado['Total_Coletas_2025'] > 0].copy()
-                        st.sidebar.write(f"**Total após filtro Total_2025:** {len(df_filtrado)}")
-                    
-                    # Verificar também Data_Ultima_Coleta se disponível
-                    if 'Data_Ultima_Coleta' in df_filtrado.columns:
-                        df_filtrado['Data_Ultima_Coleta'] = pd.to_datetime(df_filtrado['Data_Ultima_Coleta'], errors='coerce')
-                        
-                        # Contar labs com data anterior a 2025
-                        labs_data_antiga = len(df_filtrado[
-                            df_filtrado['Data_Ultima_Coleta'].notna() & 
-                            (df_filtrado['Data_Ultima_Coleta'].dt.year < 2025)
-                        ])
-                        st.sidebar.write(f"**Labs com última coleta < 2025:** {labs_data_antiga}")
-                        
-                        # Filtrar: manter apenas labs com última coleta em 2025 ou posterior (ou sem data mas com coletas em 2025)
-                        mask_coletas_recentes = (
-                            df_filtrado['Data_Ultima_Coleta'].isna() | 
-                            (df_filtrado['Data_Ultima_Coleta'].dt.year >= 2025)
-                        )
-                        # Aplicar filtro: deve ter coletas em 2025 E (sem data OU data de 2025+)
-                        df_filtrado = df_filtrado[
-                            (df_filtrado['Total_Coletas_2025'] > 0) & mask_coletas_recentes
-                        ].copy()
-                        st.sidebar.write(f"**Total após filtro Data_Ultima_Coleta:** {len(df_filtrado)}")
-                    
-                    # FILTRO ADICIONAL: Excluir labs com muitos dias sem coleta (já estão inativos há muito tempo)
-                    # Mesmo que tenham coletas em 2025, se estão há mais de 90 dias sem coleta, não são risco atual
-                    if 'Dias_Sem_Coleta' in df_filtrado.columns:
-                        df_filtrado['Dias_Sem_Coleta'] = pd.to_numeric(df_filtrado['Dias_Sem_Coleta'], errors='coerce').fillna(0).astype(int)
-                        labs_muitos_dias_sem_coleta = len(df_filtrado[df_filtrado['Dias_Sem_Coleta'] > 90])
-                        st.sidebar.write(f"**Labs com >90 dias sem coleta:** {labs_muitos_dias_sem_coleta}")
-                        
-                        # Filtrar labs com mais de 90 dias sem coleta (já estão inativos há muito tempo)
-                        df_filtrado = df_filtrado[df_filtrado['Dias_Sem_Coleta'] <= 90].copy()
-                        st.sidebar.write(f"**Total após filtro Dias_Sem_Coleta (≤90):** {len(df_filtrado)}")
-                    
-                    # Verificar se MARICONDI ainda está presente após o filtro
-                    if 'Nome_Fantasia_PCL' in df_filtrado.columns:
-                        maricondi_depois = df_filtrado[df_filtrado['Nome_Fantasia_PCL'].str.contains('MARICONDI', case=False, na=False)]
-                        if not maricondi_depois.empty:
-                            st.sidebar.error(f"❌ MARICONDI ainda presente APÓS o filtro!")
-                            for idx, row in maricondi_depois.iterrows():
-                                st.sidebar.write(f"  - {row.get('Nome_Fantasia_PCL', 'N/A')}")
-                                st.sidebar.write(f"    Total_2025: {row.get('Total_Coletas_2025', 'N/A')}")
-                                st.sidebar.write(f"    Última Coleta: {row.get('Data_Ultima_Coleta', 'N/A')}")
-                                st.sidebar.write(f"    Dias_Sem_Coleta: {row.get('Dias_Sem_Coleta', 'N/A')}")
-                                st.sidebar.write(f"    Status_Risco_V2: {row.get('Status_Risco_V2', 'N/A')}")
-                        else:
-                            st.sidebar.success("✅ MARICONDI filtrado corretamente!")
-                    
-                    # IMPORTANTE: Atualizar Status_Risco_V2 para labs que foram filtrados
-                    # Se um lab foi filtrado (sem coletas em 2025 ou muitos dias sem coleta), não deve ser "Perda"
-                    if 'Status_Risco_V2' in df_filtrado.columns:
-                        # Labs que passaram pelos filtros mas ainda têm Status_Risco_V2 = 'Perda (Risco Alto)'
-                        # devem manter o status, mas vamos garantir que não há labs filtrados ainda marcados como risco
-                        pass  # Os filtros já removeram os labs problemáticos do df_filtrado
-                    
-                    # IMPORTANTE: Atualizar dados de concorrência do Gralab no front (dados mais atualizados)
-                    # Carregar dados do Gralab diretamente do arquivo Excel
-                    # Estratégia: 1) Verificar EntradaSaida (com filtro de data recente), 2) Verificar Dados Completos (todos os registros)
-                    st.sidebar.markdown("---")
-                    st.sidebar.markdown("### 🔄 Atualização Gralab")
+                # 2. Labs com data muito antiga ou inativos
+                if 'Dias_Sem_Coleta' in df_filtrado.columns:
+                    df_filtrado['Dias_Sem_Coleta'] = pd.to_numeric(df_filtrado['Dias_Sem_Coleta'], errors='coerce').fillna(0).astype(int)
+                    df_filtrado = df_filtrado[df_filtrado['Dias_Sem_Coleta'] <= 90].copy()
+                
+                # Atualização Gralab (Simplificada para visualização)
+                with st.expander("🔄 Status da Integração Gralab"):
                     try:
-                        st.sidebar.write("**Carregando dados do Gralab...**")
                         dados_gralab = DataManager.carregar_dados_gralab()
-                        
-                        if dados_gralab is None:
-                            st.sidebar.warning("⚠️ Não foi possível carregar dados do Gralab")
+                        if dados_gralab:
+                            st.success("✅ Dados do concorrente carregados e sincronizados.")
                         else:
-                            # Normalizar CNPJs do df_filtrado
-                            if 'CNPJ_Normalizado' not in df_filtrado.columns:
-                                df_filtrado['CNPJ_Normalizado'] = df_filtrado['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
-                            
-                            # DataFrame para armazenar todos os labs encontrados no Gralab
-                            df_gralab_completo = pd.DataFrame()
-                        
-                            # ===== ETAPA 1: Verificar EntradaSaida (com filtro de data recente) =====
-                            if 'EntradaSaida' in dados_gralab:
-                                df_entrada_saida = dados_gralab['EntradaSaida'].copy()
-                                st.sidebar.write(f"**Registros EntradaSaida:** {len(df_entrada_saida)}")
-                        
-                                # Identificar coluna de data (prioridade: Data Entrada > Última Verificação > Data Saída)
-                                coluna_data = None
-                                for col_data in ['Data Entrada', 'Última Verificação', 'Data Saída']:
-                                    if col_data in df_entrada_saida.columns:
-                                        coluna_data = col_data
-                                        break
-                        
-                                if coluna_data:
-                                    st.sidebar.write(f"**Usando coluna EntradaSaida:** {coluna_data}")
-                            
-                                    # Filtrar últimos N dias (usar configuração do config_churn)
-                                    df_entrada_saida['Data_Processada'] = pd.to_datetime(df_entrada_saida[coluna_data], errors='coerce')
-                                    hoje = datetime.now()
-                                    janela_dias = GRALAB_JANELA_DIAS  # Importado de config_churn
-                                    df_recente_entrada = df_entrada_saida[
-                                        (df_entrada_saida['Data_Processada'].notna()) &
-                                        ((hoje - df_entrada_saida['Data_Processada']).dt.days <= janela_dias)
-                                    ].copy()
-                            
-                                    st.sidebar.write(f"**Registros EntradaSaida últimos {janela_dias} dias:** {len(df_recente_entrada)}")
-                            
-                                    if not df_recente_entrada.empty and 'CNPJ_Normalizado' in df_recente_entrada.columns:
-                                        # Pegar registro mais recente por CNPJ
-                                        df_recente_entrada = df_recente_entrada.sort_values('Data_Processada', ascending=False)
-                                        df_recente_entrada_unique = df_recente_entrada.drop_duplicates(subset=['CNPJ_Normalizado'], keep='first')
-                                
-                                        # Preparar colunas para merge
-                                        colunas_merge_entrada = ['CNPJ_Normalizado', 'Data_Processada']
-                                        tipo_col = None
-                                        for col_tipo in ['Tipo Movimentação', 'Tipo', 'Status']:
-                                            if col_tipo in df_recente_entrada_unique.columns:
-                                                tipo_col = col_tipo
-                                                colunas_merge_entrada.append(col_tipo)
-                                                break
-                                
-                                        # Adicionar ao DataFrame completo
-                                        df_temp_entrada = df_recente_entrada_unique[colunas_merge_entrada].copy()
-                                        df_temp_entrada = df_temp_entrada.rename(columns={
-                                            'Data_Processada': 'Gralab_Data',
-                                            tipo_col: 'Gralab_Tipo' if tipo_col else 'Gralab_Tipo'
-                                        } if tipo_col else {'Data_Processada': 'Gralab_Data'})
-                                
-                                        if 'Gralab_Tipo' not in df_temp_entrada.columns:
-                                            df_temp_entrada['Gralab_Tipo'] = ''
-                                
-                                        df_gralab_completo = pd.concat([df_gralab_completo, df_temp_entrada], ignore_index=True)
-                    
-                            # ===== ETAPA 2: Verificar Dados Completos (todos os registros) =====
-                            if 'Dados Completos' in dados_gralab:
-                                df_dados_completos = dados_gralab['Dados Completos'].copy()
-                                st.sidebar.write(f"**Registros Dados Completos:** {len(df_dados_completos)}")
-                        
-                                if 'CNPJ_Normalizado' in df_dados_completos.columns:
-                                    # Pegar todos os CNPJs que NÃO estão já na EntradaSaida
-                                    cnpjs_ja_encontrados = set(df_gralab_completo['CNPJ_Normalizado'].unique()) if not df_gralab_completo.empty else set()
-                            
-                                    # Filtrar apenas CNPJs que não estão na EntradaSaida
-                                    df_dados_completos_filtrado = df_dados_completos[
-                                        ~df_dados_completos['CNPJ_Normalizado'].isin(cnpjs_ja_encontrados)
-                                    ].copy()
-                            
-                                    st.sidebar.write(f"**Novos registros Dados Completos:** {len(df_dados_completos_filtrado)}")
-                            
-                                    if not df_dados_completos_filtrado.empty:
-                                        # Usar Última Verificação se disponível, senão usar data atual
-                                        coluna_data_completo = None
-                                        for col_data in ['Última Verificação', 'Data Entrada']:
-                                            if col_data in df_dados_completos_filtrado.columns:
-                                                coluna_data_completo = col_data
-                                                break
-                                
-                                        if coluna_data_completo:
-                                            df_dados_completos_filtrado['Gralab_Data'] = pd.to_datetime(
-                                                df_dados_completos_filtrado[coluna_data_completo], errors='coerce'
-                                            )
-                                        else:
-                                            # Se não tiver coluna de data, usar data atual
-                                            df_dados_completos_filtrado['Gralab_Data'] = datetime.now()
-                                
-                                        # Preparar DataFrame para merge
-                                        df_temp_completo = df_dados_completos_filtrado[['CNPJ_Normalizado', 'Gralab_Data']].copy()
-                                        df_temp_completo['Gralab_Tipo'] = 'Cadastrado'  # Tipo padrão para Dados Completos
-                                
-                                        df_gralab_completo = pd.concat([df_gralab_completo, df_temp_completo], ignore_index=True)
-                    
-                            # ===== ETAPA 3: Fazer merge com df_filtrado =====
-                            if not df_gralab_completo.empty:
-                                # Remover duplicatas (priorizar EntradaSaida sobre Dados Completos)
-                                df_gralab_completo = df_gralab_completo.drop_duplicates(subset=['CNPJ_Normalizado'], keep='first')
-                        
-                                st.sidebar.write(f"**Total CNPJs únicos no Gralab:** {len(df_gralab_completo)}")
-                        
-                                # Merge com df_filtrado para atualizar Apareceu_Gralab
-                                df_filtrado_merged = df_filtrado.merge(
-                                    df_gralab_completo[['CNPJ_Normalizado', 'Gralab_Data', 'Gralab_Tipo']],
-                                    on='CNPJ_Normalizado',
-                                    how='left',
-                                    suffixes=('', '_novo')
-                                )
-                        
-                                # Atualizar colunas Gralab (sobrescrever com dados novos)
-                                df_filtrado_merged['Gralab_Data'] = df_filtrado_merged['Gralab_Data_novo'].combine_first(
-                                    df_filtrado_merged.get('Gralab_Data', pd.NaT)
-                                )
-                                df_filtrado_merged['Gralab_Tipo'] = df_filtrado_merged['Gralab_Tipo_novo'].combine_first(
-                                    df_filtrado_merged.get('Gralab_Tipo', '')
-                                )
-                        
-                                # Remover colunas temporárias
-                                df_filtrado_merged = df_filtrado_merged.drop(columns=['Gralab_Data_novo', 'Gralab_Tipo_novo'], errors='ignore')
-                        
-                                # Atualizar flag Apareceu_Gralab baseado em Gralab_Data
-                                df_filtrado_merged['Apareceu_Gralab'] = df_filtrado_merged['Gralab_Data'].notna()
-                        
-                                # Preencher valores vazios de Gralab_Tipo se necessário
-                                df_filtrado_merged['Gralab_Tipo'] = df_filtrado_merged['Gralab_Tipo'].fillna('')
-                        
-                                df_filtrado = df_filtrado_merged
-                        
-                                labs_com_gralab = df_filtrado_merged['Apareceu_Gralab'].sum()
-                                st.sidebar.success(f"✅ **Dados Gralab atualizados:** {labs_com_gralab} labs no concorrente")
-                        
-                                # Debug adicional: verificar se MARICONDI está no Gralab
-                                if 'Nome_Fantasia_PCL' in df_filtrado.columns:
-                                    maricondi_row = df_filtrado[df_filtrado['Nome_Fantasia_PCL'].str.contains('MARICONDI', case=False, na=False)]
-                                    if not maricondi_row.empty:
-                                        maricondi_apareceu = maricondi_row.iloc[0].get('Apareceu_Gralab', False)
-                                        maricondi_tipo = maricondi_row.iloc[0].get('Gralab_Tipo', '')
-                                        st.sidebar.write(f"**MARICONDI no Gralab:** {'✅ Sim' if maricondi_apareceu else '❌ Não'}")
-                                        if maricondi_apareceu:
-                                            st.sidebar.write(f"  Tipo: {maricondi_tipo}")
-                            else:
-                                st.sidebar.info("ℹ️ Nenhum registro encontrado no Gralab")
-                    except Exception as e:
-                        import traceback
-                        st.sidebar.error(f"❌ Erro ao atualizar dados Gralab: {str(e)}")
-                        st.sidebar.code(traceback.format_exc())
+                            st.warning("⚠️ Dados do concorrente desatualizados ou indisponíveis.")
+                    except:
+                        pass
                 
-                # IMPORTANTE: Filtrar alertas APÓS todos os filtros de coletas recentes
+                # Filtrar Alertas de Risco Alto
                 labs_perda = df_filtrado[df_filtrado['Status_Risco_V2'] == 'Perda (Risco Alto)'].copy()
                 
-                st.sidebar.write(f"**Alertas após filtro:** {len(labs_perda)}")
-                st.sidebar.write(f"**Labs filtrados:** {total_antes_filtro - len(df_filtrado)}")
-                
-                # DEBUG: Verificar se há labs com Status_Risco_V2 mas que deveriam ter sido filtrados
-                if 'Total_Coletas_2025' in labs_perda.columns and 'Dias_Sem_Coleta' in labs_perda.columns:
-                    labs_problematicos = labs_perda[
-                        (labs_perda['Total_Coletas_2025'] == 0) | 
-                        (labs_perda['Dias_Sem_Coleta'] > 90)
-                    ]
-                    if not labs_problematicos.empty:
-                        st.sidebar.error(f"⚠️ ATENÇÃO: {len(labs_problematicos)} labs problemáticos ainda nos alertas!")
-                        for idx, row in labs_problematicos.head(3).iterrows():
-                            st.sidebar.write(f"  - {row.get('Nome_Fantasia_PCL', 'N/A')}: Total_2025={row.get('Total_Coletas_2025', 0)}, Dias={row.get('Dias_Sem_Coleta', 0)}")
-                
-                baseline_meses_disponiveis = get_baseline_candidate_months()
-                baseline_window_label = get_baseline_window_label()
-                baseline_meses_resumo = resumir_meses(baseline_meses_disponiveis, limite=10)
-                baseline_tooltip = (
-                    f"Selecionamos os {BASELINE_TOP_N} melhores meses de cada laboratório dentro da janela {baseline_window_label}. "
-                    f"Meses elegíveis: {', '.join(baseline_meses_disponiveis)}."
-                )
-                
+                # Cards de Resumo dos Alertas
                 total_perda = len(labs_perda)
                 com_concorrencia = labs_perda['Apareceu_Gralab'].sum() if 'Apareceu_Gralab' in labs_perda.columns else 0
-                pct_concorrencia = (com_concorrencia / total_perda) * 100 if total_perda > 0 else 0
                 
-                st.markdown("#### ℹ️ Contexto imediato do churn")
-                card_col1, card_col2 = st.columns(2)
+                kpi1, kpi2, kpi3 = st.columns(3)
+                with kpi1:
+                    st.metric("🚨 Alertas Ativos", total_perda, help="Labs com queda >50% (Baseline ou WoW) ou dias sem coleta acima do porte.")
+                with kpi2:
+                    st.metric("⚠️ Risco Concorrência", com_concorrencia, help="Labs em alerta que apareceram no Gralab.")
+                with kpi3:
+                    # Mostrar quantos estão dentro do Cap ideal
+                    status_cap = "Dentro da Meta" if 30 <= total_perda <= 50 else "Fora da Faixa Ideal"
+                    st.metric("📊 Status do Cap", status_cap, help="Meta: 30-50 alertas/dia")
                 
-                with card_col1:
-                    destaque_alertas = f"{total_perda} ativos" if total_perda > 0 else "Sem alertas"
-                    descricao_alertas = (
-                        "Casos já filtrados por atividade 2025 e dias sem coleta. Ajuste o cap global se quiser mais foco."
-                        if total_perda > 0 else
-                        f"Livre para operar no limite configurado (cap {ALERTA_CAP_MIN}-{ALERTA_CAP_MAX}/dia)."
-                    )
-                    render_info_card(
-                        icon="🎯",
-                        titulo="Alertas monitorados",
-                        destaque=destaque_alertas,
-                        descricao=descricao_alertas,
-                        tooltip=HELPERS_V2.get('cap_alertas'),
-                        badge=f"{ALERTA_CAP_MIN}-{ALERTA_CAP_MAX}/dia"
-                    )
-                
-                with card_col2:
-                    render_info_card(
-                        icon="🧮",
-                        titulo="Baseline dinâmica",
-                        destaque=f"Top {BASELINE_TOP_N} meses",
-                        descricao=f"Janela {baseline_window_label}. {len(baseline_meses_disponiveis)} meses elegíveis ({baseline_meses_resumo}).",
-                        tooltip=baseline_tooltip,
-                        badge=f"{len(baseline_meses_disponiveis)} meses"
-                    )
-                
-                with st.expander("🔍 Como interpretar a Baseline", expanded=False):
-                    st.markdown(f"""
-                    - **Baseline** · escolhe os {BASELINE_TOP_N} maiores meses dentro de {baseline_window_label} para cada laboratório individualmente.
-                    - **Queda vs Baseline** · medimos a variação percentual entre o mês atual e a baseline mensal.
-                    - **WoW (Week over Week)** · comparação semanal usando semanas ISO, apenas dias úteis, excluindo feriados.
-                    - **Concorrência** · laboratórios identificados no sistema Gralab recebem atenção especial.
-                    """)
-                
-                if labs_perda.empty:
-                    st.success("""
-                    ✅ **Nenhum alerta de perda identificado!**
+                if not labs_perda.empty:
+                    st.markdown("### 📋 Lista de Ação Imediata")
                     
-                    Todos os laboratórios estão operando dentro dos parâmetros esperados.
-                    """)
-                else:
-                    # Métricas de alerta
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    with col1:
-                        st.metric(
-                            "🚨 Alertas de Perda",
-                            total_perda,
-                            help=HELPERS_V2['perda_risco_alto']
-                        )
-                    
-                    with col2:
-                        if total_perda > 0:
-                            pct_concorrencia = (com_concorrencia / total_perda) * 100
-                            st.metric(
-                                "⚠️ Com Concorrência",
-                                f"{com_concorrencia} ({pct_concorrencia:.0f}%)",
-                                help=HELPERS_V2['concorrencia']
-                            )
-                        else:
-                            st.metric("⚠️ Com Concorrência", "0")
-                    
-                    with col3:
-                        # Distribuição por porte
-                        if 'Porte' in labs_perda.columns:
-                            porte_dist = labs_perda['Porte'].value_counts()
-                            porte_principal = porte_dist.index[0] if len(porte_dist) > 0 else 'N/A'
-                            st.metric(
-                                "📊 Porte Predominante",
-                                porte_principal,
-                                help=HELPERS_V2['porte']
-                            )
-                    
-                    st.markdown(
-                        f"""
-                        <div style="display:flex; flex-wrap:wrap; gap:0.75rem; font-size:0.85rem; color:rgba(0,0,0,0.65);">
-                            <span {_build_tooltip_attr(HELPERS_V2.get('baseline_mensal'))}>
-                                🧮 Baseline robusta: top {BASELINE_TOP_N} meses dentro de {baseline_window_label} ({len(baseline_meses_disponiveis)} elegíveis). É a média de referência usada para medir quedas reais.
-                            </span>
-                            <span {_build_tooltip_attr(HELPERS_V2.get('wow'))}>
-                                📅 WoW (semana ISO = padrão internacional de semanas): compara semana atual vs anterior só com dias úteis/feriados oficiais.
-                            </span>
-                            <span {_build_tooltip_attr(HELPERS_V2.get('cap_alertas'))}>
-                                🎛️ Cap ativo: {ALERTA_CAP_MIN}-{ALERTA_CAP_MAX} alertas/dia (alvo {ALERTA_CAP_DEFAULT}). É o budget diário que prioriza apenas os alertas mais severos.
-                            </span>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-                    
-                    st.markdown("---")
-                    
-                    # Top alertas prioritários
-                    st.markdown("### 🔥 Top Alertas Prioritários")
-                    
-                    # Ordenar por queda baseline (maior primeiro)
+                    # Ordenar e preparar tabela
                     if 'Queda_Baseline_Pct' in labs_perda.columns:
-                        labs_perda_sorted = labs_perda.sort_values('Queda_Baseline_Pct', ascending=True)
-                    else:
-                        labs_perda_sorted = labs_perda
+                        labs_perda = labs_perda.sort_values('Queda_Baseline_Pct', ascending=True)
                     
-                    # Aplicar cap visual (top 40)
-                    labs_exibir = labs_perda_sorted.head(40)
-                    
-                    if total_perda > 40:
-                        st.info(
-                            f"ℹ️ Exibindo somente os 40 casos mais críticos de um total de {total_perda}. "
-                            "Use a barra lateral (Filtros) para reduzir o universo ou combinar estado, porte e representante."
-                        )
-                    
-                    # Preparar colunas para exibição
-                    colunas_v2 = [
+                    cols_view = [
                         'Nome_Fantasia_PCL', 'Estado', 'Representante_Nome', 'Porte',
                         'Baseline_Mensal', 'Coletas_Mes_Atual', 'Queda_Baseline_Pct',
-                        'WoW_Percentual', 'Dias_Sem_Coleta',
-                        'Apareceu_Gralab', 'Motivo_Risco_V2'
+                        'WoW_Percentual', 'Dias_Sem_Coleta', 'Motivo_Risco_V2', 'Apareceu_Gralab'
                     ]
+                    cols_existentes = [c for c in cols_view if c in labs_perda.columns]
                     
-                    colunas_disponiveis = [c for c in colunas_v2 if c in labs_exibir.columns]
-                    
-                    if colunas_disponiveis:
-                        st.markdown(
-                            f"""
-                            <div style="font-size:0.85rem; color:rgba(0,0,0,0.65); margin-bottom:0.5rem;" {_build_tooltip_attr(baseline_tooltip)}>
-                                🧭 Referência baseline: top {BASELINE_TOP_N} meses escolhidos dentro de {baseline_window_label}. Usamos essa média para todo Δ Baseline (intervalo atual: {baseline_meses_resumo}).
-                            </div>
-                            """,
-                            unsafe_allow_html=True
-                        )
-                        st.caption("💡 Passe o mouse nos nomes das colunas para ver o significado completo (helpers).")
-
-                        df_para_exibir = labs_exibir[colunas_disponiveis].copy()
-                        for coluna_inteira in ['Baseline_Mensal', 'Coletas_Mes_Atual', 'Dias_Sem_Coleta']:
-                            if coluna_inteira in df_para_exibir.columns:
-                                df_para_exibir[coluna_inteira] = pd.to_numeric(df_para_exibir[coluna_inteira], errors='coerce').fillna(0).round(0).astype(int)
-                        
-                        st.dataframe(
-                            _formatar_df_exibicao(df_para_exibir),
-                            use_container_width=True,
-                            column_config={
-                                "Nome_Fantasia_PCL": st.column_config.TextColumn(
-                                    "🏥 Laboratório", 
-                                    help="Nome do laboratório em risco de perda."
-                                ),
-                                "Estado": st.column_config.TextColumn(
-                                    "🗺️ UF", 
-                                    help="Estado onde o laboratório está localizado."
-                                ),
-                                "Representante_Nome": st.column_config.TextColumn(
-                                    "👤 Representante",
-                                    help="Responsável comercial/CS pelo laboratório, usado para follow-up rápido."
-                                ),
-                                "Porte": st.column_config.TextColumn(
-                                    "🏗️ Porte", 
-                                    help="Grande (≥100/mês), Médio (50-99/mês), Pequeno (<50/mês)."
-                                ),
-                                "Baseline_Mensal": st.column_config.NumberColumn(
-                                    "🧮 Baseline",
-                                    format="%.0f",
-                                    help="Baseline robusta calculada com os maiores meses de 2024/25 para cada lab."
-                                ),
-                                "Coletas_Mes_Atual": st.column_config.NumberColumn(
-                                    "📆 Mês Atual",
-                                    format="%.0f",
-                                    help="Volume coletado no mês corrente (mesma unidade da baseline)."
-                                ),
-                                "Queda_Baseline_Pct": st.column_config.NumberColumn(
-                                    "📉 Δ Baseline",
-                                    format="%.1f%%",
-                                    help="% de queda em relação à baseline robusta."
-                                ),
-                                "WoW_Percentual": st.column_config.NumberColumn(
-                                    "🔁 WoW",
-                                    format="%.1f%%",
-                                    help="Week over Week: semana ISO atual vs anterior considerando apenas dias úteis."
-                                ),
-                                "Dias_Sem_Coleta": st.column_config.NumberColumn(
-                                    "⏱️ Dias sem coleta",
-                                    help="Dias úteis consecutivos sem coleta (limiar depende do porte)."
-                                ),
-                                "Apareceu_Gralab": st.column_config.CheckboxColumn(
-                                    "⚠️ Concorrência",
-                                    help="Flag se o CNPJ apareceu no sistema Gralab (concorrente)."
-                                ),
-                                "Motivo_Risco_V2": st.column_config.TextColumn(
-                                    "📋 Motivo do alerta",
-                                    help="Resumo textual do gatilho que colocou o lab em risco."
-                                ),
-                            },
-                            hide_index=True
-                        )
-                        
-                        # Detalhamento de labs com concorrência (separado por tipo)
-                        if com_concorrencia > 0:
-                            st.markdown("---")
-                            st.markdown("### ⚠️ Alertas com Sinal de Concorrência")
-                            
-                            labs_com_gralab = labs_perda[labs_perda['Apareceu_Gralab'] == True].copy()
-                            
-                            if not labs_com_gralab.empty:
-                                st.error(f"""
-                                🚨 **{len(labs_com_gralab)} laboratório(s) em risco apareceu no sistema concorrente!**
-                                
-                                Estes casos requerem atenção imediata da equipe comercial.
-                                """)
-                                
-                                # Separar por tipo: Credenciamento/Descredenciamento vs Cadastrado
-                                if 'Gralab_Tipo' in labs_com_gralab.columns:
-                                    # Labs com movimentação (Credenciamento ou Descredenciamento)
-                                    labs_movimentacao = labs_com_gralab[
-                                        labs_com_gralab['Gralab_Tipo'].str.contains(
-                                            'Credenciamento|Descredenciamento', 
-                                            case=False, 
-                                            na=False, 
-                                            regex=True
-                                        )
-                                    ].copy()
-                                    
-                                    # Labs apenas cadastrados (sem movimentação recente)
-                                    labs_cadastrados = labs_com_gralab[
-                                        ~labs_com_gralab['Gralab_Tipo'].str.contains(
-                                            'Credenciamento|Descredenciamento', 
-                                            case=False, 
-                                            na=False, 
-                                            regex=True
-                                        )
-                                    ].copy()
-                                    
-                                    # TABELA 1: Credenciamento/Descredenciamento
-                                    if not labs_movimentacao.empty:
-                                        st.markdown("#### 🔴 Movimentações Recentes (Credenciamento/Descredenciamento)")
-                                        st.warning(f"""
-                                        ⚠️ **{len(labs_movimentacao)} laboratório(s)** com movimentação recente no concorrente!
-                                        
-                                        **Ação prioritária:** Verificar se houve credenciamento ou descredenciamento.
-                                        """)
-                                        
-                                        colunas_gralab = [
-                                            'Nome_Fantasia_PCL', 'Estado', 'CNPJ_PCL',
-                                            'Gralab_Data', 'Gralab_Tipo',
-                                            'Baseline_Mensal', 'WoW_Percentual'
-                                        ]
-                                        colunas_gralab_disp = [c for c in colunas_gralab if c in labs_movimentacao.columns]
-                                        
-                                        if colunas_gralab_disp:
-                                            st.dataframe(
-                                                _formatar_df_exibicao(labs_movimentacao[colunas_gralab_disp]),
-                                                use_container_width=True,
-                                                hide_index=True,
-                                                column_config={
-                                                    "Gralab_Tipo": st.column_config.TextColumn(
-                                                        "Tipo Movimentação",
-                                                        help="Tipo de movimentação no sistema concorrente"
-                                                    ),
-                                                    "Gralab_Data": st.column_config.DatetimeColumn(
-                                                        "Data",
-                                                        format="DD/MM/YYYY",
-                                                        help="Data da movimentação ou cadastro"
-                                                    )
-                                                }
-                                            )
-                                    
-                                    # TABELA 2: Apenas Cadastrados
-                                    if not labs_cadastrados.empty:
-                                        st.markdown("---")
-                                        st.markdown("#### 🟡 Apenas Cadastrados (Sem Movimentação Recente)")
-                                        st.info(f"""
-                                        ℹ️ **{len(labs_cadastrados)} laboratório(s)** cadastrado no concorrente, mas sem movimentação recente.
-                                        
-                                        **Ação:** Monitorar e verificar se há atividade no concorrente.
-                                        """)
-                                        
-                                        colunas_gralab = [
-                                            'Nome_Fantasia_PCL', 'Estado', 'CNPJ_PCL',
-                                            'Gralab_Data', 'Gralab_Tipo',
-                                            'Baseline_Mensal', 'WoW_Percentual'
-                                        ]
-                                        colunas_gralab_disp = [c for c in colunas_gralab if c in labs_cadastrados.columns]
-                                        
-                                        if colunas_gralab_disp:
-                                            st.dataframe(
-                                                _formatar_df_exibicao(labs_cadastrados[colunas_gralab_disp]),
-                                                use_container_width=True,
-                                                hide_index=True,
-                                                column_config={
-                                                    "Gralab_Tipo": st.column_config.TextColumn(
-                                                        "Tipo",
-                                                        help="Status no sistema concorrente (geralmente 'Cadastrado')"
-                                                    ),
-                                                    "Gralab_Data": st.column_config.DatetimeColumn(
-                                                        "Data",
-                                                        format="DD/MM/YYYY",
-                                                        help="Data do cadastro ou última verificação"
-                                                    )
-                                                }
-                                            )
-                                else:
-                                    # Fallback: se não tiver coluna Gralab_Tipo, mostrar tudo junto
-                                    colunas_gralab = [
-                                        'Nome_Fantasia_PCL', 'Estado', 'CNPJ_PCL',
-                                        'Gralab_Data',
-                                        'Baseline_Mensal', 'WoW_Percentual'
-                                    ]
-                                    colunas_gralab_disp = [c for c in colunas_gralab if c in labs_com_gralab.columns]
-                                    
-                                    if colunas_gralab_disp:
-                                        st.dataframe(
-                                            _formatar_df_exibicao(labs_com_gralab[colunas_gralab_disp].head(20)),
-                                            use_container_width=True,
-                                            hide_index=True
-                                        )
-                        
-                        # Distribuição por UF
-                        st.markdown("---")
-                        st.markdown("### 🗺️ Distribuição de Alertas por UF")
-                        
-                        if 'Estado' in labs_perda.columns:
-                            dist_uf = labs_perda['Estado'].value_counts().reset_index()
-                            dist_uf.columns = ['UF', 'Alertas']
-                            
-                            col1, col2 = st.columns([2, 1])
-                            
-                            with col1:
-                                # Gráfico de barras
-                                fig = px.bar(
-                                    dist_uf.head(15),
-                                    x='UF',
-                                    y='Alertas',
-                                    title='Top 15 UFs com Mais Alertas',
-                                    color='Alertas',
-                                    color_continuous_scale='Reds'
-                                )
-                                fig.update_layout(showlegend=False, height=400)
-                                st.plotly_chart(fig, use_container_width=True)
-                            
-                            with col2:
-                                st.markdown("**Ranking por UF:**")
-                                st.dataframe(
-                                    dist_uf.head(10),
-                                    use_container_width=True,
-                                    hide_index=True
-                                )
-                
-                # Legenda do sistema v2
-                st.markdown("---")
-                with st.expander("ℹ️ Como funciona o Sistema v2 de Alertas"):
-                    st.markdown(f"""
-                    ### 🎯 Critérios de Alerta (Sistema Binário)
-                    
-                    Um laboratório recebe **"Perda (Risco Alto)"** se atender **qualquer** dos critérios:
-                    
-                    1. **Queda >50% vs Baseline Mensal**
-                       - Baseline = Média dos maiores meses de 2024 e 2025 (configurável: 3 ou 6 meses)
-                       - Compara coletas do mês atual com essa baseline robusta
-                       - Laboratórios sem coletas em 2025 não são classificados como risco
-                    
-                    2. **Queda >50% WoW (Week over Week)**
-                       - Compara semana ISO atual vs semana ISO anterior
-                       - Considera apenas dias úteis (exclui fins de semana e feriados)
-                    
-                    3. **Dias sem Coleta (sensível ao porte)**
-                       - **Grande** (≥100 coletas/mês): ≥2 dias úteis consecutivos sem coleta
-                       - **Médio** (50-99 coletas/mês): ≥3 dias úteis consecutivos sem coleta
-                       - **Pequeno** (<50 coletas/mês): ≥5 dias úteis consecutivos sem coleta
-                    
-                    ### 📊 Cap de Alertas
-                    
-                    - Sistema limita automaticamente a 30-50 alertas/dia
-                    - Priorizados por queda baseline e WoW
-                    - Reduz ruído e foca em casos acionáveis
-                    
-                    ### ⚠️ Concorrência
-                    
-                    - Monitora aparições no sistema Gralab verificando duas fontes:
-                      - **EntradaSaida**: Movimentações recentes (últimos 14 dias) - Credenciamento/Descredenciamento
-                      - **Dados Completos**: Todos os laboratórios cadastrados no concorrente
-                    - Alertas são separados em duas categorias:
-                      - **🔴 Movimentações Recentes**: Prioridade máxima (credenciamento/descredenciamento)
-                      - **🟡 Apenas Cadastrados**: Monitoramento (sem movimentação recente)
-                    - Labs no concorrente recebem atenção especial automaticamente
-                    
-                    ### 🎯 Filtros e Segmentação
-                    
-                    - **Filtro por UF**: Análises e alertas segmentados por estado (evita comparações incorretas)
-                    - **Cap por UF**: Limite proporcional de alertas por estado (30-50 total, distribuídos)
-                    
-                    ### 📋 Regras de Exclusão
-                    
-                    - Laboratórios **sem coletas em 2025** não são classificados como risco
-                    - Laboratórios com **mais de 90 dias sem coleta** são excluídos (já inativos há muito tempo)
-                    - Sistema foca apenas em riscos **acionáveis e recentes**
-                    
-                    {HELPERS_V2['perda_risco_alto']}
-                    {HELPERS_V2['baseline_mensal']}
-                    {HELPERS_V2['wow']}
-                    {HELPERS_V2['porte']}
-                    {HELPERS_V2['concorrencia']}
-                    """)
-                    if {'Delta_MM7', 'Vol_Hoje', 'MM7'}.issubset(df_filtrado.columns):
-                        quedas_diarias = df_filtrado[df_filtrado['Delta_MM7'].notna()].copy()
-                        if not quedas_diarias.empty:
-                            quedas_diarias = quedas_diarias.sort_values('Delta_MM7').head(10)
-                            colunas_quedas = [
-                                'Nome_Fantasia_PCL', 'Estado',
-                                'Vol_Hoje',
-                                'MM7', 'Delta_MM7',
-                                'Risco_Diario', 'Dias_Sem_Coleta'
-                            ]
-                            colunas_quedas = [c for c in colunas_quedas if c in quedas_diarias.columns]
-                            st.dataframe(
-                                _formatar_df_exibicao(quedas_diarias[colunas_quedas]),
-                                width='stretch',
-                                column_config={
-                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com maiores quedas vs MM7"),
-                                    "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
-                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas no último dia útil"),
-                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias úteis - média aritmética simples dos últimos 7 dias úteis"),
-                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Ordenado por maior queda (valores mais negativos primeiro). Baseado em dias úteis."),
-                                    "Risco_Diario": st.column_config.TextColumn("Risco", help="Classificação de risco: 🟢 Normal, 🟡 Atenção, 🟠 Moderado, 🔴 Alto, ⚫ Crítico"),
-                                    "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta", help="Dias consecutivos sem coleta (dias úteis). Limiar por porte: Grande ≥2, Médio ≥3, Pequeno ≥5. Labs com >90 dias são excluídos.")
-                                },
-                                hide_index=True
-                            )
-                        if quedas_diarias.empty:
-                            st.success("Nenhuma queda relevante detectada hoje.")
-                    else:
-                        st.warning("⚠️ Colunas necessárias para a análise de quedas (Δ vs MM7) não encontradas.")
-
-                with col2:
-                    st.markdown("#### 📈 Altas vs MM7 (7 dias úteis)")
-                    if {'Delta_MM7', 'Vol_Hoje', 'MM7'}.issubset(df_filtrado.columns):
-                        altas_diarias = df_filtrado[df_filtrado['Delta_MM7'].notna()].copy()
-                        altas_diarias = altas_diarias[altas_diarias['Delta_MM7'] > 0]
-                        if not altas_diarias.empty:
-                            altas_diarias = altas_diarias.sort_values('Delta_MM7', ascending=False).head(10)
-                            colunas_altas = [
-                                'Nome_Fantasia_PCL', 'Estado',
-                                'Vol_Hoje',
-                                'MM7', 'Delta_MM7',
-                                'Risco_Diario', 'Recuperacao'
-                            ]
-                            colunas_altas = [c for c in colunas_altas if c in altas_diarias.columns]
-                            st.dataframe(
-                                _formatar_df_exibicao(altas_diarias[colunas_altas]),
-                                width='stretch',
-                                column_config={
-                                    "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório com maiores altas vs MM7"),
-                                    "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
-                                    "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas no último dia útil"),
-                                    "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias úteis - média aritmética simples dos últimos 7 dias úteis"),
-                                    "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Ordenado por maior crescimento (valores mais positivos primeiro). Baseado em dias úteis."),
-                                    "Risco_Diario": st.column_config.TextColumn("Risco", help="Classificação de risco: 🟢 Normal, 🟡 Atenção, 🟠 Moderado, 🔴 Alto, ⚫ Crítico"),
-                                    "Recuperacao": st.column_config.CheckboxColumn("Recuperação", help="Indica que o laboratório voltou a operar acima da MM7 após período de queda")
-                                },
-                                hide_index=True
-                            )
-                        else:
-                            st.info("Nenhum crescimento significativo vs MM7 identificado hoje.")
-                    else:
-                        st.warning("⚠️ Colunas necessárias para a análise de altas (Δ vs MM7) não encontradas.")
-
-                st.markdown("#### 🔁 Recuperações em Andamento")
-                if 'Recuperacao' in df_filtrado.columns:
-                    recuperacoes = df_filtrado[(df_filtrado['Recuperacao'] == True) & df_filtrado['Delta_MM7'].notna()].copy()
-                    if not recuperacoes.empty:
-                        # Recalcular Δ vs MM7 para garantir fórmula consistente: (Hoje - MM7) / MM7
-                        for col in ['Vol_Hoje', 'MM7']:
-                            recuperacoes[col] = pd.to_numeric(recuperacoes[col], errors='coerce')
-
-                        # Função para calcular percentual igual à do RiskEngine
-                        def pct_safe(a, b):
-                            return ((a - b) / b * 100).where(b.notna() & (b != 0), 0.0)
-
-                        recuperacoes['Delta_MM7'] = pct_safe(recuperacoes['Vol_Hoje'], recuperacoes['MM7']).round(1)
-                        recuperacoes = recuperacoes.sort_values('Delta_MM7', ascending=False)
-                        colunas_recuperacao = [
-                            'Nome_Fantasia_PCL', 'Estado',
-                            'Vol_Hoje',
-                            'MM7', 'Delta_MM7',
-                            'Risco_Diario', 'Dias_Sem_Coleta'
-                        ]
-                        colunas_recuperacao = [c for c in colunas_recuperacao if c in recuperacoes.columns]
-                        st.dataframe(
-                            _formatar_df_exibicao(recuperacoes[colunas_recuperacao].head(10)),
-                            width='stretch',
-                            column_config={
-                                "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome comercial do laboratório em recuperação"),
-                                "Estado": st.column_config.TextColumn("UF", help="Estado (UF) onde o laboratório está localizado"),
-                                "Vol_Hoje": st.column_config.NumberColumn("Coletas (Hoje)", help="Total de coletas registradas na data de referência (dia mais recente)"),
-                                "MM7": st.column_config.NumberColumn("MM7", format="%.3f", help="Média móvel de 7 dias úteis - média aritmética simples dos últimos 7 dias úteis"),
-                                "Delta_MM7": st.column_config.NumberColumn("Δ vs MM7", format="%.1f%%", help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Ordenado por maior recuperação (valores mais positivos primeiro). Baseado em dias úteis."),
-                                "Risco_Diario": st.column_config.TextColumn("Risco", help="Classificação de risco: 🟢 Normal, 🟡 Atenção, 🟠 Moderado, 🔴 Alto, ⚫ Crítico"),
-                                "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias s/ Coleta", help="Número consecutivo de dias úteis sem registrar coletas. Valores altos indicam possível inatividade")
-                            },
-                            hide_index=True
-                        )
-                    else:
-                        st.info("Nenhuma recuperação consistente detectada (labs com Δ vs MM7 positivo e flag de recuperação).")
+                    st.dataframe(
+                        _formatar_df_exibicao(labs_perda[cols_existentes].head(50)),
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório"),
+                            "Queda_Baseline_Pct": st.column_config.NumberColumn("📉 Δ Baseline", format="%.1f%%"),
+                            "WoW_Percentual": st.column_config.NumberColumn("🔁 WoW", format="%.1f%%"),
+                            "Apareceu_Gralab": st.column_config.CheckboxColumn("Gralab?")
+                        }
+                    )
                 else:
-                    st.warning("⚠️ Coluna 'Recuperacao' não encontrada nos dados.")
-
+                    st.success("✅ Nenhum laboratório em Risco Alto identificado hoje!")
+            
             st.markdown("---")
-            with st.expander("📊 Como Funcionam os Cálculos desta Aba"):
-                st.markdown("""
-#### 🔢 **Fórmulas Básicas dos Indicadores**
-
-**Médias Móveis (MM7, MM30, MM90):**
-- **MM7**: Média aritmética simples dos últimos 7 dias úteis
-- **MM30**: Média aritmética simples dos últimos 30 dias úteis
-- **MM90**: Média aritmética simples dos últimos 90 dias úteis
-- *Nota: Calculadas apenas com dias úteis (exclui finais de semana e feriados)*
-
-**Variações Percentuais (Deltas):**
-- **Δ vs MM7** = `(Vol_Hoje - MM7) / MM7 × 100` (baseado em dias úteis)
-- **Δ vs MM30** = `(Vol_Hoje - MM30) / MM30 × 100` (baseado em dias úteis)
-- *Nota: Calculados com valores não arredondados para máxima precisão. Sistema foca em comparações semanais e mensais, não diárias.*
-
-#### 📊 **Lógica de Cada Tabela**
-
-**1. 📉 Maiores Quedas vs MM7 (7 dias úteis)**
-- **Filtro**: `Delta_MM7.notna()` (todos com dados disponíveis)
-- **Ordenação**: Por `Delta_MM7` (maior queda primeiro)
-- **Limite**: Top 10 laboratórios
-- **Objetivo**: Identificar maiores declínios estruturais vs. média semanal de dias úteis
-
-**2. 📈 Altas vs MM7 (7 dias úteis)**
-- **Filtro**: `Delta_MM7 > 0` (apenas crescimentos)
-- **Ordenação**: Por `Delta_MM7` decrescente (maior alta primeiro)
-- **Limite**: Top 10 laboratórios
-- **Objetivo**: Identificar recuperações expressivas vs. média semanal de dias úteis
-
-**3. 🔁 Recuperações em Andamento**
-- **Filtro**: `Recuperacao == True AND Delta_MM7.notna()`
-- **Ordenação**: Por `Delta_MM7` decrescente (maior recuperação primeiro)
-- **Limite**: Top 10 laboratórios
-- **Objetivo**: Labs que voltaram acima da MM7 após queda
-
-#### 🎯 **Exemplo Prático do Cálculo**
-
-Dados do laboratório: `Vol_Hoje = 3`, `MM7 = 0.429`
-```
-Δ vs MM7 = (3 - 0.429) / 0.429 × 100
-          = 2.571 / 0.429 × 100
-          = 6.00 × 100
-          = 600%
-```
-
-**Por que 600%?** Porque o laboratório coletou ~7 vezes mais que sua média semanal de dias úteis!
-
-#### ⚠️ **Alertas e Regras de Priorização (Sistema v2)**
-
-- **🔻 Quedas >50% vs Baseline Mensal**: Risco Alto (baseline robusta de 2024 e 2025)
-- **📉 Quedas >50% WoW (semana ISO vs semana ISO anterior)**: Risco Alto
-- **Dias sem coleta por porte**: Grande (≥2 dias), Médio (≥3 dias), Pequeno (≥5 dias)
-- **🔴 Concorrência com Movimentação Recente**: Prioridade máxima (credenciamento/descredenciamento)
-- **🟡 Concorrência Apenas Cadastrado**: Monitorar (sem movimentação recente)
-- **Sistema Binário**: Apenas "Perda (Risco Alto)" ou "Normal" - sem categorias intermediárias
-- **Cap de 30-50 alertas/dia**: Priorizados por queda baseline e WoW, segmentado por UF
-
-#### 🔍 **Dicas para Análise**
-- **MM7 próxima de zero**: Valores percentuais podem parecer "inflados", mas são matematicamente corretos
-- **Compare tendências**: Olhe tanto quedas quanto altas para contexto completo
-- **Risco vs Performance**: Laboratório pode ter alto crescimento mas ainda estar em risco se abaixo dos benchmarks
-
-#### 💡 **Como Interpretar Valores Altos de Percentual**
-- **0-100%**: Crescimento normal/recuperação
-- **100-300%**: Crescimento expressivo
-- **300%+**: Laboratório voltou a operar após período de inatividade
-- **Sempre compare com o valor absoluto**: 600% com MM7=0.429 significa apenas ~3 coletas vs. média de ~0.429
-
-#### 📈 **Contexto Executivo**
-Para um laboratório que normalmente coleta 3 vezes por semana (MM7 ≈ 0.429 em dias úteis), registrar 3 coletas no último dia útil representa um crescimento de 600% vs. sua média histórica de dias úteis. Isso indica recuperação de operação, não necessariamente "superperformance".
-                """)
             
-            # ===== TAB: FECHAMENTO SEMANAL =====
-            with tab_semanal:
-                renderizar_aba_fechamento_semanal(df_filtrado, metrics, filtros)
-            
-            # ===== TAB: FECHAMENTO MENSAL =====
-            with tab_mensal:
-                renderizar_aba_fechamento_mensal(df_filtrado, metrics, filtros)
+            # --- PARTE B: ANÁLISE WOW (Renderiza a função existente) ---
+            # Chama a função que já constrói os gráficos de semanas fechadas/abertas
+            renderizar_aba_fechamento_semanal(df_filtrado, metrics, filtros)
+
+    elif st.session_state.page == "📊 Fechamento Mensal":
+        st.header("📊 Fechamento Mensal Consolidado")
+        st.markdown("""
+        Foco estratégico: Análise do mês corrente versus **Baseline Robusta** (Top 3 meses de 2024/25).
+        Identifica desvios estruturais de volume.
+        """)
+        
+        # Usa a função existente que já monta os KPIs mensais, a tabela de baseline detalhada, etc.
+        renderizar_aba_fechamento_mensal(df_filtrado, metrics, filtros)
     
     elif st.session_state.page == "🏢 Ranking Rede":
         st.header("🏢 Ranking por Rede")

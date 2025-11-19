@@ -24,10 +24,10 @@ PORTE_MEDIO_GRANDE_MAX = 150
 PORTE_MEDIO_MIN = PORTE_PEQUENO_MAX + 1
 PORTE_GRANDE_MIN = PORTE_MEDIO_GRANDE_MAX + 1
 RISCO_DIAS_SEM_COLETA_RULES: Dict[str, Dict[str, Union[int, bool]]] = {
-    'Pequeno': {'habilita': True, 'min_dias_uteis': 5},
-    'Médio': {'habilita': True, 'min_dias_uteis': 3, 'max_dias_corridos': 15},
-    'Médio/Grande': {'habilita': True, 'min_dias_uteis': 2, 'max_dias_corridos': 15},
-    'Grande': {'habilita': True, 'min_dias_uteis': 2, 'max_dias_uteis': 5},
+    'Pequeno': {'habilita': False},
+    'Médio': {'habilita': True, 'min_dias_uteis': 2, 'max_dias_corridos': 15},
+    'Médio/Grande': {'habilita': True, 'min_dias_uteis': 1, 'max_dias_corridos': 15},
+    'Grande': {'habilita': True, 'min_dias_uteis': 1, 'max_dias_uteis': 5},
 }
 PERDA_RECENTE_RULES: Dict[str, Dict[str, Union[int, bool]]] = {
     'Pequeno': {'min_dias_corridos': 30, 'max_dias_corridos': 180},

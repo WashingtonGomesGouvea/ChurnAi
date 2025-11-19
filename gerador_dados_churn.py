@@ -933,6 +933,7 @@ def integrar_dados_gralab(base_df: pd.DataFrame) -> pd.DataFrame:
 def classificar_risco_v2(row: pd.Series) -> Tuple[str, str]:
     """
     Classifica o status de risco conforme regras atualizadas (queda vs baseline/WoW e perda por dias).
+    Retorna (Status, Motivo).
     """
     total_coletas_2025 = row.get('Total_Coletas_2025', 0) or 0
     coletas_mes_atual = row.get('Coletas_Mes_Atual', 0) or 0
@@ -942,10 +943,14 @@ def classificar_risco_v2(row: pd.Series) -> Tuple[str, str]:
     if total_coletas_2025 == 0:
         return 'Normal', 'Sem coletas em 2025 - não considerado risco'
 
+    # 1. Verificar Perda (Recente ou Antiga)
+    # Se já está classificado como Perda, mantemos esse status específico
+    # mas NÃO marcamos como 'Perda (Risco Alto)' para não misturar nos alertas de risco ativo
     perda_tipo = row.get('Classificacao_Perda_V2')
     if perda_tipo and perda_tipo != 'Sem Perda':
         return perda_tipo, f"Sem coletas há {int(dias_corridos)} dias (porte {porte})"
 
+    # 2. Verificar Risco Ativo (Baseline, WoW, Dias Risco)
     motivos = []
 
     baseline = row.get('Baseline_Mensal', 0)

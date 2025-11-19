@@ -2154,6 +2154,11 @@ def renderizar_aba_fechamento_semanal(df: pd.DataFrame, metrics: KPIMetrics, fil
     if 'CNPJ_Normalizado' not in df.columns and 'CNPJ_PCL' in df.columns:
         df['CNPJ_Normalizado'] = df['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
 
+    # Reforçar filtro de porte (garantia mesmo se chamado sem df_view filtrado)
+    portes_sel = filtros.get('portes')
+    if portes_sel and 'Porte' in df.columns:
+        df = df[df['Porte'].isin(portes_sel)].copy()
+
     cols_num = ['WoW_Semana_Atual', 'WoW_Semana_Anterior', 'Media_Semanal_2025']
     for c in cols_num:
         if c in df.columns:
@@ -2394,6 +2399,10 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
 
     if 'CNPJ_Normalizado' not in df.columns and 'CNPJ_PCL' in df.columns:
         df['CNPJ_Normalizado'] = df['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
+
+    portes_sel = filtros.get('portes')
+    if portes_sel and 'Porte' in df.columns:
+        df = df[df['Porte'].isin(portes_sel)].copy()
 
     # 1. Cards de Resumo do Mês (Por Porte)
     st.markdown("### 📈 Resumo do Mês")
@@ -4624,6 +4633,8 @@ def main():
         df_view = df.copy()
         if filtros.get('uf_selecionada') and filtros['uf_selecionada'] != 'Todas':
              df_view = df_view[df_view['Estado'] == filtros['uf_selecionada']]
+        if filtros.get('portes') and 'Porte' in df_view.columns:
+             df_view = df_view[df_view['Porte'].isin(filtros['portes'])]
         
         renderizar_aba_fechamento_semanal(df_view, metrics, filtros)
 
@@ -4632,6 +4643,8 @@ def main():
         df_view = df.copy()
         if filtros.get('uf_selecionada') and filtros['uf_selecionada'] != 'Todas':
              df_view = df_view[df_view['Estado'] == filtros['uf_selecionada']]
+        if filtros.get('portes') and 'Porte' in df_view.columns:
+             df_view = df_view[df_view['Porte'].isin(filtros['portes'])]
              
         renderizar_aba_fechamento_mensal(df_view, metrics, filtros)
     

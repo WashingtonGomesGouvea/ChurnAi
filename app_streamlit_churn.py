@@ -1841,6 +1841,60 @@ def calcular_metricas_fechamento_semanal(df: pd.DataFrame) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Metadados de fechamento não disponíveis, usando cálculos básicos: {e}")
     
+    # FALLBACK: Se semanas_detalhes estiver vazio (comum em PROD/SharePoint), reconstruir a partir da coluna Semanas_Mes_Atual
+    if not metricas['semanas_detalhes'] and 'Semanas_Mes_Atual' in df.columns:
+        try:
+            # Dicionário para agregar: (iso_year, iso_week) -> {dados}
+            agg_weeks = {}
+            
+            for val in df['Semanas_Mes_Atual']:
+                if pd.isna(val): continue
+                try:
+                    # Parsear JSON (se for string) ou usar direto se já for lista
+                    dados_lab = json.loads(val) if isinstance(val, str) else val
+                    if not isinstance(dados_lab, list): continue
+                    
+                    for semana in dados_lab:
+                        iso_year = semana.get('iso_year')
+                        iso_week = semana.get('iso_week')
+                        
+                        if not iso_year or not iso_week:
+                            continue
+                            
+                        key = (iso_year, iso_week)
+                        if key not in agg_weeks:
+                            agg_weeks[key] = {
+                                'semana': semana.get('semana'),
+                                'iso_week': iso_week,
+                                'iso_year': iso_year,
+                                'volume_total': 0,
+                                'volume_semana_anterior': 0,
+                                'fechada': semana.get('fechada', False)
+                            }
+                        
+                        # Somar volumes
+                        vol_util = semana.get('volume_util')
+                        if vol_util:
+                            agg_weeks[key]['volume_total'] += int(vol_util)
+                            
+                        vol_ant = semana.get('volume_semana_anterior')
+                        if vol_ant:
+                            agg_weeks[key]['volume_semana_anterior'] += int(vol_ant)
+                        
+                except Exception:
+                    continue
+            
+            # Converter para lista ordenada e atualizar métricas
+            if agg_weeks:
+                weeks_list = sorted(agg_weeks.values(), key=lambda x: (x['iso_year'], x['iso_week']))
+                metricas['semanas_detalhes'] = weeks_list
+                metricas['total_semanas'] = len(weeks_list)
+                metricas['semanas_fechadas'] = sum(1 for w in weeks_list if w['fechada'])
+                logger.info(f"Semanas reconstruídas via fallback: {len(weeks_list)} semanas encontradas")
+                
+        except Exception as e:
+            logger.error(f"Erro ao reconstruir semanas_detalhes no fallback: {e}")
+
     # Calcular volume atual e anterior das semanas
     if metricas['semanas_detalhes']:
         # Última semana (atual ou mais recente)

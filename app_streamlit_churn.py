@@ -8,6 +8,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+import calendar
 import os
 import time
 import json
@@ -1967,8 +1968,15 @@ def calcular_metricas_fechamento_semanal(df: pd.DataFrame) -> Dict[str, Any]:
                         if vol_anterior_lab and vol_anterior_lab > 0:
                             wow_pct = ((vol_atual_lab - vol_anterior_lab) / vol_anterior_lab) * 100
                             if wow_pct < -50:  # Queda > 50%
+                                # Buscar CNPJ normalizado
+                                cnpj_norm = row.get('CNPJ_Normalizado', '')
+                                if not cnpj_norm and 'CNPJ_PCL' in row:
+                                    cnpj_norm = DataManager.normalizar_cnpj(row.get('CNPJ_PCL', ''))
+                                
                                 metricas['labs_com_queda_wow'].append({
                                     'nome': row.get('Nome_Fantasia_PCL', 'N/A'),
+                                    'cnpj': cnpj_norm,
+                                    'vip': row.get('VIP', ''),
                                     'uf': row.get('Estado', 'N/A'),
                                     'representante': row.get('Representante_Nome', 'N/A'),
                                     'wow_pct': wow_pct,
@@ -1984,7 +1992,8 @@ def calcular_metricas_fechamento_semanal(df: pd.DataFrame) -> Dict[str, Any]:
                                     'risco_dias': bool(row.get('Risco_Por_Dias_Sem_Coleta', False)),
                                     'status_risco': row.get('Status_Risco_V2', '—'),
                                     'motivo_risco': row.get('Motivo_Risco_V2', 'Queda WoW > 50%'),
-                                    'apareceu_gralab': bool(row.get('Apareceu_Gralab', False))
+                                    'apareceu_gralab': bool(row.get('Apareceu_Gralab', False)),
+                                    'data_ultima_coleta': row.get('Data_Ultima_Coleta', None)
                                 })
             except Exception as e:
                 continue
@@ -2075,8 +2084,15 @@ def calcular_metricas_fechamento_mensal(df: pd.DataFrame) -> Dict[str, Any]:
                 if isinstance(baseline_json, str) and baseline_json and baseline_json != '[]':
                     baseline_meses = json.loads(baseline_json)
                 
+                # Buscar CNPJ normalizado
+                cnpj_norm = row.get('CNPJ_Normalizado', '')
+                if not cnpj_norm and 'CNPJ_PCL' in row:
+                    cnpj_norm = DataManager.normalizar_cnpj(row.get('CNPJ_PCL', ''))
+                
                 lab_info = {
                     'nome': row.get('Nome_Fantasia_PCL', 'N/A'),
+                    'cnpj': cnpj_norm,
+                    'vip': row.get('VIP', ''),
                     'uf': row.get('Estado', 'N/A'),
                     'representante': row.get('Representante_Nome', 'N/A'),
                     'porte': row.get('Porte', 'N/A'),
@@ -2086,7 +2102,9 @@ def calcular_metricas_fechamento_mensal(df: pd.DataFrame) -> Dict[str, Any]:
                     'baseline_meses': baseline_meses,
                     'ranking': row.get('Ranking', ''),
                     'ranking_rede': row.get('Ranking Rede', ''),
-                    'rede': row.get('Rede', '')
+                    'rede': row.get('Rede', ''),
+                    'apareceu_gralab': bool(row.get('Apareceu_Gralab', False)),
+                    'data_ultima_coleta': row.get('Data_Ultima_Coleta', None)
                 }
                 
                 metricas['labs_detalhados'].append(lab_info)
@@ -2205,24 +2223,203 @@ def renderizar_aba_fechamento_semanal(df: pd.DataFrame, metrics: KPIMetrics, fil
         "Pct_Dif_Media_Historica": st.column_config.NumberColumn("% vs Média", format="%.1f%%", help="Variação percentual do volume atual versus a média histórica semanal"),
         "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias Off", format="%d ⚠️", help="Dias úteis consecutivos sem coleta registrados"),
         "Controle_Semanal_Estado_Atual": st.column_config.NumberColumn("Média UF (Atual)", format="%.1f", help="Média semanal dos laboratórios do mesmo estado nesta semana"),
-        "Controle_Semanal_Estado_Anterior": st.column_config.NumberColumn("Média UF (Ant)", format="%.1f", help="Média semanal dos laboratórios do mesmo estado na semana anterior")
+        "Controle_Semanal_Estado_Anterior": st.column_config.NumberColumn("Média UF (Ant)", format="%.1f", help="Média semanal dos laboratórios do mesmo estado na semana anterior"),
+        "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Última coleta registrada (qualquer ano)")
     }
     
     cols_view = ['Nome_Fantasia_PCL', 'CNPJ_Normalizado', 'VIP', 'Rede', 'Estado', 'Porte', 
                  'Media_Semanal_2025', 'WoW_Semana_Anterior', 'WoW_Semana_Atual', 
                  'Queda_Semanal_Abs', 'Pct_Dif_Media_Historica', 'Dias_Sem_Coleta', 
-                 'Controle_Semanal_Estado_Anterior', 'Controle_Semanal_Estado_Atual']
+                 'Controle_Semanal_Estado_Anterior', 'Controle_Semanal_Estado_Atual',
+                 'Data_Ultima_Coleta']
 
-    # KPI de Topo
+    # ============================================================
+    # KPI BOX EXECUTIVO - TOPO DA ABA SEMANAL
+    # ============================================================
     st.markdown("### 📊 Resumo Semanal")
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Total de Laboratórios", len(df))
-    vol_atual_total = df['WoW_Semana_Atual'].sum()
-    vol_ant_total = df['WoW_Semana_Anterior'].sum()
-    delta_total = vol_atual_total - vol_ant_total
-    k2.metric("Volume Total Atual", f"{vol_atual_total:,.0f}")
-    k3.metric("Variação Total (Vol)", f"{delta_total:+,.0f}", delta_color="normal")
+    
+    # Calcular métricas executivas
+    metricas_sem = calcular_metricas_fechamento_semanal(df)
+    met = metricas_sem
+    
+    # KPIs Executivos em 6 colunas grandes
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    
+    # Volume Semana Atual
+    delta_vol = met['volume_atual'] - met['volume_anterior']
+    col1.metric(
+        "Volume Semana Atual",
+        f"{met['volume_atual']:,.0f}",
+        f"{delta_vol:+,.0f}",
+        delta_color="inverse" if delta_vol < 0 else "normal"
+    )
+    
+    # WoW País
+    wow_medio = met.get('wow_medio', 0.0)
+    col2.metric(
+        "WoW País",
+        f"{wow_medio:.1f}%",
+        delta=f"{wow_medio:.1f}%" if wow_medio < 0 else None,
+        delta_color="inverse"
+    )
+    
+    # Vs Média Semanal 2025
+    media_sem_2025 = met.get('media_semanal_2025', 0)
+    if media_sem_2025 > 0:
+        pct_vs_media = ((met['volume_atual'] / media_sem_2025) - 1) * 100
+        col3.metric(
+            "Vs Média Semanal 2025",
+            f"{pct_vs_media:.1f}%",
+            delta=f"{pct_vs_media:.1f}%" if pct_vs_media < 0 else None,
+            delta_color="inverse"
+        )
+    else:
+        col3.metric("Vs Média Semanal 2025", "—")
+    
+    # Labs com Queda >50% WoW
+    labs_queda = len(met.get('labs_com_queda_wow', []))
+    col4.metric(
+        "Labs com Queda >50% WoW",
+        labs_queda,
+        delta=None if labs_queda <= 8 else f"{labs_queda-8:+} vs média",
+        delta_color="inverse"
+    )
+    
+    # Projeção Fim do Mês (base última semana)
+    projecao_semanal = int(met['volume_atual'] * met['total_semanas'])
+    media_sem_2025_total = met.get('media_semanal_2025', 0) * met['total_semanas']
+    if media_sem_2025_total > 0:
+        gap_projecao = int(projecao_semanal - media_sem_2025_total)
+        col5.metric(
+            "Projeção Fim do Mês",
+            f"{projecao_semanal:,.0f}",
+            f"{gap_projecao:+,.0f}",
+            delta_color="inverse" if gap_projecao < 0 else "normal"
+        )
+    else:
+        col5.metric("Projeção Fim do Mês", f"{projecao_semanal:,.0f}")
+    
+    # Semanas Fechadas
+    col6.metric(
+        "Semanas Fechadas",
+        f"{met['semanas_fechadas']}/{met['total_semanas']}",
+        delta=None
+    )
+    
     st.markdown("---")
+    
+    # ============================================================
+    # LISTA DE LABS EM HEMORRAGIA (Queda >50% WoW)
+    # ============================================================
+    st.subheader("🚨 Labs em Hemorragia (Queda >50% WoW)")
+    with st.expander("ℹ️ O que significa?"):
+        st.info(HELPERS_V2.get('fechamento_semanal', 
+            "Laboratórios com queda superior a 50% na comparação Week over Week (semana atual vs semana anterior). "
+            "Indica perda crítica de volume que requer ação imediata do time comercial."))
+    
+    if met.get('labs_com_queda_wow'):
+        st.error(f"🚨 **{len(met['labs_com_queda_wow'])} laboratórios com queda >50% WoW – ação imediata necessária**")
+        
+        df_hemorragia = pd.DataFrame(met['labs_com_queda_wow'])
+        
+        # Garantir que temos CNPJ, VIP, Apareceu_Gralab e Data_Ultima_Coleta - fazer merge com DataFrame original se necessário
+        cols_necessarias = ['cnpj', 'vip', 'apareceu_gralab', 'data_ultima_coleta']
+        cols_faltando = [col for col in cols_necessarias if col not in df_hemorragia.columns or df_hemorragia[col].isna().all()]
+        
+        if cols_faltando and 'Nome_Fantasia_PCL' in df.columns:
+            # Buscar dados do DataFrame original pelo nome
+            cols_merge = ['Nome_Fantasia_PCL']
+            if 'CNPJ_Normalizado' in df.columns:
+                cols_merge.append('CNPJ_Normalizado')
+            if 'VIP' in df.columns:
+                cols_merge.append('VIP')
+            if 'Apareceu_Gralab' in df.columns:
+                cols_merge.append('Apareceu_Gralab')
+            if 'Data_Ultima_Coleta' in df.columns:
+                cols_merge.append('Data_Ultima_Coleta')
+            
+            df_map = df[cols_merge].drop_duplicates()
+            df_hemorragia = df_hemorragia.merge(
+                df_map, 
+                left_on='nome', 
+                right_on='Nome_Fantasia_PCL', 
+                how='left'
+            )
+            
+            # Preencher colunas faltando
+            if 'cnpj' in cols_faltando and 'CNPJ_Normalizado' in df_hemorragia.columns:
+                df_hemorragia['cnpj'] = df_hemorragia.get('CNPJ_Normalizado', df_hemorragia.get('cnpj', ''))
+            if 'vip' in cols_faltando and 'VIP' in df_hemorragia.columns:
+                df_hemorragia['vip'] = df_hemorragia.get('VIP', df_hemorragia.get('vip', ''))
+            if 'apareceu_gralab' in cols_faltando and 'Apareceu_Gralab' in df_hemorragia.columns:
+                df_hemorragia['apareceu_gralab'] = df_hemorragia.get('Apareceu_Gralab', df_hemorragia.get('apareceu_gralab', False))
+            if 'data_ultima_coleta' in cols_faltando and 'Data_Ultima_Coleta' in df_hemorragia.columns:
+                df_hemorragia['data_ultima_coleta'] = df_hemorragia.get('Data_Ultima_Coleta', df_hemorragia.get('data_ultima_coleta', None))
+            
+            df_hemorragia = df_hemorragia.drop(columns=['Nome_Fantasia_PCL', 'CNPJ_Normalizado', 'VIP', 'Apareceu_Gralab', 'Data_Ultima_Coleta'], errors='ignore')
+        
+        # Garantir que todas as colunas existem
+        if 'cnpj' not in df_hemorragia.columns:
+            df_hemorragia['cnpj'] = ''
+        if 'vip' not in df_hemorragia.columns:
+            df_hemorragia['vip'] = ''
+        if 'apareceu_gralab' not in df_hemorragia.columns:
+            df_hemorragia['apareceu_gralab'] = False
+        if 'data_ultima_coleta' not in df_hemorragia.columns:
+            df_hemorragia['data_ultima_coleta'] = None
+        
+        # Converter apareceu_gralab para texto
+        df_hemorragia['concorrente'] = df_hemorragia['apareceu_gralab'].apply(lambda x: '⚠️ Sim' if x else '—')
+        
+        df_hemorragia = df_hemorragia[['nome', 'cnpj', 'vip', 'concorrente', 'uf', 'representante', 'wow_pct', 'vol_atual', 'vol_anterior', 'porte', 'dias_sem_coleta', 'status_risco', 'data_ultima_coleta']]
+        df_hemorragia['wow_pct'] = (df_hemorragia['wow_pct'].round(1).astype(str) + "%")
+        df_hemorragia = df_hemorragia.rename(columns={
+            "nome": "Laboratório",
+            "cnpj": "CNPJ_Normalizado",
+            "vip": "VIP",
+            "concorrente": "Concorrente",
+            "uf": "UF", 
+            "representante": "Rep", 
+            "wow_pct": "WoW", 
+            "vol_atual": "Atual", 
+            "vol_anterior": "Anterior", 
+            "porte": "Porte",
+            "dias_sem_coleta": "Dias Off",
+            "status_risco": "Status",
+            "data_ultima_coleta": "Data_Ultima_Coleta"
+        })
+        
+        df_hemorragia_display = df_hemorragia.head(15).reset_index(drop=True)
+        
+        evento_hemorragia = st.dataframe(
+            df_hemorragia_display,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Laboratório": st.column_config.TextColumn("Laboratório", width="medium", help="Nome fantasia do laboratório"),
+                "CNPJ_Normalizado": st.column_config.TextColumn("CNPJ", width="medium", help="CNPJ normalizado (apenas números)"),
+                "VIP": st.column_config.TextColumn("VIP", width="small", help="Indica se o laboratório faz parte da lista VIP"),
+                "Concorrente": st.column_config.TextColumn("Concorrente", width="small", help="⚠️ Indica se o laboratório apareceu no sistema Gralab (concorrente)"),
+                "UF": st.column_config.TextColumn("UF", width="small", help="Estado do laboratório"),
+                "Rep": st.column_config.TextColumn("Rep", width="medium", help="Representante responsável"),
+                "WoW": st.column_config.TextColumn("WoW", width="small", help="Variação percentual Week over Week"),
+                "Atual": st.column_config.NumberColumn("Vol. Atual", format="%d", help="Volume da semana atual"),
+                "Anterior": st.column_config.NumberColumn("Vol. Anterior", format="%d", help="Volume da semana anterior"),
+                "Porte": st.column_config.TextColumn("Porte", width="small", help="Segmentação por volume"),
+                "Dias Off": st.column_config.NumberColumn("Dias Off", format="%d ⚠️", help="Dias úteis sem coleta"),
+                "Status": st.column_config.TextColumn("Status", width="small", help="Status de risco do laboratório"),
+                "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Última coleta registrada (qualquer ano)")
+            },
+            selection_mode="single-row",
+            on_select="rerun",
+            key="tbl_hemorragia"
+        )
+        _processar_evento_selecao(evento_hemorragia, df_hemorragia_display)
+        st.caption("Clique em qualquer linha para abrir automaticamente a Análise Detalhada do laboratório.")
+        st.markdown("---")
+    else:
+        st.success("✅ Nenhum lab com queda >50% WoW essa semana")
+        st.markdown("---")
 
     # --- TABELA 1: RISCO (Ordenado por Queda) ---
     st.subheader("🚨 Risco (Ação Imediata)")
@@ -2309,12 +2506,12 @@ def renderizar_aba_fechamento_semanal(df: pd.DataFrame, metrics: KPIMetrics, fil
     # ============================================================
     st.subheader("📆 Evolução do Mês (Semana a Semana)")
     
-    metricas_sem = calcular_metricas_fechamento_semanal(df)
+    # met já foi calculado acima nos KPIs executivos
 
-    if metricas_sem.get('semanas_detalhes'):
+    if met.get('semanas_detalhes'):
         # Preparar dados para a tabela de resumo
         dados_semanas = []
-        for s in metricas_sem['semanas_detalhes']:
+        for s in met['semanas_detalhes']:
             vol_atual = s.get('volume_total', 0)
             vol_ant = s.get('volume_semana_anterior', 0)
             wow = ((vol_atual - vol_ant) / vol_ant * 100) if vol_ant and vol_ant > 0 else 0.0
@@ -2400,7 +2597,7 @@ def renderizar_aba_fechamento_semanal(df: pd.DataFrame, metrics: KPIMetrics, fil
 
 def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filtros: Dict[str, Any]):
     st.markdown("## 📊 Fechamento Mensal (Estratégico)")
-    st.caption("Comparativo: Realizado Mês Atual vs Potencial (Média dos Top 3 Melhores Meses Históricos).")
+    st.caption("Comparativo: Realizado Mês Atual vs Baseline Mensal (Média dos Melhores Meses Históricos).")
 
     if 'CNPJ_Normalizado' not in df.columns and 'CNPJ_PCL' in df.columns:
         df['CNPJ_Normalizado'] = df['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
@@ -2409,101 +2606,179 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
     if portes_sel and 'Porte' in df.columns:
         df = df[df['Porte'].isin(portes_sel)].copy()
 
-    # 1. Cards de Resumo do Mês (Por Porte)
-    st.markdown("### 📈 Resumo do Mês")
-    c1, c2, c3, c4, c5 = st.columns(5)
+    # ============================================================
+    # KPI BOX EXECUTIVO - TOPO DA ABA MENSAL
+    # ============================================================
+    metricas_mensal = calcular_metricas_fechamento_mensal(df)
+    met_mensal = metricas_mensal
     
-    vol_mes = int(df['Coletas_Mes_Atual'].sum()) if 'Coletas_Mes_Atual' in df.columns else 0
-    c1.metric("Volume Total", f"{vol_mes:,.0f}")
+    # Calcular projeção de fim de mês
+    dias_mes = datetime.now().day
+    total_dias = calendar.monthrange(datetime.now().year, datetime.now().month)[1]
+    projecao = int(met_mensal['volume_mes_atual'] / dias_mes * total_dias) if dias_mes > 0 else met_mensal['volume_mes_atual']
     
-    # Médias por porte
-    if 'Porte' in df.columns and 'Coletas_Mes_Atual' in df.columns:
-        media_grande = df[df['Porte']=='Grande']['Coletas_Mes_Atual'].mean()
-        media_medio_grande = df[df['Porte']=='Médio/Grande']['Coletas_Mes_Atual'].mean()
-        media_medio = df[df['Porte']=='Médio']['Coletas_Mes_Atual'].mean()
-        media_pequeno = df[df['Porte']=='Pequeno']['Coletas_Mes_Atual'].mean()
-        
-        c2.metric("Média Grande", f"{media_grande:,.0f}")
-        c3.metric("Média Méd/Gde", f"{media_medio_grande:,.0f}")
-        c4.metric("Média Médio", f"{media_medio:,.0f}")
-        c5.metric("Média Pequeno", f"{media_pequeno:,.0f}")
+    # Baseline média total (soma de todos os labs)
+    baseline_total = df['Baseline_Mensal'].sum() if 'Baseline_Mensal' in df.columns else 0
+    
+    st.markdown("### 📈 KPIs Executivos")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    # Volume Realizado
+    col1.metric(
+        "Volume Realizado",
+        f"{met_mensal['volume_mes_atual']:,.0f}"
+    )
+    
+    # Projeção Fim do Mês
+    delta_projecao = projecao - met_mensal['volume_mes_atual']
+    col2.metric(
+        "Projeção Fim do Mês",
+        f"{projecao:,.0f}",
+        f"{delta_projecao:+,.0f}",
+        delta_color="normal"
+    )
+    
+    # % vs Baseline Média
+    delta_pct = met_mensal.get('delta_pct', 0.0)
+    col3.metric(
+        "% vs Baseline Média",
+        f"{delta_pct:.1f}%",
+        delta=f"{delta_pct:.1f}%",
+        delta_color="inverse"
+    )
+    
+    # % Projeção vs Baseline
+    if baseline_total > 0:
+        pct_proj_vs_baseline = ((projecao / baseline_total) - 1) * 100
+        col4.metric(
+            "% Projeção vs Baseline",
+            f"{pct_proj_vs_baseline:.1f}%",
+            delta=f"{pct_proj_vs_baseline:.1f}%",
+            delta_color="inverse"
+        )
     else:
-        c2.metric("Média Grande", "-")
-        c3.metric("Média Méd/Gde", "-")
-        c4.metric("Média Médio", "-")
-        c5.metric("Média Pequeno", "-")
-
-    st.markdown("---")
-
-    # 2. Preparação de Dados (Top 3 Histórico)
-    # Identificar colunas de histórico (2024 e 2025)
-    cols_meses = [c for c in df.columns if 'N_Coletas_' in c and ('_24' in c or '_25' in c)]
+        col4.metric("% Projeção vs Baseline", "—")
     
-    def get_top3_data(row):
-        data = []
-        for c in cols_meses:
-            val = row[c]
-            if pd.notna(val) and val > 0:
-                # Extract Month/Year from column name 'N_Coletas_Jan_24' -> 'Jan/24'
-                parts = c.split('_')
-                if len(parts) >= 4:
-                    mes = parts[2]
-                    ano = parts[3]
-                    label = f"{mes}/{ano}"
-                    data.append({'label': label, 'val': val})
+    # Gap Projetado
+    if met_mensal.get('media_mensal_2025', 0) > 0:
+        gap_projetado = int(projecao - met_mensal['media_mensal_2025'])
+        col5.metric(
+            "Gap Projetado",
+            f"{gap_projetado:+,.0f}",
+            delta=f"{gap_projetado:+,.0f}",
+            delta_color="inverse"
+        )
+    else:
+        col5.metric("Gap Projetado", "—")
+    
+    st.markdown("---")
+    
+    # ============================================================
+    # GRÁFICO: VOLUME MENSAL EVOLUTIVO 2024-2025
+    # ============================================================
+    st.subheader("📊 Volume Mensal Evolutivo 2024-2025")
+    
+    # Coletar volume mensal histórico do país
+    meses = []
+    volumes = []
+    
+    # Buscar todas as colunas de coletas mensais
+    cols_meses_hist = [c for c in df.columns if c.startswith('N_Coletas_') and ('_24' in c or '_25' in c)]
+    
+    for c in cols_meses_hist:
+        vol_total = df[c].sum()
+        if vol_total > 0:
+            # Extrair mês e ano do nome da coluna (ex: 'N_Coletas_Jan_24' -> 'Jan/24')
+            partes = c.split('_')
+            if len(partes) >= 4:
+                mes = partes[2]
+                ano = partes[3]
+                label = f"{mes}/{ano[-2:]}"
+                meses.append(label)
+                volumes.append(vol_total)
+    
+    if meses and volumes:
+        df_hist = pd.DataFrame({"Mês": meses, "Volume": volumes})
         
-        # Sort by value desc
-        top3 = sorted(data, key=lambda x: x['val'], reverse=True)[:3]
+        # Ordenar por mês/ano (criar chave de ordenação)
+        def criar_chave_ordenacao(mes_str):
+            meses_map = {
+                'Jan': 1, 'Fev': 2, 'Mar': 3, 'Abr': 4, 'Mai': 5, 'Jun': 6,
+                'Jul': 7, 'Ago': 8, 'Set': 9, 'Out': 10, 'Nov': 11, 'Dez': 12
+            }
+            try:
+                mes, ano = mes_str.split('/')
+                return (int(ano), meses_map.get(mes, 0))
+            except:
+                return (0, 0)
         
-        # Return tuple (media, m1_str, m2_str, m3_str)
-        if not top3:
-            return 0, "-", "-", "-"
-            
-        media = sum(x['val'] for x in top3) / len(top3)
+        df_hist['_ordem'] = df_hist['Mês'].apply(criar_chave_ordenacao)
+        df_hist = df_hist.sort_values('_ordem').drop('_ordem', axis=1)
         
-        m1 = f"{top3[0]['label']}: {int(top3[0]['val'])}"
-        m2 = f"{top3[1]['label']}: {int(top3[1]['val'])}" if len(top3) > 1 else "-"
-        m3 = f"{top3[2]['label']}: {int(top3[2]['val'])}" if len(top3) > 2 else "-"
+        fig = px.bar(
+            df_hist, 
+            x="Mês", 
+            y="Volume", 
+            text="Volume",
+            title="<b>Volume Mensal 2024-2025</b>",
+            labels={"Volume": "Volume de Coletas", "Mês": "Mês/Ano"}
+        )
+        fig.update_traces(
+            texttemplate='%{text:,.0f}', 
+            textposition='outside',
+            marker_color='#6BBF47'
+        )
         
-        return media, m1, m2, m3
-
-    # Aplicar cálculo se colunas não existirem
-    if 'Potencial_Media_Top3' not in df.columns or 'Top3_Mes1' not in df.columns:
-        # Usar result_type='expand' para retornar múltiplas colunas
-        res = df.apply(get_top3_data, axis=1, result_type='expand')
-        if not res.empty:
-            df[['Potencial_Media_Top3', 'Top3_Mes1', 'Top3_Mes2', 'Top3_Mes3']] = res
-        else:
-             df['Potencial_Media_Top3'] = 0
-             df['Top3_Mes1'] = "-"
-             df['Top3_Mes2'] = "-"
-             df['Top3_Mes3'] = "-"
-
+        # Adicionar marcador de projeção
+        if len(df_hist) > 0:
+            ultimo_mes = df_hist['Mês'].iloc[-1]
+            fig.add_scatter(
+                x=[ultimo_mes], 
+                y=[projecao], 
+                mode='markers+text', 
+                name='Projeção', 
+                text=[f'Projeção: {projecao:,.0f}'], 
+                textposition="top center", 
+                marker=dict(color='red', size=15, symbol='diamond'),
+                showlegend=True
+            )
+        
+        fig.update_layout(
+            height=400,
+            xaxis_tickangle=-45,
+            showlegend=True
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Dados históricos mensais não disponíveis para visualização.")
+    
     # Variável Controle Mensal (Média Estado)
     if 'Controle_Mensal_Estado' not in df.columns:
         media_estado = df.groupby('Estado')['Coletas_Mes_Atual'].transform('mean')
         df['Controle_Mensal_Estado'] = media_estado
 
-    # Métricas de Gap
-    df['Gap_Potencial'] = df['Coletas_Mes_Atual'] - df['Potencial_Media_Top3']
+    # Métricas de Gap (usando Baseline_Mensal ao invés de Potencial_Media_Top3)
+    if 'Baseline_Mensal' not in df.columns:
+        df['Baseline_Mensal'] = 0
+    
+    df['Gap_Baseline'] = df['Coletas_Mes_Atual'] - df['Baseline_Mensal']
     df['Pct_Atingimento'] = np.where(
-        df['Potencial_Media_Top3'] > 0,
-        df['Coletas_Mes_Atual'] / df['Potencial_Media_Top3'],
+        df['Baseline_Mensal'] > 0,
+        df['Coletas_Mes_Atual'] / df['Baseline_Mensal'],
         0
     )
     
     # Tabela Principal
-    st.subheader("📋 Performance vs Potencial")
+    st.subheader("📋 Performance vs Baseline")
     
-    # Ordenação: Quem está mais longe do potencial (Gap negativo maior)
-    df_sorted = df.sort_values('Gap_Potencial', ascending=True)
+    # Ordenação: Quem está mais longe do baseline (Gap negativo maior)
+    df_sorted = df.sort_values('Gap_Baseline', ascending=True)
 
     cols_mensal = [
         'Nome_Fantasia_PCL', 'CNPJ_Normalizado', 'VIP', 'Rede', 'Estado', 'Porte',
-        'Potencial_Media_Top3', 'Coletas_Mes_Atual',
-        'Pct_Atingimento', 'Gap_Potencial', 
-        'Controle_Mensal_Estado', 
-        'Top3_Mes1', 'Top3_Mes2', 'Top3_Mes3', # Colunas separadas
+        'Baseline_Mensal', 'Coletas_Mes_Atual',
+        'Pct_Atingimento', 'Gap_Baseline', 
+        'Controle_Mensal_Estado',
         'Mes_Maior_Coleta_2025', 'Maior_N_Coletas_Mes_2025',
         'Data_Ultima_Coleta'
     ]
@@ -2523,17 +2798,14 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
             "Rede": st.column_config.TextColumn("Rede", width="medium", help="Rede ou grupo ao qual o laboratório pertence"),
             "Estado": st.column_config.TextColumn("UF", width="small", help="Estado do laboratório"),
             "Porte": st.column_config.TextColumn("Porte", width="small", help="Segmentação de porte"),
-            "Potencial_Media_Top3": st.column_config.NumberColumn("🎯 Potencial (Média)", format="%d", help="Média dos três melhores meses históricos"),
+            "Baseline_Mensal": st.column_config.NumberColumn("🎯 Baseline Mensal", format="%d", help="Baseline mensal (média dos melhores meses históricos)"),
             "Coletas_Mes_Atual": st.column_config.NumberColumn("📊 Realizado", format="%d", help="Volume realizado no mês corrente"),
             "Pct_Atingimento": st.column_config.ProgressColumn(
                 "% Atingimento", format="%.1f%%", min_value=0, max_value=1.5,
-                help="Percentual do potencial atingido (Realizado / Potencial)"
+                help="Percentual do baseline atingido (Realizado / Baseline)"
             ),
-            "Gap_Potencial": st.column_config.NumberColumn("Gap (Vol)", format="%d", help="Diferença entre o realizado e o potencial"),
+            "Gap_Baseline": st.column_config.NumberColumn("Gap (Vol)", format="%d", help="Diferença entre o realizado e o baseline"),
             "Controle_Mensal_Estado": st.column_config.NumberColumn("Média Estado", format="%.1f", help="Média mensal dos laboratórios do mesmo estado"),
-            "Top3_Mes1": st.column_config.TextColumn("Melhor Mês 1", width="small", help="Mês e volume do melhor desempenho histórico"),
-            "Top3_Mes2": st.column_config.TextColumn("Melhor Mês 2", width="small", help="Segundo melhor mês histórico"),
-            "Top3_Mes3": st.column_config.TextColumn("Melhor Mês 3", width="small", help="Terceiro melhor mês histórico"),
             "Mes_Maior_Coleta_2025": st.column_config.TextColumn("Maior Mês 2025", width="small", help="Mês com maior volume registrado em 2025"),
             "Maior_N_Coletas_Mes_2025": st.column_config.NumberColumn("Pico 2025 (Vol)", format="%d", help="Maior número de coletas em um mês de 2025"),
             "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Última coleta registrada (qualquer ano)")
@@ -2554,6 +2826,121 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
         mime="text/csv",
         help="Baixar tabela completa com todas as colunas"
     )
+    
+    st.markdown("---")
+    
+    # ============================================================
+    # TOP 15 LABS COM MAIOR PERDA VS BASELINE
+    # ============================================================
+    st.subheader("🔥 Top 15 Labs com Maior Perda vs Baseline")
+    with st.expander("ℹ️ O que significa?"):
+        st.info(HELPERS_V2.get('fechamento_mensal', 
+            "Lista dos 15 laboratórios com maior perda absoluta de volume comparado ao baseline mensal. "
+            "O baseline representa a média dos melhores meses históricos do laboratório, indicando seu potencial. "
+            "A perda mostra quanto volume está sendo deixado de realizar em relação ao histórico de desempenho."))
+    st.caption("Laboratórios com maior diferença entre baseline mensal e volume realizado. Clique em qualquer linha para análise detalhada.")
+    
+    df_perda = pd.DataFrame(met_mensal.get('labs_detalhados', []))
+    if not df_perda.empty:
+        df_perda['perda_abs'] = (df_perda['baseline_mensal'] - df_perda['coletas_mes_atual']).round(0)
+        
+        # Garantir que temos CNPJ, VIP, Apareceu_Gralab e Data_Ultima_Coleta - fazer merge com DataFrame original se necessário
+        cols_necessarias = ['cnpj', 'vip', 'apareceu_gralab', 'data_ultima_coleta']
+        cols_faltando = [col for col in cols_necessarias if col not in df_perda.columns or df_perda[col].isna().all()]
+        
+        if cols_faltando and 'Nome_Fantasia_PCL' in df.columns:
+            # Buscar dados do DataFrame original pelo nome
+            cols_merge = ['Nome_Fantasia_PCL']
+            if 'CNPJ_Normalizado' in df.columns:
+                cols_merge.append('CNPJ_Normalizado')
+            if 'VIP' in df.columns:
+                cols_merge.append('VIP')
+            if 'Apareceu_Gralab' in df.columns:
+                cols_merge.append('Apareceu_Gralab')
+            if 'Data_Ultima_Coleta' in df.columns:
+                cols_merge.append('Data_Ultima_Coleta')
+            
+            df_map = df[cols_merge].drop_duplicates()
+            df_perda = df_perda.merge(
+                df_map, 
+                left_on='nome', 
+                right_on='Nome_Fantasia_PCL', 
+                how='left'
+            )
+            
+            # Preencher colunas faltando
+            if 'cnpj' in cols_faltando and 'CNPJ_Normalizado' in df_perda.columns:
+                df_perda['cnpj'] = df_perda.get('CNPJ_Normalizado', df_perda.get('cnpj', ''))
+            if 'vip' in cols_faltando and 'VIP' in df_perda.columns:
+                df_perda['vip'] = df_perda.get('VIP', df_perda.get('vip', ''))
+            if 'apareceu_gralab' in cols_faltando and 'Apareceu_Gralab' in df_perda.columns:
+                df_perda['apareceu_gralab'] = df_perda.get('Apareceu_Gralab', df_perda.get('apareceu_gralab', False))
+            if 'data_ultima_coleta' in cols_faltando and 'Data_Ultima_Coleta' in df_perda.columns:
+                df_perda['data_ultima_coleta'] = df_perda.get('Data_Ultima_Coleta', df_perda.get('data_ultima_coleta', None))
+            
+            df_perda = df_perda.drop(columns=['Nome_Fantasia_PCL', 'CNPJ_Normalizado', 'VIP', 'Apareceu_Gralab', 'Data_Ultima_Coleta'], errors='ignore')
+        
+        # Garantir que todas as colunas existem
+        if 'cnpj' not in df_perda.columns:
+            df_perda['cnpj'] = ''
+        if 'vip' not in df_perda.columns:
+            df_perda['vip'] = ''
+        if 'apareceu_gralab' not in df_perda.columns:
+            df_perda['apareceu_gralab'] = False
+        if 'data_ultima_coleta' not in df_perda.columns:
+            df_perda['data_ultima_coleta'] = None
+        
+        # Converter apareceu_gralab para texto
+        df_perda['concorrente'] = df_perda['apareceu_gralab'].apply(lambda x: '⚠️ Sim' if x else '—')
+        
+        df_top_perda = df_perda.nlargest(15, 'perda_abs')[[
+            'nome', 'cnpj', 'vip', 'concorrente', 'uf', 'representante', 'baseline_mensal', 
+            'coletas_mes_atual', 'perda_abs', 'queda_baseline_pct', 'porte', 'data_ultima_coleta'
+        ]]
+        df_top_perda['queda_baseline_pct'] = df_top_perda['queda_baseline_pct'].round(1).astype(str) + "%"
+        df_top_perda = df_top_perda.rename(columns={
+            "nome": "Lab",
+            "cnpj": "CNPJ_Normalizado",
+            "vip": "VIP",
+            "concorrente": "Concorrente",
+            "uf": "UF", 
+            "representante": "Rep", 
+            "baseline_mensal": "Baseline", 
+            "coletas_mes_atual": "Realizado", 
+            "perda_abs": "Perda (Vol)",
+            "queda_baseline_pct": "Queda %",
+            "porte": "Porte",
+            "data_ultima_coleta": "Data_Ultima_Coleta"
+        })
+        
+        df_top_perda_display = df_top_perda.reset_index(drop=True)
+        
+        evento_top_perda = st.dataframe(
+            df_top_perda_display,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Lab": st.column_config.TextColumn("Laboratório", width="medium", help="Nome fantasia do laboratório"),
+                "CNPJ_Normalizado": st.column_config.TextColumn("CNPJ", width="medium", help="CNPJ normalizado (apenas números)"),
+                "VIP": st.column_config.TextColumn("VIP", width="small", help="Indica se o laboratório faz parte da lista VIP"),
+                "Concorrente": st.column_config.TextColumn("Concorrente", width="small", help="⚠️ Indica se o laboratório apareceu no sistema Gralab (concorrente)"),
+                "UF": st.column_config.TextColumn("UF", width="small", help="Estado do laboratório"),
+                "Rep": st.column_config.TextColumn("Rep", width="medium", help="Representante responsável"),
+                "Baseline": st.column_config.NumberColumn("Baseline", format="%d", help="Baseline mensal (média dos melhores meses históricos)"),
+                "Realizado": st.column_config.NumberColumn("Realizado", format="%d", help="Volume realizado no mês atual"),
+                "Perda (Vol)": st.column_config.NumberColumn("Perda (Vol)", format="%d", help="Diferença absoluta entre baseline e realizado"),
+                "Queda %": st.column_config.TextColumn("Queda %", width="small", help="Percentual de queda vs baseline"),
+                "Porte": st.column_config.TextColumn("Porte", width="small", help="Segmentação por volume"),
+                "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Última coleta registrada (qualquer ano)")
+            },
+            selection_mode="single-row",
+            on_select="rerun",
+            key="tbl_top_perda"
+        )
+        _processar_evento_selecao(evento_top_perda, df_top_perda_display)
+        st.caption("Clique em qualquer linha para abrir automaticamente a Análise Detalhada do laboratório.")
+    else:
+        st.info("Nenhum laboratório com perda vs baseline identificado.")
 
 
 # ============================================

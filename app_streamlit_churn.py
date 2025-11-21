@@ -1803,10 +1803,10 @@ def _formatar_df_exibicao(df: pd.DataFrame) -> pd.DataFrame:
 
 
 DETALHE_QUERY_PARAM = "detalhe_lab"
-DETALHES_COLUMN_CONFIG = st.column_config.LinkColumn(
-    "Detalhes",
-    display_text="🔍",
-    help="Abrir análise detalhada do laboratório"
+DETALHES_COLUMN_CONFIG = st.column_config.TextColumn(
+    "🔍",
+    width="small",
+    help="Clique na linha para abrir análise detalhada do laboratório"
 )
 VARIACAO_QUEDA_FAIXAS = {
     "Acima de 50%": (50, None),
@@ -1851,10 +1851,12 @@ def _build_detalhe_url(cnpj: Optional[str]) -> str:
 
 
 def adicionar_coluna_detalhes(df: pd.DataFrame, cnpj_col: str = 'CNPJ_Normalizado') -> pd.DataFrame:
+    """Adiciona coluna 'Detalhes' com ícone de lupa para navegação."""
     if df is None or df.empty or cnpj_col not in df.columns:
         return df
     df_out = df.copy()
-    df_out['Detalhes'] = df_out[cnpj_col].apply(_build_detalhe_url)
+    # Criar coluna com ícone de lupa - será usada para navegação via seleção
+    df_out['Detalhes'] = '🔍'
     return df_out
 
 
@@ -2339,6 +2341,24 @@ def _processar_query_param_detalhes():
     if cnpj_val:
         _navegar_para_analise_detalhada(cnpj_val)
 
+
+def _processar_evento_selecao(evento, df_display: pd.DataFrame):
+    """Processa seleção de linha nas tabelas interativas - funciona ao clicar na linha ou na lupa."""
+    try:
+        rows = evento.selection.get("rows", [])  # type: ignore[attr-defined]
+    except Exception:
+        rows = []
+    if not rows:
+        return
+    idx = rows[0]
+    if idx is None:
+        return
+    if idx >= len(df_display):
+        return
+    cnpj_val = df_display.iloc[idx].get('CNPJ_Normalizado')
+    if cnpj_val:
+        _navegar_para_analise_detalhada(cnpj_val)
+
 # ============================================
 # ABA 1: FECHAMENTO SEMANAL (TÁTICO)
 # ============================================
@@ -2485,14 +2505,17 @@ def renderizar_aba_fechamento_semanal(
         ]
         df_risco_display = df_risco_display[cols_risco_view].reset_index(drop=True)
         
-        st.dataframe(
+        evento_risco = st.dataframe(
             df_risco_display,
             use_container_width=True,
             hide_index=True,
             column_config=col_config,
+            selection_mode="single-row",
+            on_select="rerun",
             key="tbl_risco_sem"
         )
-        st.caption("Clique na lupa para abrir automaticamente a Análise Detalhada do laboratório.")
+        _processar_evento_selecao(evento_risco, df_risco_display)
+        st.caption("Clique em qualquer linha ou na lupa (🔍) para abrir automaticamente a Análise Detalhada do laboratório.")
         
     csv_filtrado = df_risco_ordenado.drop(columns=['Detalhes'], errors='ignore').to_csv(index=False).encode('utf-8-sig')
     col_dl1, col_dl2 = st.columns(2)
@@ -2526,14 +2549,17 @@ def renderizar_aba_fechamento_semanal(
             df_perda_recente_display = adicionar_coluna_detalhes(df_perda_recente, 'CNPJ_Normalizado')
             cols_perda = ['Detalhes'] + cols_view
             df_perda_recente_display = df_perda_recente_display[cols_perda].reset_index(drop=True)
-            st.dataframe(
+            evento_recente = st.dataframe(
                 df_perda_recente_display,
                 use_container_width=True,
                 hide_index=True,
                 column_config=col_config,
+                selection_mode="single-row",
+                on_select="rerun",
                 key="tbl_perda_recente"
             )
-            st.caption("Clique na lupa para abrir automaticamente a Análise Detalhada.")
+            _processar_evento_selecao(evento_recente, df_perda_recente_display)
+            st.caption("Clique em qualquer linha para abrir automaticamente a Análise Detalhada.")
         else:
             st.info("Nenhuma perda recente.")
 
@@ -2546,14 +2572,17 @@ def renderizar_aba_fechamento_semanal(
             df_antigas_display = adicionar_coluna_detalhes(df_antigas, 'CNPJ_Normalizado')
             cols_perda = ['Detalhes'] + cols_view
             df_antigas_display = df_antigas_display[cols_perda].reset_index(drop=True)
-            st.dataframe(
+            evento_antiga = st.dataframe(
                 df_antigas_display,
                 use_container_width=True,
                 hide_index=True,
                 column_config=col_config,
+                selection_mode="single-row",
+                on_select="rerun",
                 key="tbl_perda_antiga"
             )
-            st.caption("Clique na lupa para abrir automaticamente a Análise Detalhada.")
+            _processar_evento_selecao(evento_antiga, df_antigas_display)
+            st.caption("Clique em qualquer linha para abrir automaticamente a Análise Detalhada.")
         else:
             st.info("Nenhuma perda antiga.")
 
@@ -2795,7 +2824,7 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
     df_mensal_display = adicionar_coluna_detalhes(df_sorted[cols_final], 'CNPJ_Normalizado')
     cols_mensal_display = ['Detalhes'] + cols_final
     df_mensal_display = df_mensal_display[cols_mensal_display].reset_index(drop=True)
-    st.dataframe(
+    evento_mensal = st.dataframe(
         df_mensal_display,
         use_container_width=True,
         hide_index=True,
@@ -2819,9 +2848,12 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
             "Maior_N_Coletas_Mes_2025": st.column_config.NumberColumn("Pico 2025 (Vol)", format="%d", help="Maior número de coletas em um mês de 2025"),
             "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Última coleta registrada (qualquer ano)")
         },
+        selection_mode="single-row",
+        on_select="rerun",
         key="tbl_mensal_master"
     )
-    st.caption("Clique na lupa para abrir automaticamente a Análise Detalhada.")
+    _processar_evento_selecao(evento_mensal, df_mensal_display)
+    st.caption("Clique em qualquer linha para abrir automaticamente a Análise Detalhada.")
 
     # Botão Exportação CSV Mensal
     csv = df_sorted.to_csv(index=False).encode('utf-8-sig')
@@ -2928,7 +2960,7 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
         ]
         df_top_perda_display = df_top_perda_display[cols_top]
         
-        st.dataframe(
+        evento_top_perda = st.dataframe(
             df_top_perda_display,
             use_container_width=True,
             hide_index=True,
@@ -2947,9 +2979,12 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
                 "Porte": st.column_config.TextColumn("Porte", width="small", help="Segmentação por volume"),
                 "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Última coleta registrada (qualquer ano)")
             },
+            selection_mode="single-row",
+            on_select="rerun",
             key="tbl_top_perda"
         )
-        st.caption("Clique na lupa para abrir automaticamente a Análise Detalhada.")
+        _processar_evento_selecao(evento_top_perda, df_top_perda_display)
+        st.caption("Clique em qualquer linha para abrir automaticamente a Análise Detalhada.")
     else:
         st.info("Nenhum laboratório com perda vs baseline identificado.")
 

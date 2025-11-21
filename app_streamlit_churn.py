@@ -2435,6 +2435,19 @@ def renderizar_aba_fechamento_semanal(
                  'Controle_Semanal_Estado_Anterior', 'Controle_Semanal_Estado_Atual',
                  'Data_Ultima_Coleta']
 
+    # Preparar dados de risco ANTES de calcular métricas para obter total filtrado
+    df_risco_base = preparar_dataframe_risco(df)
+    
+    # Obter filtro de variação do estado da sessão ou usar padrão
+    variacoes_opcoes = list(VARIACAO_QUEDA_FAIXAS.keys())
+    variacoes_sel = st.session_state.get('filtro_variacao_risco', ["Acima de 50%"])
+    if not variacoes_sel or (isinstance(variacoes_sel, list) and len(variacoes_sel) == 0):
+        variacoes_sel = ["Acima de 50%"]
+    
+    # Aplicar filtro de variação para calcular total correto
+    df_risco_filtrado_preview = aplicar_filtro_variacao(df_risco_base, variacoes_sel)
+    total_labs_filtrado = len(df_risco_filtrado_preview) if not df_risco_filtrado_preview.empty else 0
+    
     # ============================================================
     # KPI BOX EXECUTIVO - TOPO DA ABA SEMANAL
     # ============================================================
@@ -2443,6 +2456,8 @@ def renderizar_aba_fechamento_semanal(
     metricas_sem = calcular_metricas_fechamento_semanal(df)
     met = metricas_sem
     cards = met.get('resumo_cards', {})
+    # Substituir total_labs pelo valor após filtros
+    cards['total_labs'] = total_labs_filtrado
     
     col1, col2, col3, col4 = st.columns(4)
     col1.metric(
@@ -2473,20 +2488,23 @@ def renderizar_aba_fechamento_semanal(
     st.subheader("🚨 Lista de Risco (queda WoW ou dias off)")
     st.caption("Todos os laboratórios ordenados pela maior queda semanal. Reﬁne usando os filtros.")
     
-    variacoes_opcoes = list(VARIACAO_QUEDA_FAIXAS.keys())
     variacoes_sel = st.multiselect(
         "Filtro de variação percentual",
         options=variacoes_opcoes,
-        default=["Acima de 50%"],
+        default=variacoes_sel if isinstance(variacoes_sel, list) else ["Acima de 50%"],
         help="Seleciona a faixa de queda percentual (semana atual vs semana anterior).",
         key="filtro_variacao_risco"
     )
     filtros['faixas_variacao_risco'] = variacoes_sel
     st.caption("Configuração padrão: porte = Grandes (sidebar) e variação = Acima de 50%.")
 
-    df_risco_base = preparar_dataframe_risco(df)
     df_risco_filtrado = aplicar_filtro_variacao(df_risco_base, variacoes_sel)
     df_risco_ordenado = df_risco_filtrado.sort_values('Queda_Semanal_Pct', ascending=False, na_position='last')
+    
+    # Atualizar métrica "Labs na listagem" com o número após aplicar filtros
+    total_labs_filtrado = len(df_risco_filtrado) if not df_risco_filtrado.empty else 0
+    # Atualizar a métrica exibida anteriormente usando st.session_state ou recalculando
+    cards['total_labs'] = total_labs_filtrado
     df_total_processado = preparar_dataframe_risco(df_total) if df_total is not None else None
     
     if df_risco_ordenado.empty:
@@ -2929,6 +2947,13 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
     metricas_mensal = calcular_metricas_fechamento_mensal(df)
     met_mensal = metricas_mensal
     resumo_mensal = met_mensal.get('resumo_mensal', {})
+    
+    # Garantir que total_labs reflete o DataFrame filtrado atual
+    if 'CNPJ_Normalizado' in df.columns:
+        total_labs_atual = int(df['CNPJ_Normalizado'].nunique())
+    else:
+        total_labs_atual = len(df)
+    resumo_mensal['total_labs'] = total_labs_atual
     
     st.markdown("### 📈 KPIs Executivos")
     col1, col2, col3, col4 = st.columns(4)
@@ -5456,7 +5481,7 @@ def main():
                     margin-bottom: 1rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
             <h3 style="margin: 0; font-size: 1.3rem;">🔍 Busca Inteligente de Laboratórios</h3>
             <p style="margin: 0.5rem 0 0 0; opacity: 0.9;">
-                Busque por CNPJ (com ou sem formatação) ou nome do laboratório
+                Busque por CNPJ (com ou sem formatação) ou nome do laboratório. Funciona para qualquer laboratório da base.
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -5623,24 +5648,47 @@ def main():
                         
                         if not lab_na_base_completa.empty:
                             # Encontrou na base completa mas não nos filtros atuais
-                            st.warning("⚠️ Nenhum laboratório encontrado com os filtros atuais")
-                            
-                            # Identificar quais filtros estão ativos
-                            filtros_ativos = []
-                            if filtros.get('apenas_vip', False):
-                                filtros_ativos.append("**Apenas VIPs**")
-                            if filtros.get('representantes'):
-                                filtros_ativos.append(f"**Representante(s)**: {', '.join(filtros['representantes'])}")
-                            if filtros.get('ufs'):
-                                filtros_ativos.append(f"**UF(s)**: {', '.join(filtros['ufs'])}")
-                            
-                            if filtros_ativos:
-                                st.info(f"💡 Encontramos **{len(lab_na_base_completa)} laboratório(s)** na base completa, mas está(ão) sendo filtrado(s) por:\n\n" + 
-                                       "\n".join([f"- {f}" for f in filtros_ativos]))
+                            # Se encontrou exatamente 1, vamos mostrar mesmo assim (usando base completa)
+                            if len(lab_na_base_completa) == 1:
+                                lab_info_encontrado = lab_na_base_completa.iloc[0]
+                                lab_final_cnpj = str(lab_info_encontrado.get('CNPJ_Normalizado', ''))
+                                lab_final = lab_info_encontrado.get('Nome_Fantasia_PCL') or lab_info_encontrado.get('Razao_Social_PCL') or lab_final_cnpj
+                                st.session_state[LAB_STATE_KEY] = lab_final_cnpj
+                                st.warning("⚠️ Este laboratório está fora dos filtros atuais, mas será exibido mesmo assim.")
                                 
-                                st.caption("💡 **Dica**: Desative os filtros na barra lateral para visualizar este laboratório.")
+                                # Identificar quais filtros estão ativos
+                                filtros_ativos = []
+                                if filtros.get('apenas_vip', False):
+                                    filtros_ativos.append("**Apenas VIPs**")
+                                if filtros.get('representantes'):
+                                    filtros_ativos.append(f"**Representante(s)**: {', '.join(filtros['representantes'])}")
+                                if filtros.get('ufs'):
+                                    filtros_ativos.append(f"**UF(s)**: {', '.join(filtros['ufs'])}")
+                                
+                                if filtros_ativos:
+                                    st.info(f"💡 Este laboratório está sendo filtrado por:\n\n" + 
+                                           "\n".join([f"- {f}" for f in filtros_ativos]) +
+                                           "\n\n💡 **Dica**: Desative os filtros na barra lateral para ver apenas laboratórios que atendem aos critérios.")
                             else:
-                                st.info(f"💡 Encontramos **{len(lab_na_base_completa)} laboratório(s)** na base completa, mas está(ão) fora do período selecionado ou de outros filtros aplicados.")
+                                # Múltiplos resultados na base completa
+                                st.warning("⚠️ Nenhum laboratório encontrado com os filtros atuais")
+                                
+                                # Identificar quais filtros estão ativos
+                                filtros_ativos = []
+                                if filtros.get('apenas_vip', False):
+                                    filtros_ativos.append("**Apenas VIPs**")
+                                if filtros.get('representantes'):
+                                    filtros_ativos.append(f"**Representante(s)**: {', '.join(filtros['representantes'])}")
+                                if filtros.get('ufs'):
+                                    filtros_ativos.append(f"**UF(s)**: {', '.join(filtros['ufs'])}")
+                                
+                                if filtros_ativos:
+                                    st.info(f"💡 Encontramos **{len(lab_na_base_completa)} laboratório(s)** na base completa, mas está(ão) sendo filtrado(s) por:\n\n" + 
+                                           "\n".join([f"- {f}" for f in filtros_ativos]))
+                                    
+                                    st.caption("💡 **Dica**: Desative os filtros na barra lateral para visualizar estes laboratórios.")
+                                else:
+                                    st.info(f"💡 Encontramos **{len(lab_na_base_completa)} laboratório(s)** na base completa, mas está(ão) fora do período selecionado ou de outros filtros aplicados.")
                         else:
                             # Não encontrou nem na base completa
                             st.warning("⚠️ Nenhum laboratório encontrado com os critérios informados")
@@ -5654,10 +5702,17 @@ def main():
                     st.markdown("---") # Separador antes dos dados
                     # Verificar se é VIP
                     df_vip = DataManager.carregar_dados_vip()
+                    # Tentar buscar primeiro em df_analise_detalhada, se não encontrar, buscar na base completa
                     if lab_final_cnpj:
                         lab_data = df_analise_detalhada[df_analise_detalhada['CNPJ_Normalizado'] == lab_final_cnpj]
+                        # Se não encontrou em df_analise_detalhada, buscar na base completa
+                        if lab_data.empty:
+                            lab_data = df[df['CNPJ_Normalizado'] == lab_final_cnpj]
                     else:
                         lab_data = df_analise_detalhada[df_analise_detalhada['Nome_Fantasia_PCL'] == lab_final]
+                        # Se não encontrou em df_analise_detalhada, buscar na base completa
+                        if lab_data.empty:
+                            lab_data = df[df['Nome_Fantasia_PCL'] == lab_final]
                     info_vip = None
                     if not lab_data.empty and df_vip is not None:
                         cnpj_lab = lab_data.iloc[0].get('CNPJ_PCL', '')
@@ -5689,10 +5744,17 @@ def main():
                             </h3>
                         """, unsafe_allow_html=True)
                     # Informações de contato e localização
+                    # Tentar buscar primeiro em df_analise_detalhada, se não encontrar, buscar na base completa
                     if lab_final_cnpj:
                         lab_data = df_analise_detalhada[df_analise_detalhada['CNPJ_Normalizado'] == lab_final_cnpj]
+                        # Se não encontrou em df_analise_detalhada, buscar na base completa
+                        if lab_data.empty:
+                            lab_data = df[df['CNPJ_Normalizado'] == lab_final_cnpj]
                     else:
                         lab_data = df_analise_detalhada[df_analise_detalhada['Nome_Fantasia_PCL'] == lab_final]
+                        # Se não encontrou em df_analise_detalhada, buscar na base completa
+                        if lab_data.empty:
+                            lab_data = df[df['Nome_Fantasia_PCL'] == lab_final]
                     if not lab_data.empty:
                             lab_info = lab_data.iloc[0]
                          
@@ -5998,8 +6060,15 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
                     # Métricas comerciais essenciais
+                    # Usar base completa se não encontrou em df_analise_detalhada
+                    df_para_metricas = df_analise_detalhada.copy()
+                    if lab_final_cnpj:
+                        lab_existe = not df_analise_detalhada[df_analise_detalhada['CNPJ_Normalizado'] == lab_final_cnpj].empty
+                        if not lab_existe:
+                            df_para_metricas = df.copy()
+                    
                     metricas = MetricasAvancadas.calcular_metricas_lab(
-                        df_filtrado,
+                        df_para_metricas,
                         lab_cnpj=lab_final_cnpj,
                         lab_nome=lab_final
                     )
@@ -6052,7 +6121,7 @@ def main():
                         # Histórico de Performance - Reorganizado conforme solicitação
                         # Calcular máxima de coletas histórica (respeitando meses disponíveis)
                         metricas_evolucao = MetricasAvancadas.calcular_metricas_evolucao(
-                            df_analise_detalhada,
+                            df_para_metricas,
                             lab_cnpj=lab_final_cnpj,
                             lab_nome=lab_final
                         )
@@ -6126,7 +6195,7 @@ def main():
                         st.markdown("---")
                         st.subheader("📈 Evolução Mensal")
                         ChartManager.criar_grafico_evolucao_mensal(
-                            df_analise_detalhada,
+                            df_para_metricas,
                             lab_cnpj=lab_final_cnpj,
                             lab_nome=lab_final,
                             chart_key="historico"
@@ -6151,7 +6220,7 @@ def main():
                         st.subheader("📊 Distribuição de Coletas por Dia Útil da Semana")
                         # Gráfico com destaque maior conforme solicitado
                         ChartManager.criar_grafico_media_dia_semana_novo(
-                            df_analise_detalhada,
+                            df_para_metricas,
                             lab_cnpj=lab_final_cnpj,
                             lab_nome=lab_final,
                             filtros=filtros
@@ -6160,7 +6229,7 @@ def main():
                     with tab_media_diaria:
                         st.subheader("📊 Média Diária por Mês")
                         ChartManager.criar_grafico_media_diaria(
-                            df_analise_detalhada,
+                            df_para_metricas,
                             lab_cnpj=lab_final_cnpj,
                             lab_nome=lab_final
                         )
@@ -6168,7 +6237,7 @@ def main():
                     with tab_coletas_dia:
                         st.subheader("📈 Coletas por Dia Útil do Mês")
                         ChartManager.criar_grafico_coletas_por_dia(
-                            df_analise_detalhada,
+                            df_para_metricas,
                             lab_cnpj=lab_final_cnpj,
                             lab_nome=lab_final
                         )

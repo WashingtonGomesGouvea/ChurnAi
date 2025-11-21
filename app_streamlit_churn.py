@@ -2431,7 +2431,7 @@ def renderizar_aba_fechamento_semanal(
     
     cols_view = ['Nome_Fantasia_PCL', 'CNPJ_Normalizado', 'VIP', 'Rede', 'Estado', 'Porte', 
                  'Media_Semanal_2025', 'WoW_Semana_Anterior', 'WoW_Semana_Atual', 
-                 'Queda_Semanal_Abs', 'Pct_Dif_Media_Historica', 'Dias_Sem_Coleta', 
+                 'Queda_Semanal_Abs', 'Dias_Sem_Coleta', 
                  'Controle_Semanal_Estado_Anterior', 'Controle_Semanal_Estado_Atual',
                  'Data_Ultima_Coleta']
 
@@ -2538,53 +2538,245 @@ def renderizar_aba_fechamento_semanal(
 
     st.markdown("---")
 
-    # --- TABELAS SEPARADAS POR CATEGORIA DE PERDA ---
-    c1, c2 = st.columns(2)
+    # --- FUNÇÕES AUXILIARES PARA CÁLCULO DE MÉTRICAS DE PERDAS ---
+    def calcular_metricas_perda(row):
+        """Calcula métricas específicas para cada perda."""
+        metricas = {
+            'media_mensal_perdas': 0.0,
+            'volume_ultimo_mes_coleta': 0,
+            'mes_ultimo_coleta': None,
+            'volume_ultima_semana_coleta': 0,
+            'semana_ultima_coleta': None,
+            'maxima_coletas': 0,
+            'mes_maxima': None,
+            'ano_maxima': None
+        }
+        
+        # Calcular média mensal de perdas (média dos meses com coleta)
+        meses_nomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+        meses_2024 = [f'N_Coletas_{m}_24' for m in meses_nomes]
+        meses_2025 = [f'N_Coletas_{m}_25' for m in meses_nomes]
+        todas_colunas_meses = meses_2024 + meses_2025
+        
+        volumes_mensais = []
+        for col in todas_colunas_meses:
+            if col in row.index:
+                valor = pd.to_numeric(row.get(col, 0), errors='coerce')
+                if pd.notna(valor) and valor > 0:
+                    volumes_mensais.append(valor)
+        
+        if volumes_mensais:
+            metricas['media_mensal_perdas'] = float(np.mean(volumes_mensais))
+        
+        # Encontrar último mês com coleta (não necessariamente o mês atual)
+        ultimo_mes_coleta = None
+        ultimo_volume_mes = 0
+        for col in reversed(todas_colunas_meses):  # Começar pelos mais recentes
+            if col in row.index:
+                valor = pd.to_numeric(row.get(col, 0), errors='coerce')
+                if pd.notna(valor) and valor > 0:
+                    ultimo_mes_coleta = col
+                    ultimo_volume_mes = int(valor)
+                    break
+        
+        if ultimo_mes_coleta:
+            metricas['volume_ultimo_mes_coleta'] = ultimo_volume_mes
+            # Extrair mês e ano do nome da coluna
+            partes = ultimo_mes_coleta.split('_')
+            if len(partes) >= 3:
+                mes_codigo = partes[2]
+                ano = partes[3] if len(partes) > 3 else None
+                meses_map = {"Jan": "Janeiro", "Fev": "Fevereiro", "Mar": "Março", "Abr": "Abril",
+                            "Mai": "Maio", "Jun": "Junho", "Jul": "Julho", "Ago": "Agosto",
+                            "Set": "Setembro", "Out": "Outubro", "Nov": "Novembro", "Dez": "Dezembro"}
+                metricas['mes_ultimo_coleta'] = f"{meses_map.get(mes_codigo, mes_codigo)}/{ano}" if ano else meses_map.get(mes_codigo, mes_codigo)
+        
+        # Encontrar última semana com coleta
+        if 'Semanas_Mes_Atual' in row.index:
+            try:
+                semanas_json = row.get('Semanas_Mes_Atual', '[]')
+                if isinstance(semanas_json, str) and semanas_json and semanas_json != '[]':
+                    semanas = json.loads(semanas_json)
+                elif isinstance(semanas_json, list):
+                    semanas = semanas_json
+                else:
+                    semanas = []
+                
+                # Procurar última semana com volume > 0
+                for semana in reversed(semanas):
+                    vol_util = semana.get('volume_util', 0)
+                    if vol_util and vol_util > 0:
+                        metricas['volume_ultima_semana_coleta'] = int(vol_util)
+                        iso_week = semana.get('iso_week')
+                        iso_year = semana.get('iso_year')
+                        if iso_week and iso_year:
+                            metricas['semana_ultima_coleta'] = f"Semana {iso_week}/{iso_year}"
+                        break
+            except Exception:
+                pass
+        
+        # Encontrar máxima de coletas (valor + mês/ano)
+        max_volume = 0
+        max_mes_col = None
+        for col in todas_colunas_meses:
+            if col in row.index:
+                valor = pd.to_numeric(row.get(col, 0), errors='coerce')
+                if pd.notna(valor) and valor > max_volume:
+                    max_volume = int(valor)
+                    max_mes_col = col
+        
+        if max_mes_col and max_volume > 0:
+            metricas['maxima_coletas'] = max_volume
+            partes = max_mes_col.split('_')
+            if len(partes) >= 3:
+                mes_codigo = partes[2]
+                ano = partes[3] if len(partes) > 3 else None
+                meses_map = {"Jan": "Janeiro", "Fev": "Fevereiro", "Mar": "Março", "Abr": "Abril",
+                            "Mai": "Maio", "Jun": "Junho", "Jul": "Julho", "Ago": "Agosto",
+                            "Set": "Setembro", "Out": "Outubro", "Nov": "Novembro", "Dez": "Dezembro"}
+                metricas['mes_maxima'] = meses_map.get(mes_codigo, mes_codigo)
+                metricas['ano_maxima'] = ano
+        
+        return metricas
     
-    with c1:
-        st.subheader("📉 Perdas Recentes (<6 meses)")
-        df_perda_recente = df[df['Classificacao_Perda_V2'] == 'Perda Recente'].copy()
-        df_perda_recente = df_perda_recente.sort_values('Queda_Semanal_Abs', ascending=False)
-        if not df_perda_recente.empty:
-            df_perda_recente_display = adicionar_coluna_detalhes(df_perda_recente, 'CNPJ_Normalizado')
-            cols_perda = ['Detalhes'] + cols_view
-            df_perda_recente_display = df_perda_recente_display[cols_perda].reset_index(drop=True)
-            evento_recente = st.dataframe(
-                df_perda_recente_display,
-                use_container_width=True,
-                hide_index=True,
-                column_config=col_config,
-                selection_mode="single-row",
-                on_select="rerun",
-                key="tbl_perda_recente"
-            )
-            _processar_evento_selecao(evento_recente, df_perda_recente_display)
-            st.caption("Clique em qualquer linha para abrir automaticamente a Análise Detalhada.")
-        else:
-            st.info("Nenhuma perda recente.")
-
-    with c2:
-        st.subheader("🗄️ Perdas Antigas (>6 meses)")
-        # Usando 'Perda Antiga' conforme mapeamento padrão
-        df_antigas = df[df['Classificacao_Perda_V2'].isin(['Perda Antiga', 'Perda Consolidada'])].copy()
-        df_antigas = df_antigas.sort_values('Queda_Semanal_Abs', ascending=False)
-        if not df_antigas.empty:
-            df_antigas_display = adicionar_coluna_detalhes(df_antigas, 'CNPJ_Normalizado')
-            cols_perda = ['Detalhes'] + cols_view
-            df_antigas_display = df_antigas_display[cols_perda].reset_index(drop=True)
-            evento_antiga = st.dataframe(
-                df_antigas_display,
-                use_container_width=True,
-                hide_index=True,
-                column_config=col_config,
-                selection_mode="single-row",
-                on_select="rerun",
-                key="tbl_perda_antiga"
-            )
-            _processar_evento_selecao(evento_antiga, df_antigas_display)
-            st.caption("Clique em qualquer linha para abrir automaticamente a Análise Detalhada.")
-        else:
-            st.info("Nenhuma perda antiga.")
+    # --- TABELAS SEPARADAS POR CATEGORIA DE PERDA (LAYOUT EM COLUNA) ---
+    
+    # Perdas Recentes
+    st.subheader("📉 Perdas Recentes (<6 meses)")
+    df_perda_recente = df[df['Classificacao_Perda_V2'] == 'Perda Recente'].copy()
+    
+    if not df_perda_recente.empty:
+        # Calcular métricas para cada perda
+        metricas_list = []
+        for idx, row in df_perda_recente.iterrows():
+            metricas = calcular_metricas_perda(row)
+            metricas_list.append(metricas)
+        
+        # Adicionar colunas de métricas ao DataFrame
+        df_perda_recente['Media_Mensal_Perdas'] = [m['media_mensal_perdas'] for m in metricas_list]
+        df_perda_recente['Volume_Ultimo_Mes_Coleta'] = [m['volume_ultimo_mes_coleta'] for m in metricas_list]
+        df_perda_recente['Mes_Ultimo_Coleta'] = [m['mes_ultimo_coleta'] or 'N/A' for m in metricas_list]
+        df_perda_recente['Volume_Ultima_Semana_Coleta'] = [m['volume_ultima_semana_coleta'] for m in metricas_list]
+        df_perda_recente['Semana_Ultima_Coleta'] = [m['semana_ultima_coleta'] or 'N/A' for m in metricas_list]
+        df_perda_recente['Maxima_Coletas'] = [m['maxima_coletas'] for m in metricas_list]
+        df_perda_recente['Mes_Maxima'] = [m['mes_maxima'] or 'N/A' for m in metricas_list]
+        df_perda_recente['Ano_Maxima'] = [m['ano_maxima'] or 'N/A' for m in metricas_list]
+        
+        # Ordenação: maior para menor (por dias sem coleta ou volume de perda), desempate por data última coleta
+        df_perda_recente['_ordem_dias'] = df_perda_recente.get('Dias_Sem_Coleta', 0).fillna(0)
+        df_perda_recente['_ordem_queda'] = df_perda_recente.get('Queda_Semanal_Abs', 0).fillna(0)
+        df_perda_recente['_ordem_data'] = pd.to_datetime(df_perda_recente.get('Data_Ultima_Coleta', pd.NaT), errors='coerce')
+        df_perda_recente['_ordem_data'] = df_perda_recente['_ordem_data'].fillna(pd.Timestamp.min)
+        
+        # Ordenar: primeiro por dias sem coleta (desc), depois por queda (desc), depois por data última coleta (desc - mais recente primeiro)
+        df_perda_recente = df_perda_recente.sort_values(
+            ['_ordem_dias', '_ordem_queda', '_ordem_data'],
+            ascending=[False, False, False]
+        )
+        df_perda_recente = df_perda_recente.drop(columns=['_ordem_dias', '_ordem_queda', '_ordem_data'])
+        
+        # Preparar colunas para exibição
+        cols_perda_extended = [
+            'Detalhes', 'Dias_Sem_Coleta', 'Nome_Fantasia_PCL', 'CNPJ_Normalizado', 
+            'Media_Mensal_Perdas', 'Volume_Ultimo_Mes_Coleta', 'Mes_Ultimo_Coleta',
+            'Volume_Ultima_Semana_Coleta', 'Semana_Ultima_Coleta',
+            'Maxima_Coletas', 'Mes_Maxima', 'Ano_Maxima',
+            'Data_Ultima_Coleta', 'Queda_Semanal_Abs'
+        ]
+        cols_perda_extended = [c for c in cols_perda_extended if c in df_perda_recente.columns]
+        
+        df_perda_recente_display = adicionar_coluna_detalhes(df_perda_recente, 'CNPJ_Normalizado')
+        df_perda_recente_display = df_perda_recente_display[cols_perda_extended].reset_index(drop=True)
+        
+        # Configuração de colunas estendida
+        col_config_extended = col_config.copy()
+        col_config_extended.update({
+            "Media_Mensal_Perdas": st.column_config.NumberColumn("Média Mensal", format="%.1f", help="Média mensal de perdas"),
+            "Volume_Ultimo_Mes_Coleta": st.column_config.NumberColumn("Vol. Último Mês", format="%d", help="Volume do último mês com coleta"),
+            "Mes_Ultimo_Coleta": st.column_config.TextColumn("Mês Última Coleta", help="Mês/ano do último mês com coleta"),
+            "Volume_Ultima_Semana_Coleta": st.column_config.NumberColumn("Vol. Última Semana", format="%d", help="Volume da última semana com coleta"),
+            "Semana_Ultima_Coleta": st.column_config.TextColumn("Semana Última Coleta", help="Semana ISO da última semana com coleta"),
+            "Maxima_Coletas": st.column_config.NumberColumn("Máxima Coletas", format="%d", help="Máxima de coletas do cliente"),
+            "Mes_Maxima": st.column_config.TextColumn("Mês Máxima", help="Mês da máxima de coletas"),
+            "Ano_Maxima": st.column_config.TextColumn("Ano Máxima", help="Ano da máxima de coletas")
+        })
+        
+        evento_recente = st.dataframe(
+            df_perda_recente_display,
+            use_container_width=True,
+            hide_index=True,
+            column_config=col_config_extended,
+            selection_mode="single-row",
+            on_select="rerun",
+            key="tbl_perda_recente"
+        )
+        _processar_evento_selecao(evento_recente, df_perda_recente_display)
+        st.caption("Clique em qualquer linha para abrir automaticamente a Análise Detalhada.")
+    else:
+        st.info("Nenhuma perda recente.")
+    
+    st.markdown("---")
+    
+    # Perdas Antigas (logo abaixo de Perdas Recentes, mesmo layout)
+    st.subheader("🗄️ Perdas Antigas (>6 meses)")
+    df_antigas = df[df['Classificacao_Perda_V2'].isin(['Perda Antiga', 'Perda Consolidada'])].copy()
+    
+    if not df_antigas.empty:
+        # Calcular métricas para cada perda (mesma estrutura)
+        metricas_list_antigas = []
+        for idx, row in df_antigas.iterrows():
+            metricas = calcular_metricas_perda(row)
+            metricas_list_antigas.append(metricas)
+        
+        # Adicionar colunas de métricas ao DataFrame
+        df_antigas['Media_Mensal_Perdas'] = [m['media_mensal_perdas'] for m in metricas_list_antigas]
+        df_antigas['Volume_Ultimo_Mes_Coleta'] = [m['volume_ultimo_mes_coleta'] for m in metricas_list_antigas]
+        df_antigas['Mes_Ultimo_Coleta'] = [m['mes_ultimo_coleta'] or 'N/A' for m in metricas_list_antigas]
+        df_antigas['Volume_Ultima_Semana_Coleta'] = [m['volume_ultima_semana_coleta'] for m in metricas_list_antigas]
+        df_antigas['Semana_Ultima_Coleta'] = [m['semana_ultima_coleta'] or 'N/A' for m in metricas_list_antigas]
+        df_antigas['Maxima_Coletas'] = [m['maxima_coletas'] for m in metricas_list_antigas]
+        df_antigas['Mes_Maxima'] = [m['mes_maxima'] or 'N/A' for m in metricas_list_antigas]
+        df_antigas['Ano_Maxima'] = [m['ano_maxima'] or 'N/A' for m in metricas_list_antigas]
+        
+        # Ordenação: maior para menor (por dias sem coleta ou volume de perda), desempate por data última coleta
+        df_antigas['_ordem_dias'] = df_antigas.get('Dias_Sem_Coleta', 0).fillna(0)
+        df_antigas['_ordem_queda'] = df_antigas.get('Queda_Semanal_Abs', 0).fillna(0)
+        df_antigas['_ordem_data'] = pd.to_datetime(df_antigas.get('Data_Ultima_Coleta', pd.NaT), errors='coerce')
+        df_antigas['_ordem_data'] = df_antigas['_ordem_data'].fillna(pd.Timestamp.min)
+        
+        # Ordenar: primeiro por dias sem coleta (desc), depois por queda (desc), depois por data última coleta (desc)
+        df_antigas = df_antigas.sort_values(
+            ['_ordem_dias', '_ordem_queda', '_ordem_data'],
+            ascending=[False, False, False]
+        )
+        df_antigas = df_antigas.drop(columns=['_ordem_dias', '_ordem_queda', '_ordem_data'])
+        
+        # Preparar colunas para exibição (dias sem coleta como primeiro indicador)
+        cols_perda_antigas = [
+            'Detalhes', 'Dias_Sem_Coleta', 'Nome_Fantasia_PCL', 'CNPJ_Normalizado',
+            'Media_Mensal_Perdas', 'Volume_Ultimo_Mes_Coleta', 'Mes_Ultimo_Coleta',
+            'Volume_Ultima_Semana_Coleta', 'Semana_Ultima_Coleta',
+            'Maxima_Coletas', 'Mes_Maxima', 'Ano_Maxima',
+            'Data_Ultima_Coleta', 'Queda_Semanal_Abs'
+        ]
+        cols_perda_antigas = [c for c in cols_perda_antigas if c in df_antigas.columns]
+        
+        df_antigas_display = adicionar_coluna_detalhes(df_antigas, 'CNPJ_Normalizado')
+        df_antigas_display = df_antigas_display[cols_perda_antigas].reset_index(drop=True)
+        
+        evento_antiga = st.dataframe(
+            df_antigas_display,
+            use_container_width=True,
+            hide_index=True,
+            column_config=col_config_extended,
+            selection_mode="single-row",
+            on_select="rerun",
+            key="tbl_perda_antiga"
+        )
+        _processar_evento_selecao(evento_antiga, df_antigas_display)
+        st.caption("Clique em qualquer linha para abrir automaticamente a Análise Detalhada.")
+    else:
+        st.info("Nenhuma perda antiga.")
 
     st.markdown("---")
 
@@ -2598,22 +2790,60 @@ def renderizar_aba_fechamento_semanal(
     if met.get('semanas_detalhes'):
         # Preparar dados para a tabela de resumo
         dados_semanas = []
+        semanas_processadas = set()
         for s in met['semanas_detalhes']:
-            vol_atual = s.get('volume_total', 0)
-            vol_ant = s.get('volume_semana_anterior', 0)
-            wow = calcular_variacao_percentual(vol_atual, vol_ant)
+            iso_week = s.get('iso_week')
+            iso_year = s.get('iso_year')
             
-            status_icon = "✅ Fechada" if s.get('fechada') else "🔄 Em Andamento"
-            
-            dados_semanas.append({
-                "Semana": f"Semana {s.get('semana')}",
-                "ISO": s.get('iso_week'),
-                "Volume Útil": vol_atual,
-                "Volume Anterior": vol_ant or 0,
-                "WoW %": wow, 
-                "Status": status_icon,
-                "is_active": not s.get('fechada')
-            })
+            # Incluir semana 44 explicitamente se não estiver na lista
+            if iso_week == 44 or (iso_week, iso_year) not in semanas_processadas:
+                vol_atual = s.get('volume_total', 0)
+                vol_ant = s.get('volume_semana_anterior', 0)
+                wow = calcular_variacao_percentual(vol_atual, vol_ant)
+                
+                status_icon = "✅ Fechada" if s.get('fechada') else "🔄 Em Andamento"
+                
+                dados_semanas.append({
+                    "Semana": f"Semana {s.get('semana')}",
+                    "ISO": iso_week,
+                    "Volume Útil": vol_atual,
+                    "Volume Anterior": vol_ant or 0,
+                    "WoW %": wow, 
+                    "Status": status_icon,
+                    "is_active": not s.get('fechada')
+                })
+                semanas_processadas.add((iso_week, iso_year))
+        
+        # Garantir que semana 44 está incluída (se não estiver, adicionar com dados do DataFrame)
+        if not any(s.get('iso_week') == 44 for s in met['semanas_detalhes']):
+            # Tentar encontrar semana 44 nos dados do DataFrame
+            if 'Semanas_Mes_Atual' in df.columns:
+                semana_44_volume = 0
+                semana_44_anterior = 0
+                for val in df['Semanas_Mes_Atual']:
+                    if pd.isna(val):
+                        continue
+                    try:
+                        semanas_json = json.loads(val) if isinstance(val, str) else val
+                        if isinstance(semanas_json, list):
+                            for semana in semanas_json:
+                                if semana.get('iso_week') == 44:
+                                    semana_44_volume += semana.get('volume_util', 0) or 0
+                                    semana_44_anterior += semana.get('volume_semana_anterior', 0) or 0
+                    except Exception:
+                        continue
+                
+                if semana_44_volume > 0 or semana_44_anterior > 0:
+                    wow_44 = calcular_variacao_percentual(semana_44_volume, semana_44_anterior)
+                    dados_semanas.append({
+                        "Semana": "Semana 44",
+                        "ISO": 44,
+                        "Volume Útil": semana_44_volume,
+                        "Volume Anterior": semana_44_anterior or 0,
+                        "WoW %": wow_44,
+                        "Status": "✅ Fechada",
+                        "is_active": False
+                    })
             
         df_semanas = pd.DataFrame(dados_semanas)
         
@@ -3100,10 +3330,10 @@ class FilterManager:
         else:
             filtros['uf_selecionada'] = 'Todas'
         
-        # Filtro VIP com opção de alternar
+        # Filtro VIP com opção de alternar (desativado por padrão)
         filtros['apenas_vip'] = st.sidebar.toggle(
             "🌟 Apenas Clientes VIP",
-            value=True,
+            value=False,
             help="Ative para mostrar apenas clientes VIP, desative para mostrar todos"
         )
      
@@ -4410,11 +4640,20 @@ class ChartManager:
                     markers=True,
                     line_shape='spline'
                 )
-             
+                
                 # Personalizar cores e estilos
                 fig.update_traces(
                     mode='lines+markers',
                     hovertemplate='<b>Mês:</b> %{x}<br><b>Coletas:</b> %{y}<extra></extra>'
+                )
+                
+                # Garantir que não há valores negativos exibidos (ajustar eixo Y para começar em 0 ou acima)
+                fig.update_layout(
+                    yaxis=dict(
+                        rangemode='tozero',  # Garante que o eixo Y começa em 0 ou acima
+                        showgrid=True,
+                        gridcolor='rgba(128, 128, 128, 0.2)'
+                    )
                 )
              
                 # Cores personalizadas
@@ -5193,6 +5432,23 @@ def main():
     
     elif st.session_state.page == "📋 Análise Detalhada":
         st.header("📋 Análise Detalhada")
+        # REGRA: Na análise detalhada, se filtro VIP estiver desmarcado, usar base completa
+        # Se marcado, mostrar apenas VIPs; se desmarcado, mostrar tudo (incluindo VIPs)
+        if filtros.get('apenas_vip', False):
+            # Filtro VIP marcado: usar df_filtrado (já filtrado por VIP)
+            df_analise_detalhada = df_filtrado.copy()
+        else:
+            # Filtro VIP desmarcado: usar base completa (df), mas aplicar outros filtros se houver
+            df_analise_detalhada = df.copy()
+            # Aplicar outros filtros (UF, porte, representante) mas não VIP
+            if filtros.get('uf_selecionada') and filtros['uf_selecionada'] != 'Todas':
+                if 'Estado' in df_analise_detalhada.columns:
+                    df_analise_detalhada = df_analise_detalhada[df_analise_detalhada['Estado'] == filtros['uf_selecionada']]
+            if filtros.get('portes') and 'Porte' in df_analise_detalhada.columns:
+                df_analise_detalhada = df_analise_detalhada[df_analise_detalhada['Porte'].isin(filtros['portes'])]
+            if filtros.get('representantes') and 'Representante_Nome' in df_analise_detalhada.columns:
+                df_analise_detalhada = df_analise_detalhada[df_analise_detalhada['Representante_Nome'].isin(filtros['representantes'])]
+        
         # Filtros avançados com design moderno
         st.markdown("""
         <div style="background: linear-gradient(135deg, #6BBF47 0%, #52B54B 100%);
@@ -5205,12 +5461,12 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         # Seleção de laboratório específico
-        if not df_filtrado.empty:
-            if 'CNPJ_Normalizado' not in df_filtrado.columns:
-                df_filtrado['CNPJ_Normalizado'] = df_filtrado['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
-            df_filtrado['CNPJ_Normalizado'] = df_filtrado['CNPJ_Normalizado'].fillna('')
+        if not df_analise_detalhada.empty:
+            if 'CNPJ_Normalizado' not in df_analise_detalhada.columns:
+                df_analise_detalhada['CNPJ_Normalizado'] = df_analise_detalhada['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
+            df_analise_detalhada['CNPJ_Normalizado'] = df_analise_detalhada['CNPJ_Normalizado'].fillna('')
 
-            labs_catalogo = df_filtrado[
+            labs_catalogo = df_analise_detalhada[
                 ['CNPJ_PCL', 'CNPJ_Normalizado', 'Nome_Fantasia_PCL', 'Razao_Social_PCL', 'Cidade', 'Estado']
             ].copy()
             labs_catalogo = labs_catalogo[labs_catalogo['CNPJ_Normalizado'] != ""]
@@ -5260,14 +5516,14 @@ def main():
             with col1:
                 # Campo de busca aprimorado
                 busca_lab = st.text_input(
-                    "🔎 Buscar",
+                    "🔎 Buscar PCL",
                     placeholder="CNPJ (com/sem formatação) ou Nome do laboratório",
                     help="Digite CNPJ (com ou sem pontos/traços) ou nome do laboratório/razão social",
                     key="busca_avancada"
                 )
             with col2:
-                # Botão de busca rápida
-                buscar_btn = st.button("🔎 Buscar", type="primary", width='stretch')
+                # Botão de busca funcional (lupa como submit)
+                buscar_btn = st.button("🔍", type="primary", help="Clique para buscar o PCL no Gralab/backend", use_container_width=True)
             with col3:
                 # Seleção por dropdown como alternativa
                 lab_selecionado = st.selectbox(
@@ -5308,14 +5564,14 @@ def main():
                     cnpj_limpo = ''.join(filter(str.isdigit, busca_normalizada))
                     if len(cnpj_limpo) >= 1:
                         if len(cnpj_limpo) >= 14:
-                            lab_encontrado = df_filtrado[df_filtrado['CNPJ_Normalizado'] == cnpj_limpo]
+                            lab_encontrado = df_analise_detalhada[df_analise_detalhada['CNPJ_Normalizado'] == cnpj_limpo]
                         else:
-                            lab_encontrado = df_filtrado[df_filtrado['CNPJ_Normalizado'].str.startswith(cnpj_limpo)]
+                            lab_encontrado = df_analise_detalhada[df_analise_detalhada['CNPJ_Normalizado'].str.startswith(cnpj_limpo)]
                     else:
                         # Buscar por nome (case insensitive e parcial) - apenas nome fantasia e razão social
-                        lab_encontrado = df_filtrado[
-                            df_filtrado['Nome_Fantasia_PCL'].str.contains(busca_normalizada, case=False, na=False) |
-                            df_filtrado['Razao_Social_PCL'].str.contains(busca_normalizada, case=False, na=False)
+                        lab_encontrado = df_analise_detalhada[
+                            df_analise_detalhada['Nome_Fantasia_PCL'].str.contains(busca_normalizada, case=False, na=False) |
+                            df_analise_detalhada['Razao_Social_PCL'].str.contains(busca_normalizada, case=False, na=False)
                         ]
                     lab_encontrado = lab_encontrado[lab_encontrado['CNPJ_Normalizado'] != ""].drop_duplicates('CNPJ_Normalizado')
                     if not lab_encontrado.empty:
@@ -5399,9 +5655,9 @@ def main():
                     # Verificar se é VIP
                     df_vip = DataManager.carregar_dados_vip()
                     if lab_final_cnpj:
-                        lab_data = df_filtrado[df_filtrado['CNPJ_Normalizado'] == lab_final_cnpj]
+                        lab_data = df_analise_detalhada[df_analise_detalhada['CNPJ_Normalizado'] == lab_final_cnpj]
                     else:
-                        lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
+                        lab_data = df_analise_detalhada[df_analise_detalhada['Nome_Fantasia_PCL'] == lab_final]
                     info_vip = None
                     if not lab_data.empty and df_vip is not None:
                         cnpj_lab = lab_data.iloc[0].get('CNPJ_PCL', '')
@@ -5434,9 +5690,9 @@ def main():
                         """, unsafe_allow_html=True)
                     # Informações de contato e localização
                     if lab_final_cnpj:
-                        lab_data = df_filtrado[df_filtrado['CNPJ_Normalizado'] == lab_final_cnpj]
+                        lab_data = df_analise_detalhada[df_analise_detalhada['CNPJ_Normalizado'] == lab_final_cnpj]
                     else:
-                        lab_data = df_filtrado[df_filtrado['Nome_Fantasia_PCL'] == lab_final]
+                        lab_data = df_analise_detalhada[df_analise_detalhada['Nome_Fantasia_PCL'] == lab_final]
                     if not lab_data.empty:
                             lab_info = lab_data.iloc[0]
                          
@@ -5772,78 +6028,23 @@ def main():
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
-                        # Status e Risco
+                        # Status (sem classificação de risco alto/médio/baixo, sem médias móveis)
                         status_color = "#28a745" if metricas['agudo'] == "Ativo" else "#dc3545"
-                        risco_color = "#28a745" if metricas['dias_sem_coleta'] <= 7 else "#ffc107" if metricas['dias_sem_coleta'] <= 30 else "#dc3545"
-                        risco_diario = metricas.get('risco_diario', 'N/A')
-                        cores_risco = {
-                            '🟢 Normal': '#16A34A',
-                            '🟡 Atenção': '#F59E0B',
-                            '🟠 Moderado': '#FB923C',
-                            '🔴 Alto': '#DC2626',
-                            '⚫ Crítico': '#111827'
-                        }
-                        risco_diario_color = cores_risco.get(risco_diario, "#6c757d")
-                        delta_mm7 = metricas.get('delta_mm7')
-                        if isinstance(delta_mm7, (int, float)):
-                            delta_mm7_color = "#28a745" if delta_mm7 >= 0 else "#dc3545"
-                            delta_mm7_display = f"{delta_mm7:.1f}%"
-                        else:
-                            delta_mm7_color = "#6c757d"
-                            delta_mm7_display = "--"
-                        mm7_val = metricas.get('mm7')
-                        if isinstance(mm7_val, (int, float)):
-                            mm7_display = f"{mm7_val:.1f}"
-                            mm7_color = "#2563eb"
-                        else:
-                            mm7_display = "--"
-                            mm7_color = "#6c757d"
-                        mm30_val = metricas.get('mm30')
-                        if isinstance(mm30_val, (int, float)):
-                            mm30_display = f"{mm30_val:.1f}"
-                            mm30_color = "#2563eb"
-                        else:
-                            mm30_display = "--"
-                            mm30_color = "#6c757d"
-                        delta_mm30_val = metricas.get('delta_mm30')
-                        if isinstance(delta_mm30_val, (int, float)):
-                            delta_mm30_color = "#28a745" if delta_mm30_val >= 0 else "#dc3545"
-                            delta_mm30_display = f"{delta_mm30_val:.1f}%"
-                        else:
-                            delta_mm30_color = "#6c757d"
-                            delta_mm30_display = "--"
+                        dias_sem_coleta = metricas.get('dias_sem_coleta', 0)
+                        # Remover indicador "0 dias sem coleta" - mostrar apenas o valor
+                        dias_color = "#28a745" if dias_sem_coleta == 0 else "#ffc107" if dias_sem_coleta <= 7 else "#dc3545"
                      
                         st.markdown(f"""
-                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid {risco_color};">
-                                <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">STATUS & RISCO</div>
-                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; text-align: center;">
+                            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid {dias_color};">
+                                <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">STATUS</div>
+                                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; text-align: center;">
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666;">Status Atual</div>
-                                        <div style="font-size: 1.1rem; font-weight: bold; color: {status_color};">{metricas['agudo']}</div>
+                                        <div style="font-size: 1.3rem; font-weight: bold; color: {status_color};">{metricas['agudo']}</div>
                                     </div>
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666;">Dias sem Coleta</div>
-                                        <div style="font-size: 1.1rem; font-weight: bold; color: {risco_color};">{metricas['dias_sem_coleta']}</div>
-                                    </div>
-                                    <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Risco Diário</div>
-                                        <div style="font-size: 1.1rem; font-weight: bold; color: {risco_diario_color};">{risco_diario}</div>
-                                    </div>
-                                    <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Δ vs MM7</div>
-                                        <div style="font-size: 1.1rem; font-weight: bold; color: {delta_mm7_color};">{delta_mm7_display}</div>
-                                    </div>
-                                    <div>
-                                        <div style="font-size: 0.8rem; color: #666;">MM7 (Média 7d)</div>
-                                        <div style="font-size: 1.1rem; font-weight: bold; color: {mm7_color};">{mm7_display}</div>
-                                    </div>
-                                    <div>
-                                        <div style="font-size: 0.8rem; color: #666;">MM30 (Média 30d)</div>
-                                        <div style="font-size: 1.1rem; font-weight: bold; color: {mm30_color};">{mm30_display}</div>
-                                    </div>
-                                    <div>
-                                        <div style="font-size: 0.8rem; color: #666;">Δ vs MM30</div>
-                                        <div style="font-size: 1.1rem; font-weight: bold; color: {delta_mm30_color};">{delta_mm30_display}</div>
+                                        <div style="font-size: 1.3rem; font-weight: bold; color: {dias_color};">{dias_sem_coleta}</div>
                                     </div>
                                 </div>
                             </div>
@@ -5851,7 +6052,7 @@ def main():
                         # Histórico de Performance - Reorganizado conforme solicitação
                         # Calcular máxima de coletas histórica (respeitando meses disponíveis)
                         metricas_evolucao = MetricasAvancadas.calcular_metricas_evolucao(
-                            df_filtrado,
+                            df_analise_detalhada,
                             lab_cnpj=lab_final_cnpj,
                             lab_nome=lab_final
                         )
@@ -5925,7 +6126,7 @@ def main():
                         st.markdown("---")
                         st.subheader("📈 Evolução Mensal")
                         ChartManager.criar_grafico_evolucao_mensal(
-                            df_filtrado,
+                            df_analise_detalhada,
                             lab_cnpj=lab_final_cnpj,
                             lab_nome=lab_final,
                             chart_key="historico"
@@ -5950,7 +6151,7 @@ def main():
                         st.subheader("📊 Distribuição de Coletas por Dia Útil da Semana")
                         # Gráfico com destaque maior conforme solicitado
                         ChartManager.criar_grafico_media_dia_semana_novo(
-                            df_filtrado,
+                            df_analise_detalhada,
                             lab_cnpj=lab_final_cnpj,
                             lab_nome=lab_final,
                             filtros=filtros
@@ -5959,7 +6160,7 @@ def main():
                     with tab_media_diaria:
                         st.subheader("📊 Média Diária por Mês")
                         ChartManager.criar_grafico_media_diaria(
-                            df_filtrado,
+                            df_analise_detalhada,
                             lab_cnpj=lab_final_cnpj,
                             lab_nome=lab_final
                         )
@@ -5967,7 +6168,7 @@ def main():
                     with tab_coletas_dia:
                         st.subheader("📈 Coletas por Dia Útil do Mês")
                         ChartManager.criar_grafico_coletas_por_dia(
-                            df_filtrado,
+                            df_analise_detalhada,
                             lab_cnpj=lab_final_cnpj,
                             lab_nome=lab_final
                         )
@@ -5976,7 +6177,7 @@ def main():
         # Carregar dados VIP para análise de rede
         df_vip_tabela = DataManager.carregar_dados_vip()
         # Adicionar informações de rede se disponível
-        df_tabela = df_filtrado.copy()
+        df_tabela = df_analise_detalhada.copy()
         mostrar_rede = False
         if df_vip_tabela is not None and not df_vip_tabela.empty:
             # Merge dos dados com informações VIP
@@ -6082,18 +6283,17 @@ def main():
             """, unsafe_allow_html=True)
 
         # Configurar colunas da tabela
-        colunas_principais = [
-            'CNPJ_PCL', 'Nome_Fantasia_PCL', 'Estado', 'Cidade', 'Representante_Nome',
-            'Risco_Diario', 'Dias_Sem_Coleta',
-            'Volume_Atual_2025', 'Volume_Maximo_2024', 'Tendencia_Volume',
-            # Ordem lógica: (Hoje), (D-1, ΔD-1), (MM7, ΔMM7), (MM30, ΔMM30)
-            'Vol_Hoje',
-            'Vol_D1', 'Delta_D1',
-            'MM7', 'Delta_MM7',
-            'MM30', 'Delta_MM30',
-            # Médias móveis adicionais no final
-            'MM90', 'Delta_MM90'
-        ]
+        # Se faz parte de rede: mostrar visão mensal por coluna (janeiro, fevereiro...)
+        # Se não faz parte de rede: não mostrar lista de labs
+        if mostrar_rede and rede_filtro != "Todas":
+            # Para quem é de rede: remover indicadores antigos e substituir por visão mensal
+            colunas_principais = [
+                'CNPJ_PCL', 'Nome_Fantasia_PCL', 'Estado', 'Cidade', 'Representante_Nome',
+                'Dias_Sem_Coleta'  # Manter apenas dias sem coleta, remover Risco_Diario, Tendencia_Volume, Deltas
+            ]
+        else:
+            # Para quem não é de rede: não mostrar lista (será tratado abaixo)
+            colunas_principais = []
 
         # Adicionar colunas de coletas mensais (2024 e 2025)
         meses_nomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
@@ -6110,11 +6310,64 @@ def main():
         # Colunas de 2025 (até o mês atual)
         cols_2025 = [f'N_Coletas_{m}_25' for m in meses_nomes[:mes_limite_2025]]
 
-        colunas_principais.extend(cols_2024 + cols_2025)
-
-        # Adicionar colunas de rede se disponível
-        if mostrar_rede:
+        # Se faz parte de rede e está filtrado por rede específica: adicionar colunas mensais e métricas
+        if mostrar_rede and rede_filtro != "Todas":
+            # Calcular métricas adicionais para cada lab da rede
+            df_tabela_filtrada = df_tabela_filtrada.copy()
+            
+            # Calcular volume atual (mês vigente)
+            mes_atual_codigo = meses_nomes[datetime.now().month - 1]
+            col_mes_atual = f'N_Coletas_{mes_atual_codigo}_25'
+            if col_mes_atual in df_tabela_filtrada.columns:
+                df_tabela_filtrada['Volume_Mes_Vigente'] = pd.to_numeric(df_tabela_filtrada[col_mes_atual], errors='coerce').fillna(0)
+            else:
+                df_tabela_filtrada['Volume_Mes_Vigente'] = 0
+            
+            # Calcular maior mês 2024 (valor + mês)
+            if cols_2024:
+                df_tabela_filtrada['Maior_Mes_2024_Valor'] = df_tabela_filtrada[cols_2024].max(axis=1, skipna=True).fillna(0)
+                df_tabela_filtrada['Maior_Mes_2024_Nome'] = df_tabela_filtrada[cols_2024].idxmax(axis=1).apply(
+                    lambda x: meses_nomes_completos.get(x.split('_')[2], x.split('_')[2]) if pd.notna(x) and '_' in str(x) else 'N/A'
+                )
+            else:
+                df_tabela_filtrada['Maior_Mes_2024_Valor'] = 0
+                df_tabela_filtrada['Maior_Mes_2024_Nome'] = 'N/A'
+            
+            # Calcular maior mês 2025 (valor + mês)
+            if cols_2025:
+                df_tabela_filtrada['Maior_Mes_2025_Valor'] = df_tabela_filtrada[cols_2025].max(axis=1, skipna=True).fillna(0)
+                df_tabela_filtrada['Maior_Mes_2025_Nome'] = df_tabela_filtrada[cols_2025].idxmax(axis=1).apply(
+                    lambda x: meses_nomes_completos.get(x.split('_')[2], x.split('_')[2]) if pd.notna(x) and '_' in str(x) else 'N/A'
+                )
+            else:
+                df_tabela_filtrada['Maior_Mes_2025_Valor'] = 0
+                df_tabela_filtrada['Maior_Mes_2025_Nome'] = 'N/A'
+            
+            # Total de coletas do mês vigente (agregado)
+            total_mes_vigente = int(df_tabela_filtrada['Volume_Mes_Vigente'].sum())
+            
+            # Adicionar colunas mensais e métricas
+            colunas_principais.extend(['Volume_Mes_Vigente', 'Maior_Mes_2024_Valor', 'Maior_Mes_2024_Nome',
+                                      'Maior_Mes_2025_Valor', 'Maior_Mes_2025_Nome'])
+            colunas_principais.extend(cols_2024 + cols_2025)  # Adicionar colunas mensais
             colunas_principais.extend(['Rede', 'Ranking', 'Ranking Rede'])
+            
+            # Mostrar métricas agregadas da rede
+            st.markdown(f"""
+            <div style="background: #e8f5e9; border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
+                <h4 style="margin: 0 0 0.5rem 0; color: #52B54B;">📊 Métricas da Rede: {rede_filtro}</h4>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 1.2rem; font-weight: bold; color: #6BBF47;">{total_mes_vigente:,.0f}</div>
+                        <div style="font-size: 0.8rem; color: #666;">Total Coletas Mês Vigente</div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        elif not mostrar_rede or rede_filtro == "Todas":
+            # Se não faz parte de rede: não mostrar lista de labs
+            colunas_principais = []
+        
         colunas_existentes = [col for col in colunas_principais if col in df_tabela_filtrada.columns]
         if not df_tabela_filtrada.empty and colunas_existentes:
             df_exibicao = df_tabela_filtrada[colunas_existentes].copy()
@@ -6147,74 +6400,34 @@ def main():
                     "👤 Representante",
                     help="Nome do representante comercial responsável pelo laboratório. Útil para contato direto e gestão de relacionamento"
                 ),
-                "Risco_Diario": st.column_config.TextColumn(
-                    "Risco Diário",
-                    help="Classificação de risco diária: 🟢 Normal, 🟡 Atenção, 🟠 Moderado, 🔴 Alto, ⚫ Crítico. Baseado em volume atual vs. médias móveis e padrões históricos"
-                ),
                 "Dias_Sem_Coleta": st.column_config.NumberColumn(
                     "Dias Sem Coleta",
                     help="Número consecutivo de dias sem registrar coletas. Valores altos indicam possível inatividade do laboratório"
                 ),
-                # Removido da tabela principal: Variação %
-                "Volume_Atual_2025": st.column_config.NumberColumn(
-                    "Volume Atual 2025",
-                    help="Soma total de coletas em 2025 até o momento (todos os meses disponíveis até hoje)"
+                "Volume_Mes_Vigente": st.column_config.NumberColumn(
+                    "Volume Mês Vigente",
+                    format="%d",
+                    help="Volume de coletas do mês atual (vigente)"
                 ),
-                "Volume_Maximo_2024": st.column_config.NumberColumn(
-                    "Maior Mês 2024",
-                    help="Maior volume mensal de coletas em 2024 (melhor mês individual do ano)"
+                "Maior_Mes_2024_Valor": st.column_config.NumberColumn(
+                    "Maior Mês 2024 (Valor)",
+                    format="%d",
+                    help="Maior volume mensal de coletas em 2024"
                 ),
-                "Tendencia_Volume": st.column_config.TextColumn(
-                    "Tendência",
-                    help="Tendência de volume calculada comparando Volume Atual 2025 vs. Maior Mês 2024: Crescimento (>100%), Declínio (<50%), Estável (50-100%)"
+                "Maior_Mes_2024_Nome": st.column_config.TextColumn(
+                    "Maior Mês 2024 (Mês)",
+                    help="Mês em que ocorreu o maior volume de coletas em 2024"
+                ),
+                "Maior_Mes_2025_Valor": st.column_config.NumberColumn(
+                    "Maior Mês 2025 (Valor)",
+                    format="%d",
+                    help="Maior volume mensal de coletas em 2025"
+                ),
+                "Maior_Mes_2025_Nome": st.column_config.TextColumn(
+                    "Maior Mês 2025 (Mês)",
+                    help="Mês em que ocorreu o maior volume de coletas em 2025"
                 )
             }
-
-            column_config.update({
-                "Vol_Hoje": st.column_config.NumberColumn(
-                    "Coletas (Hoje)",
-                    help="Total de coletas registradas na data de referência (dia mais recente da série diária)"
-                ),
-                "Vol_D1": st.column_config.NumberColumn(
-                    "Coletas (D-1)",
-                    help="Volume de coletas do dia imediatamente anterior ao atual"
-                ),
-                "MM7": st.column_config.NumberColumn(
-                    "MM7",
-                    format="%.3f",
-                    help="Média móvel de 7 dias - média aritmética simples dos últimos 7 dias (inclui dias sem coleta como zero)"
-                ),
-                "MM30": st.column_config.NumberColumn(
-                    "MM30",
-                    format="%.3f",
-                    help="Média móvel de 30 dias - média aritmética simples dos últimos 30 dias (inclui dias sem coleta como zero)"
-                ),
-                "MM90": st.column_config.NumberColumn(
-                    "MM90",
-                    format="%.3f",
-                    help="Média móvel de 90 dias - média aritmética simples dos últimos 90 dias (inclui dias sem coleta como zero)"
-                ),
-                "Delta_D1": st.column_config.NumberColumn(
-                    "Δ vs D-1",
-                    format="%.1f%%",
-                    help="Variação percentual: (Vol_Hoje - Vol_D1) / Vol_D1 × 100. Indica crescimento ou queda vs. dia anterior"
-                ),
-                "Delta_MM7": st.column_config.NumberColumn(
-                    "Δ vs MM7",
-                    format="%.1f%%",
-                    help="Variação percentual: (Vol_Hoje - MM7) / MM7 × 100. Indica performance vs. média semanal dos últimos 7 dias"
-                ),
-                "Delta_MM30": st.column_config.NumberColumn(
-                    "Δ vs MM30",
-                    format="%.1f%%",
-                    help="Variação percentual: (Vol_Hoje - MM30) / MM30 × 100. Indica performance vs. média mensal dos últimos 30 dias"
-                ),
-                "Delta_MM90": st.column_config.NumberColumn(
-                    "Δ vs MM90",
-                    format="%.1f%%",
-                    help="Variação percentual: (Vol_Hoje - MM90) / MM90 × 100. Indica performance vs. média trimestral dos últimos 90 dias"
-                )
-            })
             
             # Adicionar configurações para colunas mensais de 2024
             for col in cols_2024:
@@ -6264,20 +6477,12 @@ def main():
                 "CNPJ_PCL": "CNPJ",
                 "Nome_Fantasia_PCL": "Nome Fantasia",
                 "Representante_Nome": "Representante",
-                "Risco_Diario": "Risco Diário",
                 "Dias_Sem_Coleta": "Dias Sem Coleta",
-                "Volume_Atual_2025": "Volume Atual 2025",
-                "Volume_Maximo_2024": "Maior Mês 2024",
-                "Tendencia_Volume": "Tendência",
-                "Vol_Hoje": "Coletas (Hoje)",
-                "Vol_D1": "D-1",
-                "MM7": "MM7",
-                "MM30": "MM30",
-                "MM90": "MM90",
-                "Delta_D1": "Δ vs D-1",
-                "Delta_MM7": "Δ vs MM7",
-                "Delta_MM30": "Δ vs MM30",
-                "Delta_MM90": "Δ vs MM90",
+                "Volume_Mes_Vigente": "Volume Mês Vigente",
+                "Maior_Mes_2024_Valor": "Maior Mês 2024 (Valor)",
+                "Maior_Mes_2024_Nome": "Maior Mês 2024 (Mês)",
+                "Maior_Mes_2025_Valor": "Maior Mês 2025 (Valor)",
+                "Maior_Mes_2025_Nome": "Maior Mês 2025 (Mês)",
                 "Ranking_Rede": "Ranking Rede"
             })
             
@@ -6339,7 +6544,11 @@ def main():
                     key="download_excel_tabela"
                 )
         else:
-            st.info("📋 Nenhum laboratório encontrado com os filtros aplicados.")
+            # Se não faz parte de rede, não mostrar lista
+            if not mostrar_rede or rede_filtro == "Todas":
+                st.info("📋 Esta seção é exibida apenas para laboratórios que fazem parte de uma rede. Selecione uma rede específica para visualizar os dados.")
+            else:
+                st.info("📋 Nenhum laboratório encontrado com os filtros aplicados.")
         
         # ========================================
         # DADOS DO CONCORRENTE GRALAB (FINAL DA PÁGINA)

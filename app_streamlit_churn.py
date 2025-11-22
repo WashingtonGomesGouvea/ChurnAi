@@ -6643,11 +6643,11 @@ def main():
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
-                        # Gráfico de coletas diárias (mês atual) + mensal
+                        # Gráfico de coletas diárias (mês atual) + comparação
                         st.markdown("---")
                         st.subheader("📊 Coletas por Dia (mês atual)")
                         
-                        # Buscar dados diários do mês atual da base completa
+                        # Buscar dados diários da base completa
                         dados_encontrados = False
                         if lab_final_cnpj and 'Dados_Diarios_2025' in df.columns:
                             lab_dados = df[df['CNPJ_Normalizado'] == lab_final_cnpj]
@@ -6658,57 +6658,212 @@ def main():
                                     # Parse dos dados JSON
                                     dados_diarios = json.loads(dados_diarios_raw) if isinstance(dados_diarios_raw, str) else dados_diarios_raw
                                     
-                                    # Obter chave do mês atual
+                                    # Obter mês atual
                                     hoje = datetime.now()
-                                    mes_atual_key = f"{hoje.year}-{hoje.month:02d}"
-                                    mes_nome = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-                                              "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"][hoje.month - 1]
+                                    mes_atual_num = hoje.month
+                                    ano_atual = hoje.year
+                                    mes_atual_key = f"{ano_atual}-{mes_atual_num:02d}"
+                                    
+                                    meses_nomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                                                  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+                                    mes_atual_nome = meses_nomes[mes_atual_num - 1]
+                                    
+                                    # Criar lista de meses disponíveis para comparação
+                                    meses_disponiveis = []
+                                    meses_opcoes_display = ["Nenhum (apenas mês atual)"]
+                                    meses_opcoes_keys = [None]
+                                    
+                                    # Adicionar meses de 2025 (até o mês atual)
+                                    for mes_num in range(1, mes_atual_num + 1):
+                                        mes_key = f"2025-{mes_num:02d}"
+                                        if mes_key in dados_diarios and dados_diarios[mes_key] and mes_key != mes_atual_key:
+                                            meses_opcoes_display.append(f"{meses_nomes[mes_num - 1]}/2025")
+                                            meses_opcoes_keys.append(mes_key)
+                                    
+                                    # Adicionar meses de 2024
+                                    for mes_num in range(1, 13):
+                                        mes_key = f"2024-{mes_num:02d}"
+                                        if mes_key in dados_diarios and dados_diarios[mes_key]:
+                                            meses_opcoes_display.append(f"{meses_nomes[mes_num - 1]}/2024")
+                                            meses_opcoes_keys.append(mes_key)
+                                    
+                                    # Seletor de mês para comparação
+                                    col_select, col_info = st.columns([3, 1])
+                                    with col_select:
+                                        if len(meses_opcoes_display) > 1:
+                                            mes_comparacao_idx = st.selectbox(
+                                                "🔄 Comparar com outro mês:",
+                                                range(len(meses_opcoes_display)),
+                                                format_func=lambda i: meses_opcoes_display[i],
+                                                key="select_mes_comparacao"
+                                            )
+                                            mes_comparacao_key = meses_opcoes_keys[mes_comparacao_idx]
+                                        else:
+                                            mes_comparacao_key = None
+                                            st.info("💡 Nenhum outro mês com dados disponível para comparação")
                                     
                                     # Verificar se há dados para o mês atual
                                     if mes_atual_key in dados_diarios and dados_diarios[mes_atual_key]:
-                                        dias_mes = dados_diarios[mes_atual_key]
+                                        dias_mes_atual = dados_diarios[mes_atual_key]
                                         
-                                        # Criar DataFrame com os dias ordenados
-                                        df_dias = pd.DataFrame([
+                                        # Criar DataFrame do mês atual
+                                        df_dias_atual = pd.DataFrame([
                                             {"Dia": int(dia), "Coletas": int(volume)}
-                                            for dia, volume in sorted(dias_mes.items(), key=lambda x: int(x[0]))
+                                            for dia, volume in sorted(dias_mes_atual.items(), key=lambda x: int(x[0]))
                                         ])
                                         
-                                        if not df_dias.empty:
+                                        if not df_dias_atual.empty:
                                             dados_encontrados = True
                                             
-                                            # Criar gráfico de barras
-                                            fig_dias = px.bar(
-                                                df_dias,
-                                                x="Dia",
-                                                y="Coletas",
-                                                text="Coletas",
-                                                title=f"Coletas por dia - {mes_nome}/{hoje.year}",
-                                                color="Coletas",
-                                                color_continuous_scale="Blues"
-                                            )
-                                            fig_dias.update_traces(textposition='outside', textfont_size=10)
-                                            fig_dias.update_layout(
-                                                height=360,
-                                                margin=dict(l=10, r=10, t=60, b=10),
-                                                xaxis_title="Dia do Mês",
-                                                yaxis_title="Número de Coletas",
-                                                showlegend=False
-                                            )
-                                            fig_dias.update_xaxes(dtick=1)  # Mostrar todos os dias
+                                            # Se houver mês de comparação selecionado
+                                            if mes_comparacao_key:
+                                                # Obter dados do mês de comparação
+                                                dias_mes_comp = dados_diarios.get(mes_comparacao_key, {})
+                                                df_dias_comp = pd.DataFrame([
+                                                    {"Dia": int(dia), "Coletas": int(volume)}
+                                                    for dia, volume in sorted(dias_mes_comp.items(), key=lambda x: int(x[0]))
+                                                ]) if dias_mes_comp else pd.DataFrame()
+                                                
+                                                # Extrair ano e mês da comparação
+                                                ano_comp, mes_comp = mes_comparacao_key.split('-')
+                                                mes_comp_nome = meses_nomes[int(mes_comp) - 1]
+                                                
+                                                # Exibir dois gráficos lado a lado
+                                                col1, col2 = st.columns(2)
+                                                
+                                                with col1:
+                                                    # Gráfico do mês atual
+                                                    fig_atual = px.bar(
+                                                        df_dias_atual,
+                                                        x="Dia",
+                                                        y="Coletas",
+                                                        text="Coletas",
+                                                        title=f"{mes_atual_nome}/{ano_atual}",
+                                                        color="Coletas",
+                                                        color_continuous_scale="Blues"
+                                                    )
+                                                    fig_atual.update_traces(textposition='outside', textfont_size=10)
+                                                    fig_atual.update_layout(
+                                                        height=360,
+                                                        margin=dict(l=10, r=10, t=40, b=10),
+                                                        xaxis_title="Dia",
+                                                        yaxis_title="Coletas",
+                                                        showlegend=False
+                                                    )
+                                                    fig_atual.update_xaxes(dtick=1)
+                                                    st.plotly_chart(fig_atual, use_container_width=True, key="graf_atual")
+                                                
+                                                with col2:
+                                                    if not df_dias_comp.empty:
+                                                        # Gráfico do mês de comparação
+                                                        fig_comp = px.bar(
+                                                            df_dias_comp,
+                                                            x="Dia",
+                                                            y="Coletas",
+                                                            text="Coletas",
+                                                            title=f"{mes_comp_nome}/{ano_comp}",
+                                                            color="Coletas",
+                                                            color_continuous_scale="Greens"
+                                                        )
+                                                        fig_comp.update_traces(textposition='outside', textfont_size=10)
+                                                        fig_comp.update_layout(
+                                                            height=360,
+                                                            margin=dict(l=10, r=10, t=40, b=10),
+                                                            xaxis_title="Dia",
+                                                            yaxis_title="Coletas",
+                                                            showlegend=False
+                                                        )
+                                                        fig_comp.update_xaxes(dtick=1)
+                                                        st.plotly_chart(fig_comp, use_container_width=True, key="graf_comparacao")
+                                                    else:
+                                                        st.warning("Sem dados para o mês selecionado")
+                                                
+                                                # Métricas comparativas
+                                                st.markdown("### 📊 Comparação de Métricas")
+                                                col1, col2, col3, col4 = st.columns(4)
+                                                
+                                                total_atual = int(df_dias_atual['Coletas'].sum())
+                                                media_atual = float(df_dias_atual['Coletas'].mean())
+                                                max_atual = int(df_dias_atual['Coletas'].max())
+                                                
+                                                if not df_dias_comp.empty:
+                                                    total_comp = int(df_dias_comp['Coletas'].sum())
+                                                    media_comp = float(df_dias_comp['Coletas'].mean())
+                                                    max_comp = int(df_dias_comp['Coletas'].max())
+                                                    
+                                                    diff_total = total_atual - total_comp
+                                                    diff_total_pct = (diff_total / total_comp * 100) if total_comp > 0 else 0
+                                                    diff_media = media_atual - media_comp
+                                                    diff_media_pct = (diff_media / media_comp * 100) if media_comp > 0 else 0
+                                                    
+                                                    with col1:
+                                                        st.metric(
+                                                            "Total no Mês",
+                                                            f"{total_atual:,}",
+                                                            delta=f"{diff_total:+,} ({diff_total_pct:+.1f}%)",
+                                                            delta_color="normal"
+                                                        )
+                                                    with col2:
+                                                        st.metric(
+                                                            "Média Diária",
+                                                            f"{media_atual:.1f}",
+                                                            delta=f"{diff_media:+.1f} ({diff_media_pct:+.1f}%)",
+                                                            delta_color="normal"
+                                                        )
+                                                    with col3:
+                                                        st.metric(
+                                                            f"Máximo {mes_atual_nome}",
+                                                            f"{max_atual:,}",
+                                                            help=f"Dia {df_dias_atual.loc[df_dias_atual['Coletas'].idxmax(), 'Dia']}"
+                                                        )
+                                                    with col4:
+                                                        st.metric(
+                                                            f"Máximo {mes_comp_nome}",
+                                                            f"{max_comp:,}",
+                                                            help=f"Dia {df_dias_comp.loc[df_dias_comp['Coletas'].idxmax(), 'Dia']}"
+                                                        )
+                                                else:
+                                                    with col1:
+                                                        st.metric("Total Mês Atual", f"{total_atual:,}")
+                                                    with col2:
+                                                        st.metric("Média Diária", f"{media_atual:.1f}")
+                                                    with col3:
+                                                        st.metric("Dia com Mais Coletas", f"Dia {df_dias_atual.loc[df_dias_atual['Coletas'].idxmax(), 'Dia']}")
+                                                    with col4:
+                                                        st.metric("Máximo em um Dia", f"{max_atual:,}")
                                             
-                                            st.plotly_chart(fig_dias, use_container_width=True, key="graf_dias_mes_detalhe")
-                                            
-                                            # Adicionar estatísticas resumidas
-                                            col1, col2, col3, col4 = st.columns(4)
-                                            with col1:
-                                                st.metric("Total no Mês", f"{df_dias['Coletas'].sum():,}")
-                                            with col2:
-                                                st.metric("Média Diária", f"{df_dias['Coletas'].mean():.1f}")
-                                            with col3:
-                                                st.metric("Dia com Mais Coletas", f"Dia {df_dias.loc[df_dias['Coletas'].idxmax(), 'Dia']}")
-                                            with col4:
-                                                st.metric("Máximo em um Dia", f"{df_dias['Coletas'].max():,}")
+                                            else:
+                                                # Apenas mês atual (sem comparação)
+                                                fig_dias = px.bar(
+                                                    df_dias_atual,
+                                                    x="Dia",
+                                                    y="Coletas",
+                                                    text="Coletas",
+                                                    title=f"Coletas por dia - {mes_atual_nome}/{ano_atual}",
+                                                    color="Coletas",
+                                                    color_continuous_scale="Blues"
+                                                )
+                                                fig_dias.update_traces(textposition='outside', textfont_size=10)
+                                                fig_dias.update_layout(
+                                                    height=360,
+                                                    margin=dict(l=10, r=10, t=60, b=10),
+                                                    xaxis_title="Dia do Mês",
+                                                    yaxis_title="Número de Coletas",
+                                                    showlegend=False
+                                                )
+                                                fig_dias.update_xaxes(dtick=1)
+                                                st.plotly_chart(fig_dias, use_container_width=True, key="graf_dias_mes_detalhe")
+                                                
+                                                # Métricas (sem comparação)
+                                                col1, col2, col3, col4 = st.columns(4)
+                                                with col1:
+                                                    st.metric("Total no Mês", f"{df_dias_atual['Coletas'].sum():,}")
+                                                with col2:
+                                                    st.metric("Média Diária", f"{df_dias_atual['Coletas'].mean():.1f}")
+                                                with col3:
+                                                    st.metric("Dia com Mais Coletas", f"Dia {df_dias_atual.loc[df_dias_atual['Coletas'].idxmax(), 'Dia']}")
+                                                with col4:
+                                                    st.metric("Máximo em um Dia", f"{df_dias_atual['Coletas'].max():,}")
                                 
                                 except Exception as e:
                                     import traceback

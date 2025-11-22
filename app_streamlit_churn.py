@@ -6645,7 +6645,15 @@ def main():
                         """, unsafe_allow_html=True)
                         # Gráfico de coletas diárias (mês atual) + comparação
                         st.markdown("---")
-                        st.subheader("📊 Coletas por Dia (mês atual)")
+                        # Adicionar helper no título
+                        col_title, col_helper = st.columns([4, 1])
+                        with col_title:
+                            st.subheader("📊 Coletas por Dia (mês atual)")
+                        with col_helper:
+                            st.markdown(
+                                "💡 *Visualize coletas dia a dia e compare com outros meses*",
+                                help="Esta seção mostra o volume de coletas realizadas em cada dia do mês. Você pode selecionar outro mês abaixo para comparação lado a lado."
+                            )
                         
                         # Buscar dados diários da base completa
                         dados_encontrados = False
@@ -6695,7 +6703,8 @@ def main():
                                                 "🔄 Comparar com outro mês:",
                                                 range(len(meses_opcoes_display)),
                                                 format_func=lambda i: meses_opcoes_display[i],
-                                                key="select_mes_comparacao"
+                                                key="select_mes_comparacao",
+                                                help="Selecione um mês para comparar lado a lado com o mês atual. As métricas mostrarão a diferença (delta) entre os períodos."
                                             )
                                             mes_comparacao_key = meses_opcoes_keys[mes_comparacao_idx]
                                         else:
@@ -6780,6 +6789,7 @@ def main():
                                                 
                                                 # Métricas comparativas
                                                 st.markdown("### 📊 Comparação de Métricas")
+                                                st.caption(f"Comparando {mes_atual_nome}/{ano_atual} (azul) vs {mes_comp_nome}/{ano_comp} (verde) • Valores em vermelho ↓ indicam redução | Valores em verde ↑ indicam aumento")
                                                 col1, col2, col3, col4 = st.columns(4)
                                                 
                                                 total_atual = int(df_dias_atual['Coletas'].sum())
@@ -6801,14 +6811,16 @@ def main():
                                                             "Total no Mês",
                                                             f"{total_atual:,}",
                                                             delta=f"{diff_total:+,} ({diff_total_pct:+.1f}%)",
-                                                            delta_color="normal"
+                                                            delta_color="normal",
+                                                            help=f"Soma de todas as coletas do mês. Delta mostra diferença vs {mes_comp_nome}/{ano_comp}: {total_atual:,} - {total_comp:,} = {diff_total:+,}"
                                                         )
                                                     with col2:
                                                         st.metric(
                                                             "Média Diária",
                                                             f"{media_atual:.1f}",
                                                             delta=f"{diff_media:+.1f} ({diff_media_pct:+.1f}%)",
-                                                            delta_color="normal"
+                                                            delta_color="normal",
+                                                            help=f"Média de coletas por dia no mês. Delta vs {mes_comp_nome}/{ano_comp}: {media_atual:.1f} - {media_comp:.1f} = {diff_media:+.1f}"
                                                         )
                                                     with col3:
                                                         st.metric(

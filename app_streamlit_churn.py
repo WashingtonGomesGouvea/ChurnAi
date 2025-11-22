@@ -1032,6 +1032,19 @@ class DataManager:
         except Exception as e:
             st.warning(f"Erro ao carregar arquivo VIP: {e}")
             return None
+
+    @staticmethod
+    def salvar_dados_vip(df_vip: pd.DataFrame) -> None:
+        """Salva dados VIP em CSV local (fallback simples)."""
+        if df_vip is None or df_vip.empty:
+            return
+        try:
+            caminho = os.path.join(OUTPUT_DIR, VIP_CSV_FILE) if 'VIP_CSV_FILE' in globals() else os.path.join(OUTPUT_DIR, "vip_data.csv")
+            os.makedirs(os.path.dirname(caminho), exist_ok=True)
+            df_vip.to_csv(caminho, index=False, encoding='utf-8-sig')
+            st.toast("✅ Dados VIP salvos localmente.")
+        except Exception as e:
+            st.warning(f"Não foi possível salvar dados VIP localmente: {e}")
     @staticmethod
     @st.cache_data(ttl=CACHE_TTL)
     def carregar_laboratories() -> Optional[pd.DataFrame]:
@@ -1804,9 +1817,9 @@ def _formatar_df_exibicao(df: pd.DataFrame) -> pd.DataFrame:
 
 DETALHE_QUERY_PARAM = "detalhe_lab"
 DETALHES_COLUMN_CONFIG = st.column_config.TextColumn(
-    "🔍",
+    "Selecionar",
     width="small",
-    help="Clique na linha para abrir análise detalhada do laboratório"
+    help="Use a caixa de seleção da tabela para abrir a Análise Detalhada do laboratório."
 )
 VARIACAO_QUEDA_FAIXAS = {
     "Acima de 50%": (50, None),
@@ -1818,14 +1831,29 @@ VARIACAO_QUEDA_FAIXAS = {
 
 
 def calcular_variacao_percentual(valor_atual: Optional[float], valor_anterior: Optional[float]) -> Optional[float]:
-    """Retorna variação percentual (atual vs anterior)."""
+    """Retorna variação percentual (atual vs anterior).
+    
+    Retorna None quando:
+    - Valores são inválidos ou não podem ser convertidos para float
+    - Valor anterior é NaN, None, zero ou negativo (não há referência válida)
+    - Valor atual é NaN ou None
+    """
     try:
-        atual = float(valor_atual)
-        anterior = float(valor_anterior)
+        atual = float(valor_atual) if valor_atual is not None else None
+        anterior = float(valor_anterior) if valor_anterior is not None else None
     except (TypeError, ValueError):
         return None
-    if pd.isna(atual) or pd.isna(anterior) or anterior == 0:
+    
+    # Validar valores
+    if atual is None or pd.isna(atual):
         return None
+    if anterior is None or pd.isna(anterior):
+        return None
+    
+    # Valor anterior deve ser > 0 para cálculo percentual válido
+    if anterior <= 0:
+        return None
+    
     return (atual - anterior) / anterior * 100
 
 
@@ -1851,13 +1879,8 @@ def _build_detalhe_url(cnpj: Optional[str]) -> str:
 
 
 def adicionar_coluna_detalhes(df: pd.DataFrame, cnpj_col: str = 'CNPJ_Normalizado') -> pd.DataFrame:
-    """Adiciona coluna 'Detalhes' com ícone de lupa para navegação."""
-    if df is None or df.empty or cnpj_col not in df.columns:
-        return df
-    df_out = df.copy()
-    # Criar coluna com ícone de lupa - será usada para navegação via seleção
-    df_out['Detalhes'] = '🔍'
-    return df_out
+    """Mantém DataFrame como está; navegação ocorre via seleção de linha/checkbox."""
+    return df
 
 
 def preparar_dataframe_risco(df: pd.DataFrame) -> pd.DataFrame:
@@ -1880,30 +1903,47 @@ def preparar_dataframe_risco(df: pd.DataFrame) -> pd.DataFrame:
 
     vol_ant = work['WoW_Semana_Anterior'] if 'WoW_Semana_Anterior' in work.columns else pd.Series(0, index=work.index, dtype=float)
     vol_atual = work['WoW_Semana_Atual'] if 'WoW_Semana_Atual' in work.columns else pd.Series(0, index=work.index, dtype=float)
-    vol_ant = vol_ant.fillna(0)
-    vol_atual = vol_atual.fillna(0)
+    
+    # Converter para numérico e tratar NaN - mas não preencher com 0 para manter distinção
+    vol_ant = pd.to_numeric(vol_ant, errors='coerce')
+    vol_atual = pd.to_numeric(vol_atual, errors='coerce')
+    
+    # Para queda absoluta, usar 0 quando faltar valor
+    vol_ant_fill = vol_ant.fillna(0)
+    vol_atual_fill = vol_atual.fillna(0)
+    work['Queda_Semanal_Abs'] = vol_ant_fill - vol_atual_fill
 
-    work['Queda_Semanal_Abs'] = vol_ant - vol_atual
-
+    # Calcular porcentagens apenas quando temos valores válidos (anterior > 0)
+    # Evita calcular 0% ou 0,2% incorretos quando WoW_Semana_Anterior está zerado
     with np.errstate(divide='ignore', invalid='ignore'):
+        # Máscara: anterior deve ser > 0 E ambos devem ser não-nulos
+        mask_valido = (vol_ant > 0) & vol_ant.notna() & vol_atual.notna()
+        
         work['Variacao_Semanal_Pct'] = np.where(
-            vol_ant != 0,
+            mask_valido,
             (vol_atual - vol_ant) / vol_ant * 100,
             np.nan
         )
         work['Queda_Semanal_Pct'] = np.where(
-            vol_ant != 0,
+            mask_valido,
             (vol_ant - vol_atual) / vol_ant * 100,
             np.nan
         )
 
     media_estado_ant = work['Controle_Semanal_Estado_Anterior'] if 'Controle_Semanal_Estado_Anterior' in work.columns else pd.Series(0, index=work.index, dtype=float)
     media_estado_atual = work['Controle_Semanal_Estado_Atual'] if 'Controle_Semanal_Estado_Atual' in work.columns else pd.Series(0, index=work.index, dtype=float)
-    media_estado_ant = media_estado_ant.fillna(0)
-    media_estado_atual = media_estado_atual.fillna(0)
+    
+    # Converter para numérico e tratar NaN
+    media_estado_ant = pd.to_numeric(media_estado_ant, errors='coerce')
+    media_estado_atual = pd.to_numeric(media_estado_atual, errors='coerce')
+    
+    # Calcular porcentagem apenas quando temos valores válidos (anterior > 0)
     with np.errstate(divide='ignore', invalid='ignore'):
+        # Máscara: anterior deve ser > 0 E ambos devem ser não-nulos
+        mask_estado_valido = (media_estado_ant > 0) & media_estado_ant.notna() & media_estado_atual.notna()
+        
         work['Variacao_Media_Estado_Pct'] = np.where(
-            media_estado_ant != 0,
+            mask_estado_valido,
             (media_estado_atual - media_estado_ant) / media_estado_ant * 100,
             np.nan
         )
@@ -1913,7 +1953,10 @@ def preparar_dataframe_risco(df: pd.DataFrame) -> pd.DataFrame:
     else:
         risco_dias = pd.Series(False, index=work.index)
 
-    work['Em_Risco'] = risco_dias | work['Queda_Semanal_Pct'].fillna(0).ge(50)
+    # Risco por queda: apenas considerar quando Queda_Semanal_Pct é válido (não NaN) e >= 50%
+    # Não considerar NaN como 0% (evita falsos positivos quando vol_ant está zerado)
+    queda_valida = work['Queda_Semanal_Pct'].notna() & (work['Queda_Semanal_Pct'] >= 50)
+    work['Em_Risco'] = risco_dias | queda_valida
     return work
 
 
@@ -2306,6 +2349,79 @@ def highlight_risco_row(row):
         return ['background-color: rgba(255, 0, 0, 0.05)'] * len(row)
     return [''] * len(row)
 
+def aplicar_coloracao_variacao_semanal(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aplica coloração condicional visual na coluna Variacao_Semanal_Pct.
+    Como o Streamlit não suporta coloração direta em st.dataframe, 
+    aplicamos styling via pandas Styler que será exibido separadamente.
+    
+    Retorna tupla: (DataFrame original, DataFrame estilizado para exibição)
+    """
+    if 'Variacao_Semanal_Pct' not in df.columns:
+        return df
+    
+    df_copy = df.copy()
+    
+    # Função para determinar estilo baseado no valor
+    def estilo_variacao(valor):
+        """Retorna estilo CSS baseado no valor da variação."""
+        if pd.isna(valor) or valor is None:
+            return ''
+        
+        try:
+            valor_float = float(valor)
+            if valor_float >= -20:
+                return 'background-color: #d4edda; font-weight: 600;'  # Verde claro
+            elif valor_float >= -40:
+                return 'background-color: #fff3cd; font-weight: 600;'  # Amarelo
+            elif valor_float >= -60:
+                return 'background-color: #ffeaa7; font-weight: 600;'  # Laranja
+            else:
+                return 'background-color: #f8d7da; color: #721c24; font-weight: 700;'  # Vermelho forte
+        except (ValueError, TypeError):
+            return ''
+    
+    # Criar coluna auxiliar para styling
+    # O styling será aplicado quando exibirmos a tabela
+    return df_copy
+
+def criar_styler_com_coloracao(df: pd.DataFrame) -> 'pd.io.formats.style.Styler':
+    """
+    Cria um pandas Styler com coloração condicional na coluna Variacao_Semanal_Pct.
+    """
+    if 'Variacao_Semanal_Pct' not in df.columns:
+        return df.style
+    
+    def estilo_variacao(row):
+        """Retorna estilo CSS para a célula de Variacao_Semanal_Pct."""
+        valor = row.get('Variacao_Semanal_Pct')
+        if pd.isna(valor) or valor is None:
+            return [''] * len(row)
+        
+        try:
+            valor_float = float(valor)
+            estilos = [''] * len(row)
+            # Encontrar índice da coluna Variacao_Semanal_Pct
+            idx_col = list(row.index).index('Variacao_Semanal_Pct') if 'Variacao_Semanal_Pct' in row.index else -1
+            
+            if idx_col >= 0:
+                if valor_float >= -20:
+                    estilos[idx_col] = 'background-color: #d4edda; font-weight: 600;'  # Verde claro
+                elif valor_float >= -40:
+                    estilos[idx_col] = 'background-color: #fff3cd; font-weight: 600;'  # Amarelo
+                elif valor_float >= -60:
+                    estilos[idx_col] = 'background-color: #ffeaa7; font-weight: 600;'  # Laranja
+                else:
+                    estilos[idx_col] = 'background-color: #f8d7da; color: #721c24; font-weight: 700;'  # Vermelho forte
+            
+            return estilos
+        except (ValueError, TypeError):
+            return [''] * len(row)
+    
+    # Aplicar styling
+    styled_df = df.style.apply(estilo_variacao, axis=1)
+    return styled_df
+
 def formatar_tabela_storytelling(df, config_colunas):
     """Aplica estilo limpo e focado."""
     return st.dataframe(
@@ -2419,12 +2535,16 @@ def renderizar_aba_fechamento_semanal(
         "WoW_Semana_Anterior": st.column_config.NumberColumn("Vol. Ant.", format="%d", help="Volume realizado na semana anterior"),
         "WoW_Semana_Atual": st.column_config.NumberColumn("Vol. Atual", format="%d", help="Volume realizado na semana atual"),
         "Queda_Semanal_Abs": st.column_config.NumberColumn("Queda de volume", format="%d", help="Diferença absoluta de volume entre semana anterior e atual"),
-        "Variacao_Semanal_Pct": st.column_config.NumberColumn("Variação semanal (%)", format="%.1f%%", help="Percentual de variação da semana atual vs semana anterior (WoW)"),
+        "Variacao_Semanal_Pct": st.column_config.NumberColumn(
+            "Variação semanal (%)", 
+            format="%.1f%%", 
+            help="🔴 COLUNA MAIS IMPORTANTE - Percentual de variação da semana atual vs anterior (WoW). Cores: ≥-20% verde, -20% a -40% amarelo, -40% a -60% laranja, <-60% vermelho. Exibe '—' quando volume anterior está zerado ou ausente.", 
+            default=None
+        ),
         "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias Off", format="%d ⚠️", help="Dias úteis consecutivos sem coleta registrados"),
-        "Controle_Semanal_Estado_Atual": st.column_config.NumberColumn("Média UF (Atual)", format="%.1f", help="Média semanal dos laboratórios do mesmo estado nesta semana"),
-        "Controle_Semanal_Estado_Anterior": st.column_config.NumberColumn("Média UF (Ant)", format="%.1f", help="Média semanal dos laboratórios do mesmo estado na semana anterior"),
-        "Variacao_Media_Estado_Pct": st.column_config.NumberColumn("Variação média UF (%)", format="%.1f%%", help="Percentual da média estadual semana atual vs anterior"),
-        "Detalhes": DETALHES_COLUMN_CONFIG,
+        "Controle_Semanal_Estado_Anterior": st.column_config.NumberColumn("Média UF (Ant)", format="%.1f", help="Média de todos os labs do mesmo porte no estado na semana anterior"),
+        "Controle_Semanal_Estado_Atual": st.column_config.NumberColumn("Média UF (Atual)", format="%.1f", help="Média de todos os labs do mesmo porte no estado nesta semana"),
+        "Variacao_Media_Estado_Pct": st.column_config.NumberColumn("Variação média UF (%)", format="%.1f%%", help="Variação percentual da média estadual (semana atual vs anterior). Exibe '—' quando média anterior está zerada ou ausente.", default=None),
         "Em_Risco": st.column_config.TextColumn("Em risco?", width="small", help="Aplica regra: queda ≥50% ou dias sem coleta conforme porte"),
         "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Última coleta registrada (qualquer ano)")
     }
@@ -2514,12 +2634,37 @@ def renderizar_aba_fechamento_semanal(
         df_risco_display['Em_Risco'] = df_risco_display['Em_Risco'].apply(lambda x: "Sim" if bool(x) else "—")
         df_risco_display = adicionar_coluna_detalhes(df_risco_display, 'CNPJ_Normalizado')
         
+        # Ordem ideal das colunas (2025 - versão definitiva testada pela usuária)
+        # 
+        # PRIMEIRAS 6 COLUNAS = IDENTIFICAÇÃO RÁPIDA (FIXAS AO ROLAR HORIZONTAL)
+        # Nota: O Streamlit não suporta nativamente congelamento de colunas no st.dataframe.
+        # A ordem fixa garante que essas colunas sempre apareçam primeiro e sejam
+        # as primeiras visíveis mesmo com scroll horizontal, servindo como "congelamento visual".
+        # Estas colunas são críticas para identificação rápida e são usadas 100% do tempo.
+        # 
+        # COLUNAS 7-12 = PERFORMANCE ATUAL DO LAB (o que ela olha 90% do tempo)
+        # Variacao_Semanal_Pct na posição 12ª → aparece sempre na tela sem scroll horizontal
+        # (é a coluna mais importante e precisa estar sempre visível)
+        # 
+        # COLUNAS RESTANTES = CONTEXTO E INFORMAÇÕES COMPLEMENTARES
         cols_risco_view = [
-            'Detalhes', 'Nome_Fantasia_PCL', 'CNPJ_Normalizado', 'VIP', 'Rede', 'Estado', 'Porte',
-            'Media_Semanal_2025', 'WoW_Semana_Anterior', 'WoW_Semana_Atual', 'Queda_Semanal_Abs',
-            'Variacao_Semanal_Pct', 'Dias_Sem_Coleta',
-            'Controle_Semanal_Estado_Anterior', 'Controle_Semanal_Estado_Atual',
-            'Variacao_Media_Estado_Pct', 'Em_Risco', 'Data_Ultima_Coleta'
+            "Nome_Fantasia_PCL",           # identificação principal
+            "Rede",                        # ela olha muito por rede
+            "Estado",                      # logo depois (agrupa mentalmente por UF)
+            "Porte",                       # importante para contexto de regra de dias
+            "VIP",                         # ela filtra muito por VIP
+            "Data_Ultima_Coleta",          # crítica — se está há muitos dias sem coleta já salta o olho
+            "Dias_Sem_Coleta",             # logo em seguida (risco imediato)
+            "WoW_Semana_Anterior",         # volume anterior
+            "WoW_Semana_Atual",            # volume atual
+            "Queda_Semanal_Abs",           # queda absoluta (ela ama ver o número bruto)
+            "Variacao_Semanal_Pct",        # ← coluna mais importante – deixar bem visível
+            "Media_Semanal_2025",          # média semanal do ano (contexto)
+            "Controle_Semanal_Estado_Anterior",  # comparação com estado
+            "Controle_Semanal_Estado_Atual",     # 
+            "Variacao_Media_Estado_Pct",   # variação do estado (ela pediu essa coluna nova e usa muito)
+            "Em_Risco",                    # Sim/Não – útil quando mostrar todos os labs
+            "CNPJ_Normalizado",            # técnico – pode ficar por último
         ]
         df_risco_display = df_risco_display[cols_risco_view].reset_index(drop=True)
         
@@ -2533,8 +2678,9 @@ def renderizar_aba_fechamento_semanal(
             key="tbl_risco_sem"
         )
         _processar_evento_selecao(evento_risco, df_risco_display)
-        st.caption("Clique em qualquer linha ou na lupa (🔍) para abrir automaticamente a Análise Detalhada do laboratório.")
+        st.caption("Selecione a caixa ao lado do laboratório para abrir automaticamente a Análise Detalhada.")
         
+    # Botões de exportação CSV
     csv_filtrado = df_risco_ordenado.drop(columns=['Detalhes'], errors='ignore').to_csv(index=False).encode('utf-8-sig')
     col_dl1, col_dl2 = st.columns(2)
     col_dl1.download_button(
@@ -2542,16 +2688,27 @@ def renderizar_aba_fechamento_semanal(
         data=csv_filtrado,
         file_name="lista_risco_filtrada.csv",
         mime="text/csv",
-        help="Exporta a tabela considerando os filtros atuais."
+        help="Exporta a tabela considerando os filtros atuais aplicados na lista acima."
     )
+    # Botão de exportação CSV completo (todos os labs, sem filtro aplicado)
     if df_total_processado is not None:
-        csv_total = df_total_processado.to_csv(index=False).encode('utf-8-sig')
+        csv_total = df_total_processado.drop(columns=['Detalhes'], errors='ignore').to_csv(index=False).encode('utf-8-sig')
         col_dl2.download_button(
-            label="📥 CSV (base completa)",
+            label="📥 Exportar CSV Completo",
             data=csv_total,
             file_name="lista_risco_completa.csv",
             mime="text/csv",
-            help="Exporta a base completa, ignorando filtros locais."
+            help="Exporta todos os laboratórios sem filtros aplicados (base completa com todas as colunas disponíveis)."
+        )
+    else:
+        # Se não há df_total, oferecer exportar o df original sem filtros
+        csv_total_fallback = df.drop(columns=['Detalhes'], errors='ignore').to_csv(index=False).encode('utf-8-sig')
+        col_dl2.download_button(
+            label="📥 Exportar CSV Completo",
+            data=csv_total_fallback,
+            file_name="lista_risco_completa.csv",
+            mime="text/csv",
+            help="Exporta todos os laboratórios sem filtros aplicados (base completa com todas as colunas disponíveis)."
         )
 
     st.markdown("---")
@@ -2565,6 +2722,7 @@ def renderizar_aba_fechamento_semanal(
             'mes_ultimo_coleta': None,
             'volume_ultima_semana_coleta': 0,
             'semana_ultima_coleta': None,
+            'variacao_semanal_pct_ultima_semana': -100.0,  # Default: queda completa se não houver dados
             'maxima_coletas': 0,
             'mes_maxima': None,
             'ano_maxima': None
@@ -2609,7 +2767,7 @@ def renderizar_aba_fechamento_semanal(
                             "Set": "Setembro", "Out": "Outubro", "Nov": "Novembro", "Dez": "Dezembro"}
                 metricas['mes_ultimo_coleta'] = f"{meses_map.get(mes_codigo, mes_codigo)}/{ano}" if ano else meses_map.get(mes_codigo, mes_codigo)
         
-        # Encontrar última semana com coleta
+        # Encontrar última semana com coleta e calcular variação semanal
         if 'Semanas_Mes_Atual' in row.index:
             try:
                 semanas_json = row.get('Semanas_Mes_Atual', '[]')
@@ -2621,17 +2779,49 @@ def renderizar_aba_fechamento_semanal(
                     semanas = []
                 
                 # Procurar última semana com volume > 0
+                ultima_semana_encontrada = False
                 for semana in reversed(semanas):
                     vol_util = semana.get('volume_util', 0)
                     if vol_util and vol_util > 0:
+                        ultima_semana_encontrada = True
                         metricas['volume_ultima_semana_coleta'] = int(vol_util)
                         iso_week = semana.get('iso_week')
                         iso_year = semana.get('iso_year')
                         if iso_week and iso_year:
                             metricas['semana_ultima_coleta'] = f"Semana {iso_week}/{iso_year}"
+                        
+                        # Calcular variação semanal da última semana coletada
+                        vol_anterior = semana.get('volume_semana_anterior', None)
+                        
+                        # Converter volumes para float
+                        vol_util_float = float(vol_util) if vol_util else 0.0
+                        
+                        # Verificar se temos semana anterior válida
+                        if vol_anterior is not None:
+                            try:
+                                vol_anterior = float(vol_anterior) if vol_anterior else 0.0
+                                
+                                # Calcular variação percentual quando temos semana anterior válida
+                                if vol_anterior > 0:
+                                    variacao_pct = ((vol_util_float - vol_anterior) / vol_anterior) * 100
+                                    metricas['variacao_semanal_pct_ultima_semana'] = round(variacao_pct, 2)
+                                else:
+                                    # Se não há semana anterior ou volume = 0, queda completa (-100%)
+                                    metricas['variacao_semanal_pct_ultima_semana'] = -100.0
+                            except (ValueError, TypeError):
+                                # Erro ao converter, assumir queda completa
+                                metricas['variacao_semanal_pct_ultima_semana'] = -100.0
+                        else:
+                            # Se não há dados da semana anterior, assumir queda completa (-100%)
+                            metricas['variacao_semanal_pct_ultima_semana'] = -100.0
                         break
-            except Exception:
-                pass
+                
+                # Se não encontrou nenhuma semana com volume > 0, assumir queda completa
+                if not ultima_semana_encontrada:
+                    metricas['variacao_semanal_pct_ultima_semana'] = -100.0
+            except Exception as e:
+                # Em caso de erro, assumir queda completa
+                metricas['variacao_semanal_pct_ultima_semana'] = -100.0
         
         # Encontrar máxima de coletas (valor + mês/ano)
         max_volume = 0
@@ -2663,6 +2853,25 @@ def renderizar_aba_fechamento_semanal(
     st.subheader("📉 Perdas Recentes (<6 meses)")
     df_perda_recente = df[df['Classificacao_Perda_V2'] == 'Perda Recente'].copy()
     
+    # Garantir que colunas de contexto existam (alinhar com Lista de Risco)
+    # Como df_perda_recente é um filtro de df, as colunas já devem existir, 
+    # mas garantimos que estejam presentes e preenchidas
+    if not df_perda_recente.empty:
+        # Garantir que colunas de contexto existam com valores padrão se necessário
+        colunas_contexto_defaults = {
+            'Rede': '-',
+            'Estado': '',
+            'Porte': 'Pequeno',
+            'VIP': 'Não'
+        }
+        
+        for col, default_val in colunas_contexto_defaults.items():
+            if col not in df_perda_recente.columns:
+                df_perda_recente[col] = default_val
+            else:
+                # Preencher valores NaN com padrão
+                df_perda_recente[col] = df_perda_recente[col].fillna(default_val)
+    
     if not df_perda_recente.empty:
         # Calcular métricas para cada perda
         metricas_list = []
@@ -2680,6 +2889,14 @@ def renderizar_aba_fechamento_semanal(
         df_perda_recente['Mes_Maxima'] = [m['mes_maxima'] or 'N/A' for m in metricas_list]
         df_perda_recente['Ano_Maxima'] = [m['ano_maxima'] or 'N/A' for m in metricas_list]
         
+        # Preencher Variacao_Semanal_Pct usando a métrica calculada da última semana coletada
+        # Isso calcula a variação da última semana coletada em relação à semana anterior
+        # Garantir que None seja convertido para -100.0 (queda completa)
+        df_perda_recente['Variacao_Semanal_Pct'] = [
+            m.get('variacao_semanal_pct_ultima_semana', -100.0) if m.get('variacao_semanal_pct_ultima_semana') is not None else -100.0
+            for m in metricas_list
+        ]
+        
         # Ordenação: maior para menor (por dias sem coleta ou volume de perda), desempate por data última coleta
         df_perda_recente['_ordem_dias'] = df_perda_recente.get('Dias_Sem_Coleta', 0).fillna(0)
         df_perda_recente['_ordem_queda'] = df_perda_recente.get('Queda_Semanal_Abs', 0).fillna(0)
@@ -2693,30 +2910,56 @@ def renderizar_aba_fechamento_semanal(
         )
         df_perda_recente = df_perda_recente.drop(columns=['_ordem_dias', '_ordem_queda', '_ordem_data'])
         
-        # Preparar colunas para exibição
+        # Ordem ideal das colunas para Perdas (2025 - versão definitiva)
+        # Alinhada com a Lista de Risco - colunas de contexto essenciais adicionadas
         cols_perda_extended = [
-            'Detalhes', 'Dias_Sem_Coleta', 'Nome_Fantasia_PCL', 'CNPJ_Normalizado', 
-            'Media_Mensal_Perdas', 'Volume_Ultimo_Mes_Coleta', 'Mes_Ultimo_Coleta',
-            'Volume_Ultima_Semana_Coleta', 'Semana_Ultima_Coleta',
-            'Maxima_Coletas', 'Mes_Maxima', 'Ano_Maxima',
-            'Data_Ultima_Coleta', 'Queda_Semanal_Abs'
+            'Nome_Fantasia_PCL',
+            'Rede',                      # ela olha muito
+            'Estado',                    # essencial
+            'Porte',                     # essencial para contexto
+            'VIP',                       # ela filtra por VIP direto
+            'Data_Ultima_Coleta',        # a coluna mais importante em perdas – tem que estar logo no começo
+            'Dias_Sem_Coleta',           # logo depois da data
+            'Volume_Ultimo_Mes_Coleta',  # volume antes de morrer
+            'Mes_Ultimo_Coleta',         # mês/ano da última coleta
+            'Maxima_Coletas',            # pico histórico
+            'Mes_Maxima',                # quando foi o pico
+            'Ano_Maxima',
+            'Media_Mensal_Perdas',       # média enquanto estava vivo
+            'Queda_Semanal_Abs',         # queda bruta
+            'Variacao_Semanal_Pct',      # queda % em relação à semana anterior
+            'CNPJ_Normalizado',          # técnico – final
         ]
+        # Filtrar apenas colunas que existem no DataFrame
         cols_perda_extended = [c for c in cols_perda_extended if c in df_perda_recente.columns]
         
         df_perda_recente_display = adicionar_coluna_detalhes(df_perda_recente, 'CNPJ_Normalizado')
         df_perda_recente_display = df_perda_recente_display[cols_perda_extended].reset_index(drop=True)
         
-        # Configuração de colunas estendida
+        # Configuração de colunas estendida (inclui colunas específicas de perdas + colunas de contexto)
         col_config_extended = col_config.copy()
         col_config_extended.update({
-            "Media_Mensal_Perdas": st.column_config.NumberColumn("Média Mensal", format="%.1f", help="Média mensal de perdas"),
+            # Colunas de contexto (alinhadas com Lista de Risco)
+            "Rede": st.column_config.TextColumn("Rede", width="medium", help="Rede à qual o laboratório pertence"),
+            "Estado": st.column_config.TextColumn("UF", width="small", help="Unidade Federativa do laboratório"),
+            "Porte": st.column_config.TextColumn("Porte", width="small", help="Segmentação por volume médio (Grande, Médio/Grande, etc.)"),
+            "VIP": st.column_config.TextColumn("VIP", width="small", help="Indica se o laboratório faz parte da lista VIP"),
+            # Colunas específicas de perdas
+            "Media_Mensal_Perdas": st.column_config.NumberColumn("Média Mensal", format="%.1f", help="Média mensal de perdas enquanto estava ativo"),
             "Volume_Ultimo_Mes_Coleta": st.column_config.NumberColumn("Vol. Último Mês", format="%d", help="Volume do último mês com coleta"),
             "Mes_Ultimo_Coleta": st.column_config.TextColumn("Mês Última Coleta", help="Mês/ano do último mês com coleta"),
             "Volume_Ultima_Semana_Coleta": st.column_config.NumberColumn("Vol. Última Semana", format="%d", help="Volume da última semana com coleta"),
             "Semana_Ultima_Coleta": st.column_config.TextColumn("Semana Última Coleta", help="Semana ISO da última semana com coleta"),
-            "Maxima_Coletas": st.column_config.NumberColumn("Máxima Coletas", format="%d", help="Máxima de coletas do cliente"),
+            "Maxima_Coletas": st.column_config.NumberColumn("Máxima Coletas", format="%d", help="Máxima de coletas do cliente (pico histórico)"),
             "Mes_Maxima": st.column_config.TextColumn("Mês Máxima", help="Mês da máxima de coletas"),
-            "Ano_Maxima": st.column_config.TextColumn("Ano Máxima", help="Ano da máxima de coletas")
+            "Ano_Maxima": st.column_config.TextColumn("Ano Máxima", help="Ano da máxima de coletas"),
+            # Coluna de variação percentual (se disponível)
+            "Variacao_Semanal_Pct": st.column_config.NumberColumn(
+                "Variação semanal (%)", 
+                format="%.1f%%", 
+                help="Percentual de variação da semana atual vs semana anterior (WoW). Exibe '—' quando volume anterior está zerado ou ausente.", 
+                default=None
+            ),
         })
         
         evento_recente = st.dataframe(
@@ -2729,7 +2972,7 @@ def renderizar_aba_fechamento_semanal(
             key="tbl_perda_recente"
         )
         _processar_evento_selecao(evento_recente, df_perda_recente_display)
-        st.caption("Clique em qualquer linha para abrir automaticamente a Análise Detalhada.")
+        st.caption("Use a caixa de seleção para abrir automaticamente a Análise Detalhada.")
     else:
         st.info("Nenhuma perda recente.")
     
@@ -2738,6 +2981,25 @@ def renderizar_aba_fechamento_semanal(
     # Perdas Antigas (logo abaixo de Perdas Recentes, mesmo layout)
     st.subheader("🗄️ Perdas Antigas (>6 meses)")
     df_antigas = df[df['Classificacao_Perda_V2'].isin(['Perda Antiga', 'Perda Consolidada'])].copy()
+    
+    # Garantir que colunas de contexto existam (alinhar com Lista de Risco)
+    # Como df_antigas é um filtro de df, as colunas já devem existir, 
+    # mas garantimos que estejam presentes e preenchidas
+    if not df_antigas.empty:
+        # Garantir que colunas de contexto existam com valores padrão se necessário
+        colunas_contexto_defaults = {
+            'Rede': '-',
+            'Estado': '',
+            'Porte': 'Pequeno',
+            'VIP': 'Não'
+        }
+        
+        for col, default_val in colunas_contexto_defaults.items():
+            if col not in df_antigas.columns:
+                df_antigas[col] = default_val
+            else:
+                # Preencher valores NaN com padrão
+                df_antigas[col] = df_antigas[col].fillna(default_val)
     
     if not df_antigas.empty:
         # Calcular métricas para cada perda (mesma estrutura)
@@ -2756,6 +3018,14 @@ def renderizar_aba_fechamento_semanal(
         df_antigas['Mes_Maxima'] = [m['mes_maxima'] or 'N/A' for m in metricas_list_antigas]
         df_antigas['Ano_Maxima'] = [m['ano_maxima'] or 'N/A' for m in metricas_list_antigas]
         
+        # Preencher Variacao_Semanal_Pct usando a métrica calculada da última semana coletada
+        # Isso calcula a variação da última semana coletada em relação à semana anterior
+        # Garantir que None seja convertido para -100.0 (queda completa)
+        df_antigas['Variacao_Semanal_Pct'] = [
+            m.get('variacao_semanal_pct_ultima_semana', -100.0) if m.get('variacao_semanal_pct_ultima_semana') is not None else -100.0
+            for m in metricas_list_antigas
+        ]
+        
         # Ordenação: maior para menor (por dias sem coleta ou volume de perda), desempate por data última coleta
         df_antigas['_ordem_dias'] = df_antigas.get('Dias_Sem_Coleta', 0).fillna(0)
         df_antigas['_ordem_queda'] = df_antigas.get('Queda_Semanal_Abs', 0).fillna(0)
@@ -2769,14 +3039,25 @@ def renderizar_aba_fechamento_semanal(
         )
         df_antigas = df_antigas.drop(columns=['_ordem_dias', '_ordem_queda', '_ordem_data'])
         
-        # Preparar colunas para exibição (dias sem coleta como primeiro indicador)
         cols_perda_antigas = [
-            'Detalhes', 'Dias_Sem_Coleta', 'Nome_Fantasia_PCL', 'CNPJ_Normalizado',
-            'Media_Mensal_Perdas', 'Volume_Ultimo_Mes_Coleta', 'Mes_Ultimo_Coleta',
-            'Volume_Ultima_Semana_Coleta', 'Semana_Ultima_Coleta',
-            'Maxima_Coletas', 'Mes_Maxima', 'Ano_Maxima',
-            'Data_Ultima_Coleta', 'Queda_Semanal_Abs'
+            'Nome_Fantasia_PCL',
+            'Rede',
+            'Estado',
+            'Porte',
+            'VIP',
+            'Data_Ultima_Coleta',
+            'Dias_Sem_Coleta',
+            'Volume_Ultimo_Mes_Coleta',
+            'Mes_Ultimo_Coleta',
+            'Maxima_Coletas',
+            'Mes_Maxima',
+            'Ano_Maxima',
+            'Media_Mensal_Perdas',
+            'Queda_Semanal_Abs',
+            'Variacao_Semanal_Pct',
+            'CNPJ_Normalizado',
         ]
+        # Filtrar apenas colunas que existem no DataFrame
         cols_perda_antigas = [c for c in cols_perda_antigas if c in df_antigas.columns]
         
         df_antigas_display = adicionar_coluna_detalhes(df_antigas, 'CNPJ_Normalizado')
@@ -2792,7 +3073,7 @@ def renderizar_aba_fechamento_semanal(
             key="tbl_perda_antiga"
         )
         _processar_evento_selecao(evento_antiga, df_antigas_display)
-        st.caption("Clique em qualquer linha para abrir automaticamente a Análise Detalhada.")
+        st.caption("Use a caixa de seleção para abrir automaticamente a Análise Detalhada.")
     else:
         st.info("Nenhuma perda antiga.")
 
@@ -2806,63 +3087,121 @@ def renderizar_aba_fechamento_semanal(
     # met já foi calculado acima nos KPIs executivos
 
     if met.get('semanas_detalhes'):
-        # Preparar dados para a tabela de resumo
         dados_semanas = []
-        semanas_processadas = set()
+
+        # Indexar semanas vindas da métrica
+        semanas_indexadas = {}
         for s in met['semanas_detalhes']:
             iso_week = s.get('iso_week')
             iso_year = s.get('iso_year')
-            
-            # Incluir semana 44 explicitamente se não estiver na lista
-            if iso_week == 44 or (iso_week, iso_year) not in semanas_processadas:
-                vol_atual = s.get('volume_total', 0)
-                vol_ant = s.get('volume_semana_anterior', 0)
-                wow = calcular_variacao_percentual(vol_atual, vol_ant)
-                
-                status_icon = "✅ Fechada" if s.get('fechada') else "🔄 Em Andamento"
-                
-                dados_semanas.append({
-                    "Semana": f"Semana {s.get('semana')}",
-                    "ISO": iso_week,
-                    "Volume Útil": vol_atual,
-                    "Volume Anterior": vol_ant or 0,
-                    "WoW %": wow, 
-                    "Status": status_icon,
-                    "is_active": not s.get('fechada')
-                })
-                semanas_processadas.add((iso_week, iso_year))
-        
-        # Garantir que semana 44 está incluída (se não estiver, adicionar com dados do DataFrame)
-        if not any(s.get('iso_week') == 44 for s in met['semanas_detalhes']):
-            # Tentar encontrar semana 44 nos dados do DataFrame
-            if 'Semanas_Mes_Atual' in df.columns:
-                semana_44_volume = 0
-                semana_44_anterior = 0
-                for val in df['Semanas_Mes_Atual']:
-                    if pd.isna(val):
+            if not iso_week or not iso_year:
+                continue
+            key = (iso_year, iso_week)
+            semanas_indexadas[key] = {
+                'semana': s.get('semana', iso_week),
+                'iso_week': iso_week,
+                'iso_year': iso_year,
+                'volume_total': s.get('volume_total', 0) or 0,
+                'volume_semana_anterior': s.get('volume_semana_anterior', 0) or 0,
+                'fechada': s.get('fechada', False)
+            }
+
+        # Complementar com o que vier do DF (Semanas_Mes_Atual)
+        if 'Semanas_Mes_Atual' in df.columns:
+            for val in df['Semanas_Mes_Atual']:
+                if pd.isna(val):
+                    continue
+                try:
+                    semanas_json = json.loads(val) if isinstance(val, str) else val
+                except Exception:
+                    continue
+                if not isinstance(semanas_json, list):
+                    continue
+
+                for semana in semanas_json:
+                    iso_week = semana.get('iso_week')
+                    iso_year = semana.get('iso_year')
+                    if not iso_week or not iso_year:
                         continue
-                    try:
-                        semanas_json = json.loads(val) if isinstance(val, str) else val
-                        if isinstance(semanas_json, list):
-                            for semana in semanas_json:
-                                if semana.get('iso_week') == 44:
-                                    semana_44_volume += semana.get('volume_util', 0) or 0
-                                    semana_44_anterior += semana.get('volume_semana_anterior', 0) or 0
-                    except Exception:
-                        continue
-                
-                if semana_44_volume > 0 or semana_44_anterior > 0:
-                    wow_44 = calcular_variacao_percentual(semana_44_volume, semana_44_anterior)
-                    dados_semanas.append({
-                        "Semana": "Semana 44",
-                        "ISO": 44,
-                        "Volume Útil": semana_44_volume,
-                        "Volume Anterior": semana_44_anterior or 0,
-                        "WoW %": wow_44,
-                        "Status": "✅ Fechada",
-                        "is_active": False
+                    key = (iso_year, iso_week)
+                    entrada = semanas_indexadas.get(key, {
+                        'semana': semana.get('semana', iso_week),
+                        'iso_week': iso_week,
+                        'iso_year': iso_year,
+                        'volume_total': 0,
+                        'volume_semana_anterior': 0,
+                        'fechada': False
                     })
-            
+                    entrada['volume_total'] += semana.get('volume_util', 0) or 0
+                    entrada['volume_semana_anterior'] += semana.get('volume_semana_anterior', 0) or 0
+                    entrada['fechada'] = entrada['fechada'] or semana.get('fechada', False)
+                    semanas_indexadas[key] = entrada
+
+        # Garantir todas as semanas do mês atual (mesmo que zeradas)
+        hoje = datetime.now()
+        primeiro_dia = datetime(hoje.year, hoje.month, 1)
+        ultimo_dia = datetime(hoje.year, hoje.month, calendar.monthrange(hoje.year, hoje.month)[1])
+        dia_corrente = primeiro_dia
+        expected_keys = set()
+        while dia_corrente <= ultimo_dia:
+            iso = dia_corrente.isocalendar()
+            expected_keys.add((iso.year, iso.week))
+            dia_corrente += timedelta(days=1)
+
+        for iso_year, iso_week in expected_keys:
+            if (iso_year, iso_week) not in semanas_indexadas:
+                fim_semana = datetime.fromisocalendar(iso_year, iso_week, 7)
+                semanas_indexadas[(iso_year, iso_week)] = {
+                    'semana': iso_week,
+                    'iso_week': iso_week,
+                    'iso_year': iso_year,
+                    'volume_total': 0,
+                    'volume_semana_anterior': 0,
+                    'fechada': fim_semana.date() < hoje.date()
+                }
+
+        # Montar tabela final ordenada
+        for iso_year, iso_week in sorted(semanas_indexadas.keys()):
+            info = semanas_indexadas[(iso_year, iso_week)]
+            vol_atual = info.get('volume_total', 0) or 0
+            vol_ant = info.get('volume_semana_anterior', 0) or 0
+
+            try:
+                prev_monday = datetime.fromisocalendar(iso_year, iso_week, 1) - timedelta(days=7)
+                prev_iso = prev_monday.isocalendar()
+                prev_key = (prev_iso.year, prev_iso.week)
+                prev_label = f"{prev_iso.week}/{prev_iso.year}"
+            except Exception:
+                prev_key = None
+                prev_label = "-"
+
+            if vol_ant == 0 and prev_key and prev_key in semanas_indexadas:
+                vol_ant = semanas_indexadas[prev_key].get('volume_total', 0) or vol_ant
+
+            if vol_ant == 0:
+                variacao_pct = 0.0 if vol_atual == 0 else 100.0
+            else:
+                variacao_pct = ((vol_atual - vol_ant) / vol_ant) * 100
+
+            try:
+                semana_inicio = datetime.fromisocalendar(iso_year, iso_week, 1)
+                semana_fim = semana_inicio + timedelta(days=6)
+                intervalo_str = f"{semana_inicio:%d/%m}–{semana_fim:%d/%m}"
+            except Exception:
+                intervalo_str = "-"
+
+            dados_semanas.append({
+                "Semana": f"Semana {info.get('semana', iso_week)}",
+                "ISO": iso_week,
+                "Intervalo (seg-dom)": intervalo_str,
+                "Semana Anterior (ISO)": prev_label,
+                "Volume Útil": round(float(vol_atual), 1),
+                "Volume Anterior": round(float(vol_ant), 1),
+                "WoW %": round(variacao_pct, 2),
+                "Status": "✅ Fechada" if info.get('fechada') else "🔄 Em Andamento",
+                "is_active": not info.get('fechada')
+            })
+
         df_semanas = pd.DataFrame(dados_semanas)
         
         def highlight_active_week(row):
@@ -2875,8 +3214,10 @@ def renderizar_aba_fechamento_semanal(
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Semana": st.column_config.TextColumn("Semana", width="small"),
-                "ISO": st.column_config.NumberColumn("ISO Week", format="%d"),
+                "Semana": st.column_config.TextColumn("Semana", width="small", help="Semana na visão do mês corrente (1, 2, 3...)."),
+                "ISO": st.column_config.NumberColumn("ISO Week", format="%d", help="Semana ISO correspondente."),
+                "Intervalo (seg-dom)": st.column_config.TextColumn("Dias da Semana", help="Intervalo (segunda a domingo) que compõe a semana ISO."),
+                "Semana Anterior (ISO)": st.column_config.TextColumn("Semana ISO anterior", help="ISO week imediatamente anterior (pode ser do mês/ano anterior)."),
                 "Volume Útil": st.column_config.NumberColumn("Volume Realizado", format="%d"),
                 "Volume Anterior": st.column_config.NumberColumn("Volume Anterior", format="%d"),
                 "WoW %": st.column_config.NumberColumn("Variação WoW (%)", format="%.1f%%"),
@@ -3077,14 +3418,12 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
     cols_final = [c for c in cols_mensal if c in df.columns]
 
     df_mensal_display = adicionar_coluna_detalhes(df_sorted[cols_final], 'CNPJ_Normalizado')
-    cols_mensal_display = ['Detalhes'] + cols_final
-    df_mensal_display = df_mensal_display[cols_mensal_display].reset_index(drop=True)
+    df_mensal_display = df_mensal_display[cols_final].reset_index(drop=True)
     evento_mensal = st.dataframe(
         df_mensal_display,
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Detalhes": DETALHES_COLUMN_CONFIG,
             "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", width="medium", help="Nome fantasia cadastrado no CRM"),
             "CNPJ_Normalizado": st.column_config.TextColumn("CNPJ", width="medium", help="Identificador único (apenas números)"),
             "VIP": st.column_config.TextColumn("VIP", width="small", help="Sinaliza se o laboratório está na carteira VIP"),
@@ -3108,7 +3447,7 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
         key="tbl_mensal_master"
     )
     _processar_evento_selecao(evento_mensal, df_mensal_display)
-    st.caption("Clique em qualquer linha para abrir automaticamente a Análise Detalhada.")
+    st.caption("Use a caixa de seleção para abrir automaticamente a Análise Detalhada.")
 
     # Botão Exportação CSV Mensal
     csv = df_sorted.to_csv(index=False).encode('utf-8-sig')
@@ -3210,7 +3549,7 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
         
         df_top_perda_display = adicionar_coluna_detalhes(df_top_perda, 'CNPJ_Normalizado').reset_index(drop=True)
         cols_top = [
-            'Detalhes', 'Lab', 'CNPJ_Normalizado', 'VIP', 'Concorrente', 'UF', 'Rep',
+            'Lab', 'CNPJ_Normalizado', 'VIP', 'Concorrente', 'UF', 'Rep',
             'Baseline', 'Realizado', 'Perda (Vol)', 'Queda %', 'Porte', 'Data_Ultima_Coleta'
         ]
         df_top_perda_display = df_top_perda_display[cols_top]
@@ -3220,7 +3559,6 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Detalhes": DETALHES_COLUMN_CONFIG,
                 "Lab": st.column_config.TextColumn("Laboratório", width="medium", help="Nome fantasia do laboratório"),
                 "CNPJ_Normalizado": st.column_config.TextColumn("CNPJ", width="medium", help="CNPJ normalizado (apenas números)"),
                 "VIP": st.column_config.TextColumn("VIP", width="small", help="Indica se o laboratório faz parte da lista VIP"),
@@ -3239,7 +3577,7 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
             key="tbl_top_perda"
         )
         _processar_evento_selecao(evento_top_perda, df_top_perda_display)
-        st.caption("Clique em qualquer linha para abrir automaticamente a Análise Detalhada.")
+        st.caption("Use a caixa de seleção para abrir automaticamente a Análise Detalhada.")
     else:
         st.info("Nenhum laboratório com perda vs baseline identificado.")
 
@@ -4988,8 +5326,29 @@ class MetricasAvancadas:
         
         # Máxima histórica 2024
         max_2024 = max(lab.get(col, 0) for col in colunas_2024) if colunas_2024 else 0
+        max_2024_col = max(colunas_2024, key=lambda c: lab.get(c, 0), default=None)
         # Máxima histórica 2025
         max_2025 = max(lab.get(col, 0) for col in colunas_2025) if colunas_2025 else 0
+        max_2025_col = max(colunas_2025, key=lambda c: lab.get(c, 0), default=None)
+
+        meses_nomes_completos = {
+            "Jan": "Jan", "Fev": "Fev", "Mar": "Mar", "Abr": "Abr",
+            "Mai": "Mai", "Jun": "Jun", "Jul": "Jul", "Ago": "Ago",
+            "Set": "Set", "Out": "Out", "Nov": "Nov", "Dez": "Dez"
+        }
+
+        def _formatar_mes_col(col_name: Optional[str]) -> str:
+            if not col_name or '_' not in col_name:
+                return "N/A"
+            partes = col_name.split('_')
+            if len(partes) < 4:
+                return "N/A"
+            mes = meses_nomes_completos.get(partes[2], partes[2])
+            ano = "20" + partes[3][-2:] if len(partes[3]) <= 2 else partes[3]
+            return f"{mes}/{ano}"
+
+        max_2024_mes = _formatar_mes_col(max_2024_col)
+        max_2025_mes = _formatar_mes_col(max_2025_col)
         
         # Determinar métricas de comparação baseado no ano do último mês
         ano_comparacao = info_ultimo_mes['ano_comparacao']
@@ -5010,6 +5369,8 @@ class MetricasAvancadas:
             'media_ultimo_mes': int(media_ultimo_mes),
             'max_2024': int(max_2024),
             'max_2025': int(max_2025),
+            'max_2024_mes': max_2024_mes,
+            'max_2025_mes': max_2025_mes,
             'ultimo_mes_display': info_ultimo_mes['display'],
             'ano_comparacao': ano_comparacao,
             'media_comparacao': round(media_comparacao, 1),
@@ -5361,26 +5722,38 @@ def main():
     elif st.session_state.page == "🏢 Ranking Rede":
         st.header("🏢 Ranking por Rede")
         # Carregar dados VIP para análise de rede
-        df_vips = DataManager.carregar_dados_vips()
+        df_vips = DataManager.carregar_dados_vip()
         
-        if df_vips.empty:
+        if df_vips is None or df_vips.empty:
             st.warning("⚠️ Nenhum dado VIP disponível para análise de rede.")
+            st.stop()
         else:
             st.markdown("### 🏆 Ranking de Redes VIP por Volume de Coletas")
             
-            # Agrupar por rede e somar coletas
-            df_redes = df_vips.groupby('Rede')['Coletas_Mes_Atual'].sum().reset_index()
-            df_redes = df_redes.sort_values('Coletas_Mes_Atual', ascending=False)
-            
-            st.dataframe(
-                df_redes,
-                use_container_width=True,
-                column_config={
-                    "Rede": st.column_config.TextColumn("Rede VIP", help="Nome da rede de laboratórios VIP"),
-                    "Coletas_Mes_Atual": st.column_config.NumberColumn("Coletas Mês Atual", format="%.0f", help="Total de coletas da rede no mês atual")
-                },
-                hide_index=True
-            )
+            # Garantir colunas básicas
+            if 'Rede' not in df_vips.columns:
+                df_vips['Rede'] = '-'
+            if 'Coletas_Mes_Atual' not in df_vips.columns:
+                df_vips['Coletas_Mes_Atual'] = 0
+
+            df_redes = pd.DataFrame(columns=['Rede', 'Coletas_Mes_Atual'])
+            if not df_vips.empty:
+                df_redes = df_vips.groupby('Rede')['Coletas_Mes_Atual'].sum().reset_index()
+                df_redes = df_redes.sort_values('Coletas_Mes_Atual', ascending=False)
+
+            if not df_redes.empty:
+                st.dataframe(
+                    df_redes,
+                    use_container_width=True,
+                    column_config={
+                        "Rede": st.column_config.TextColumn("Rede VIP", help="Nome da rede de laboratórios VIP"),
+                        "Coletas_Mes_Atual": st.column_config.NumberColumn("Coletas Mês Atual", format="%.0f", help="Total de coletas da rede no mês atual")
+                    },
+                    hide_index=True
+                )
+            else:
+                st.info("📋 Dados de rede ou coletas mensais não encontrados na base VIP. Nada a exibir.")
+                st.stop()
             
             st.markdown("---")
             st.markdown("### 📈 Desempenho Individual por Rede")
@@ -5393,26 +5766,31 @@ def main():
             
             if rede_selecionada:
                 df_rede_detalhe = df_vips[df_vips['Rede'] == rede_selecionada].copy()
-                df_rede_detalhe = df_rede_detalhe.sort_values('Coletas_Mes_Atual', ascending=False)
-                
-                st.subheader(f"Laboratórios da Rede: {rede_selecionada}")
-                st.dataframe(
-                    df_rede_detalhe[[
+                if not df_rede_detalhe.empty:
+                    df_rede_detalhe = df_rede_detalhe.sort_values('Coletas_Mes_Atual', ascending=False)
+                    
+                    st.subheader(f"Laboratórios da Rede: {rede_selecionada}")
+                    cols_detalhe = [
                         'Nome_Fantasia_PCL', 'Estado', 'Cidade', 'Coletas_Mes_Atual',
                         'Status_Risco_V2', 'Baseline_Mensal', 'WoW_Percentual'
-                    ]],
-                    use_container_width=True,
-                    column_config={
-                        "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome do laboratório"),
-                        "Estado": st.column_config.TextColumn("UF", help="Estado"),
-                        "Cidade": st.column_config.TextColumn("Cidade", help="Cidade"),
-                        "Coletas_Mes_Atual": st.column_config.NumberColumn("Coletas Mês Atual", format="%.0f", help="Coletas no mês atual"),
-                        "Status_Risco_V2": st.column_config.TextColumn("Risco V2", help="Status de risco pelo sistema V2"),
-                        "Baseline_Mensal": st.column_config.NumberColumn("Baseline", format="%.0f", help="Baseline mensal"),
-                        "WoW_Percentual": st.column_config.NumberColumn("WoW", format="%.1f%%", help="Variação WoW")
-                    },
-                    hide_index=True
-                )
+                    ]
+                    cols_existentes = [c for c in cols_detalhe if c in df_rede_detalhe.columns]
+                    st.dataframe(
+                        df_rede_detalhe[cols_existentes],
+                        use_container_width=True,
+                        column_config={
+                            "Nome_Fantasia_PCL": st.column_config.TextColumn("Laboratório", help="Nome do laboratório"),
+                            "Estado": st.column_config.TextColumn("UF", help="Estado"),
+                            "Cidade": st.column_config.TextColumn("Cidade", help="Cidade"),
+                            "Coletas_Mes_Atual": st.column_config.NumberColumn("Coletas Mês Atual", format="%.0f", help="Coletas no mês atual"),
+                            "Status_Risco_V2": st.column_config.TextColumn("Risco V2", help="Status de risco pelo sistema V2"),
+                            "Baseline_Mensal": st.column_config.NumberColumn("Baseline", format="%.0f", help="Baseline mensal"),
+                            "WoW_Percentual": st.column_config.NumberColumn("WoW", format="%.1f%%", help="Variação WoW")
+                        },
+                        hide_index=True
+                    )
+                else:
+                    st.info("Nenhum laboratório encontrado para esta rede.")
     elif st.session_state.page == "🔧 Manutenção VIPs":
         st.header("🔧 Manutenção de Dados VIP")
         st.markdown("""
@@ -5420,7 +5798,7 @@ def main():
         editar informações existentes ou remover laboratórios da lista.
         """)
         
-        df_vips = DataManager.carregar_dados_vips()
+        df_vips = DataManager.carregar_dados_vip()
         
         if df_vips.empty:
             st.info("Nenhum laboratório VIP cadastrado. Comece adicionando um novo!")
@@ -5451,7 +5829,7 @@ def main():
             edited_df = edited_df[edited_df['CNPJ_PCL'] != '']
             edited_df = edited_df.drop_duplicates(subset=['CNPJ_PCL'])
             
-            DataManager.salvar_dados_vips(edited_df)
+            DataManager.salvar_dados_vip(edited_df)
             st.success("✅ Dados VIPs salvos com sucesso!")
             st.rerun()
     
@@ -6128,7 +6506,7 @@ def main():
                         st.markdown(f"""
                             <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #17a2b8;">
                                 <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">HISTÓRICO DE PERFORMANCE</div>
-                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
+                                <div style="display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 1rem; text-align: center;">
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666;">Média 2024</div>
                                         <div style="font-size: 1.3rem; font-weight: bold; color: #17a2b8;">{metricas_evolucao['media_2024']:.1f}</div>
@@ -6140,10 +6518,12 @@ def main():
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666;">Máxima 2024</div>
                                         <div style="font-size: 1.3rem; font-weight: bold; color: #17a2b8;">{metricas_evolucao['max_2024']:,}</div>
+                                        <div style="font-size: 0.75rem; color: #6c757d;">{metricas_evolucao.get('max_2024_mes', 'N/A')}</div>
                                     </div>
                                     <div>
                                         <div style="font-size: 0.8rem; color: #666;">Máxima 2025</div>
                                         <div style="font-size: 1.3rem; font-weight: bold; color: #17a2b8;">{metricas_evolucao['max_2025']:,}</div>
+                                        <div style="font-size: 0.75rem; color: #6c757d;">{metricas_evolucao.get('max_2025_mes', 'N/A')}</div>
                                     </div>
                                 </div>
                             </div>
@@ -6152,14 +6532,36 @@ def main():
                         st.markdown(f"""
                         <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #28a745;">
                             <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">TOTAIS DE COLETAS</div>
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
+                            <div>
+                                <div style="font-size: 0.8rem; color: #666;">Total 2024</div>
+                                <div style="font-size: 1.4rem; font-weight: bold; color: #28a745;">{metricas_evolucao['total_coletas_2024']:,}</div>
+                            </div>
+                            <div>
+                                <div style="font-size: 0.8rem; color: #666;">Total 2025</div>
+                                <div style="font-size: 1.4rem; font-weight: bold; color: #6BBF47;">{metricas_evolucao['total_coletas_2025']:,}</div>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                        st.markdown(f"""
+                        <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #0d6efd;">
+                            <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">MÊS ATUAL E PICO HISTÓRICO</div>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; text-align: center;">
                                 <div>
-                                    <div style="font-size: 0.8rem; color: #666;">Total 2024</div>
-                                    <div style="font-size: 1.4rem; font-weight: bold; color: #28a745;">{metricas_evolucao['total_coletas_2024']:,}</div>
+                                    <div style="font-size: 0.8rem; color: #666;">Volume mês atual ({metricas_evolucao['ultimo_mes_display']})</div>
+                                    <div style="font-size: 1.3rem; font-weight: bold; color: #0d6efd;">{metricas_evolucao['media_ultimo_mes']:,}</div>
                                 </div>
                                 <div>
-                                    <div style="font-size: 0.8rem; color: #666;">Total 2025</div>
-                                    <div style="font-size: 1.4rem; font-weight: bold; color: #6BBF47;">{metricas_evolucao['total_coletas_2025']:,}</div>
+                                    <div style="font-size: 0.8rem; color: #666;">Maior mês 2024</div>
+                                    <div style="font-size: 1.1rem; font-weight: bold; color: #6c757d;">{metricas_evolucao.get('max_2024_mes', 'N/A')}</div>
+                                    <div style="font-size: 0.9rem; color: #6BBF47; font-weight: 700;">{metricas_evolucao['max_2024']:,}</div>
+                                </div>
+                                <div>
+                                    <div style="font-size: 0.8rem; color: #666;">Maior mês 2025</div>
+                                    <div style="font-size: 1.1rem; font-weight: bold; color: #6c757d;">{metricas_evolucao.get('max_2025_mes', 'N/A')}</div>
+                                    <div style="font-size: 0.9rem; color: #6BBF47; font-weight: 700;">{metricas_evolucao['max_2025']:,}</div>
                                 </div>
                             </div>
                         </div>
@@ -6191,8 +6593,39 @@ def main():
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
-                        # Gráfico de Evolução Mensal abaixo dos comparativos
+                        # Gráfico semanal (mês atual) + mensal
                         st.markdown("---")
+                        st.subheader("📊 Coletas por Semana (mês atual)")
+                        semanas_raw = lab_info.get('Semanas_Mes_Atual', '[]') if 'lab_info' in locals() else '[]'
+                        try:
+                            semanas_list = json.loads(semanas_raw) if isinstance(semanas_raw, str) else semanas_raw
+                        except Exception:
+                            semanas_list = []
+                        if semanas_list and isinstance(semanas_list, list):
+                            df_sem = pd.DataFrame([
+                                {
+                                    "Semana ISO": f"{s.get('iso_week')}/{s.get('iso_year')}",
+                                    "Volume": s.get('volume_util', 0) or s.get('volume_total', 0) or 0,
+                                    "Anterior": s.get('volume_semana_anterior', 0) or 0
+                                }
+                                for s in semanas_list if s
+                            ])
+                            if not df_sem.empty:
+                                fig_sem = px.bar(
+                                    df_sem,
+                                    x="Semana ISO",
+                                    y="Volume",
+                                    text="Volume",
+                                    hover_data=["Anterior"],
+                                    title="Coletas por semana (mês corrente)"
+                                )
+                                fig_sem.update_layout(height=360, margin=dict(l=10, r=10, t=60, b=10))
+                                st.plotly_chart(fig_sem, use_container_width=True, key="graf_semana_detalhe")
+                            else:
+                                st.info("📊 Sem dados semanais para este laboratório.")
+                        else:
+                            st.info("📊 Sem dados semanais para este laboratório.")
+
                         st.subheader("📈 Evolução Mensal")
                         ChartManager.criar_grafico_evolucao_mensal(
                             df_para_metricas,
@@ -6248,68 +6681,61 @@ def main():
         # Adicionar informações de rede se disponível
         df_tabela = df_analise_detalhada.copy()
         mostrar_rede = False
-        if df_vip_tabela is not None and not df_vip_tabela.empty:
-            # Merge dos dados com informações VIP
+        if 'CNPJ_Normalizado' not in df_tabela.columns and 'CNPJ_PCL' in df_tabela.columns:
             df_tabela['CNPJ_Normalizado'] = df_tabela['CNPJ_PCL'].apply(
                 lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
             )
+        if df_vip_tabela is not None and not df_vip_tabela.empty:
+            df_vip_tabela = df_vip_tabela.copy()
             df_vip_tabela['CNPJ_Normalizado'] = df_vip_tabela['CNPJ'].apply(
                 lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
             )
-            # Verificar quais colunas VIP estão disponíveis
             colunas_vip_disponiveis = ['CNPJ_Normalizado']
-            colunas_vip_opcionais = ['Rede', 'Ranking', 'Ranking Rede']
-            for col in colunas_vip_opcionais:
+            for col in ['Rede', 'Ranking', 'Ranking Rede']:
                 if col in df_vip_tabela.columns:
                     colunas_vip_disponiveis.append(col)
-            # Fazer merge apenas com colunas disponíveis
-            if len(colunas_vip_disponiveis) > 1: # Mais que apenas CNPJ_Normalizado
+            if len(colunas_vip_disponiveis) > 1:
                 df_tabela = df_tabela.merge(
                     df_vip_tabela[colunas_vip_disponiveis],
                     on='CNPJ_Normalizado',
                     how='left'
                 )
-                mostrar_rede = 'Rede' in colunas_vip_disponiveis
-            else:
-                # Se não há colunas VIP disponíveis, não fazer merge
-                mostrar_rede = False
-        # Filtro por rede (simplificado)
+                mostrar_rede = 'Rede' in df_tabela.columns
+
+        # Determinar rede do lab selecionado (quando existir)
+        rede_padrao = st.session_state.get('rede_lab_pesquisado')
+        if not rede_padrao and lab_final_cnpj and 'Rede' in df_tabela.columns:
+            rede_lab_row = df_tabela[df_tabela['CNPJ_Normalizado'] == lab_final_cnpj]
+            if not rede_lab_row.empty:
+                rede_padrao = rede_lab_row.iloc[0].get('Rede')
+                st.session_state['rede_lab_pesquisado'] = rede_padrao
+
         if mostrar_rede and 'Rede' in df_tabela.columns:
             redes_disponiveis = ["Todas"] + sorted(df_tabela['Rede'].dropna().unique().tolist())
-            # Usar rede do laboratório pesquisado como padrão, se disponível
-            rede_padrao = st.session_state.get('rede_lab_pesquisado', "Todas")
-            if rede_padrao not in redes_disponiveis:
-                rede_padrao = "Todas"
-            # Aplicar filtro automático se há rede selecionada
-            if rede_padrao != "Todas":
+            if rede_padrao and rede_padrao in redes_disponiveis:
                 rede_filtro = rede_padrao
-                # Mostrar indicador de filtro automático
                 st.markdown(f"""
                 <div style="background: linear-gradient(135deg, #e8f5e9, #f1f8f1); border-radius: 6px; padding: 0.8rem; margin-bottom: 1rem;">
-                    <span style="color: #52B54B; font-size: 0.9rem;">🎯 <strong>Filtro automático ativo:</strong> mostrando apenas laboratórios da rede <strong>"{rede_padrao}"</strong></span>
+                    <span style="color: #52B54B; font-size: 0.9rem;">🎯 <strong>Filtro automático ativo:</strong> mostrando apenas laboratórios da rede <strong>"{rede_filtro}"</strong></span>
                 </div>
                 """, unsafe_allow_html=True)
-
-                # Botão para limpar filtro automático
-                if st.button("🔄 Mostrar Todas as Redes", key="limpar_filtro_auto", help="Mostrar laboratórios de todas as redes"):
-                    st.session_state['rede_lab_pesquisado'] = None
-                    st.toast("✅ Filtro de rede limpo! Todas as redes serão exibidas.")
             else:
-                # Seleção manual de rede
                 rede_filtro = st.selectbox(
                     "🏢 Filtrar por Rede:",
                     options=redes_disponiveis,
-                    index=0, # Sempre "Todas" por padrão
+                    index=0,
                     help="Selecione uma rede para filtrar",
                     key="filtro_rede_tabela"
                 )
         else:
             rede_filtro = "Todas"
-        # Aplicar filtros
+
         df_tabela_filtrada = df_tabela.copy()
-        # Filtro por rede
+        # Filtro por rede ou apenas o lab atual
         if rede_filtro != "Todas" and mostrar_rede:
             df_tabela_filtrada = df_tabela_filtrada[df_tabela_filtrada['Rede'] == rede_filtro]
+        elif not mostrar_rede and lab_final_cnpj:
+            df_tabela_filtrada = df_tabela_filtrada[df_tabela_filtrada['CNPJ_Normalizado'] == lab_final_cnpj]
         # Mostrar informações da rede se filtrada
         if rede_filtro != "Todas" and mostrar_rede and not df_tabela_filtrada.empty:
             # Estatísticas da rede
@@ -6353,16 +6779,11 @@ def main():
 
         # Configurar colunas da tabela
         # Se faz parte de rede: mostrar visão mensal por coluna (janeiro, fevereiro...)
-        # Se não faz parte de rede: não mostrar lista de labs
-        if mostrar_rede and rede_filtro != "Todas":
-            # Para quem é de rede: remover indicadores antigos e substituir por visão mensal
-            colunas_principais = [
-                'CNPJ_PCL', 'Nome_Fantasia_PCL', 'Estado', 'Cidade', 'Representante_Nome',
-                'Dias_Sem_Coleta'  # Manter apenas dias sem coleta, remover Risco_Diario, Tendencia_Volume, Deltas
-            ]
-        else:
-            # Para quem não é de rede: não mostrar lista (será tratado abaixo)
-            colunas_principais = []
+        # Sempre mostrar planilhão de labs (rede ou não)
+        colunas_principais = [
+            'CNPJ_PCL', 'Nome_Fantasia_PCL', 'Estado', 'Cidade', 'Representante_Nome',
+            'Dias_Sem_Coleta'
+        ]
 
         # Adicionar colunas de coletas mensais (2024 e 2025)
         meses_nomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
@@ -6379,75 +6800,73 @@ def main():
         # Colunas de 2025 (até o mês atual)
         cols_2025 = [f'N_Coletas_{m}_25' for m in meses_nomes[:mes_limite_2025]]
 
-        # Se faz parte de rede e está filtrado por rede específica: adicionar colunas mensais e métricas
-        if mostrar_rede and rede_filtro != "Todas":
-            # Calcular métricas adicionais para cada lab da rede
-            df_tabela_filtrada = df_tabela_filtrada.copy()
-            
-            # Calcular volume atual (mês vigente)
-            mes_atual_codigo = meses_nomes[datetime.now().month - 1]
-            col_mes_atual = f'N_Coletas_{mes_atual_codigo}_25'
-            if col_mes_atual in df_tabela_filtrada.columns:
-                df_tabela_filtrada['Volume_Mes_Vigente'] = pd.to_numeric(df_tabela_filtrada[col_mes_atual], errors='coerce').fillna(0)
-            else:
-                df_tabela_filtrada['Volume_Mes_Vigente'] = 0
-            
-            # Calcular maior mês 2024 (valor + mês)
-            if cols_2024:
-                df_tabela_filtrada['Maior_Mes_2024_Valor'] = df_tabela_filtrada[cols_2024].max(axis=1, skipna=True).fillna(0)
-                df_tabela_filtrada['Maior_Mes_2024_Nome'] = df_tabela_filtrada[cols_2024].idxmax(axis=1).apply(
-                    lambda x: meses_nomes_completos.get(x.split('_')[2], x.split('_')[2]) if pd.notna(x) and '_' in str(x) else 'N/A'
-                )
-            else:
-                df_tabela_filtrada['Maior_Mes_2024_Valor'] = 0
-                df_tabela_filtrada['Maior_Mes_2024_Nome'] = 'N/A'
-            
-            # Calcular maior mês 2025 (valor + mês)
-            if cols_2025:
-                df_tabela_filtrada['Maior_Mes_2025_Valor'] = df_tabela_filtrada[cols_2025].max(axis=1, skipna=True).fillna(0)
-                df_tabela_filtrada['Maior_Mes_2025_Nome'] = df_tabela_filtrada[cols_2025].idxmax(axis=1).apply(
-                    lambda x: meses_nomes_completos.get(x.split('_')[2], x.split('_')[2]) if pd.notna(x) and '_' in str(x) else 'N/A'
-                )
-            else:
-                df_tabela_filtrada['Maior_Mes_2025_Valor'] = 0
-                df_tabela_filtrada['Maior_Mes_2025_Nome'] = 'N/A'
-            
-            # Total de coletas do mês vigente (agregado)
-            total_mes_vigente = int(df_tabela_filtrada['Volume_Mes_Vigente'].sum())
-            
-            # Adicionar colunas mensais e métricas
-            colunas_principais.extend(['Volume_Mes_Vigente', 'Maior_Mes_2024_Valor', 'Maior_Mes_2024_Nome',
-                                      'Maior_Mes_2025_Valor', 'Maior_Mes_2025_Nome'])
-            colunas_principais.extend(cols_2024 + cols_2025)  # Adicionar colunas mensais
+        # Calcular métricas de mês atual e picos para todos
+        df_tabela_filtrada = df_tabela_filtrada.copy()
+        mes_atual_codigo = meses_nomes[datetime.now().month - 1]
+        col_mes_atual = f'N_Coletas_{mes_atual_codigo}_25'
+        if col_mes_atual in df_tabela_filtrada.columns:
+            df_tabela_filtrada['Volume_Mes_Vigente'] = pd.to_numeric(df_tabela_filtrada[col_mes_atual], errors='coerce').fillna(0)
+        else:
+            df_tabela_filtrada['Volume_Mes_Vigente'] = 0
+
+        if cols_2024:
+            df_tabela_filtrada['Maior_Mes_2024_Valor'] = df_tabela_filtrada[cols_2024].max(axis=1, skipna=True).fillna(0)
+            df_tabela_filtrada['Maior_Mes_2024_Nome'] = df_tabela_filtrada[cols_2024].idxmax(axis=1).apply(
+                lambda x: meses_nomes_completos.get(x.split('_')[2], x.split('_')[2]) if pd.notna(x) and '_' in str(x) else 'N/A'
+            )
+        else:
+            df_tabela_filtrada['Maior_Mes_2024_Valor'] = 0
+            df_tabela_filtrada['Maior_Mes_2024_Nome'] = 'N/A'
+
+        if cols_2025:
+            df_tabela_filtrada['Maior_Mes_2025_Valor'] = df_tabela_filtrada[cols_2025].max(axis=1, skipna=True).fillna(0)
+            df_tabela_filtrada['Maior_Mes_2025_Nome'] = df_tabela_filtrada[cols_2025].idxmax(axis=1).apply(
+                lambda x: meses_nomes_completos.get(x.split('_')[2], x.split('_')[2]) if pd.notna(x) and '_' in str(x) else 'N/A'
+            )
+        else:
+            df_tabela_filtrada['Maior_Mes_2025_Valor'] = 0
+            df_tabela_filtrada['Maior_Mes_2025_Nome'] = 'N/A'
+
+        total_mes_vigente = int(df_tabela_filtrada['Volume_Mes_Vigente'].sum())
+
+        colunas_principais.extend(['Volume_Mes_Vigente', 'Maior_Mes_2024_Valor', 'Maior_Mes_2024_Nome',
+                                  'Maior_Mes_2025_Valor', 'Maior_Mes_2025_Nome'])
+        colunas_principais.extend(cols_2024 + cols_2025)
+        if mostrar_rede:
             colunas_principais.extend(['Rede', 'Ranking', 'Ranking Rede'])
-            
-            # Mostrar métricas agregadas da rede
+
+        # Se não houver rede, mostrar apenas o laboratório selecionado
+        if not mostrar_rede and lab_final_cnpj:
+            df_tabela_filtrada = df_tabela_filtrada[df_tabela_filtrada['CNPJ_Normalizado'] == lab_final_cnpj]
+
+        if mostrar_rede and rede_filtro != "Todas":
+            total_labs_rede = len(df_tabela_filtrada)
+            volume_total_rede = df_tabela_filtrada[cols_2025 + cols_2024].sum().sum() if not df_tabela_filtrada.empty else 0
             st.markdown(f"""
             <div style="background: #e8f5e9; border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
                 <h4 style="margin: 0 0 0.5rem 0; color: #52B54B;">📊 Métricas da Rede: {rede_filtro}</h4>
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
                     <div style="text-align: center;">
+                        <div style="font-size: 1.2rem; font-weight: bold; color: #6BBF47;">{total_labs_rede}</div>
+                        <div style="font-size: 0.8rem; color: #666;">Laboratórios da rede</div>
+                    </div>
+                    <div style="text-align: center;">
                         <div style="font-size: 1.2rem; font-weight: bold; color: #6BBF47;">{total_mes_vigente:,.0f}</div>
-                        <div style="font-size: 0.8rem; color: #666;">Total Coletas Mês Vigente</div>
+                        <div style="font-size: 0.8rem; color: #666;">Total coletas mês vigente</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="font-size: 1.2rem; font-weight: bold; color: #6BBF47;">{volume_total_rede:,.0f}</div>
+                        <div style="font-size: 0.8rem; color: #666;">Total 2024-2025 (rede)</div>
                     </div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
-        elif not mostrar_rede or rede_filtro == "Todas":
-            # Se não faz parte de rede: não mostrar lista de labs
-            colunas_principais = []
         
         colunas_existentes = [col for col in colunas_principais if col in df_tabela_filtrada.columns]
         if not df_tabela_filtrada.empty and colunas_existentes:
             df_exibicao = df_tabela_filtrada[colunas_existentes].copy()
             # Formatação de colunas
-            if 'Variacao_Percentual' in df_exibicao.columns:
-                df_exibicao['Variacao_Percentual'] = df_exibicao['Variacao_Percentual'].round(2)
-            if 'Volume_Atual_2025' in df_exibicao.columns:
-                df_exibicao['Volume_Atual_2025'] = df_exibicao['Volume_Atual_2025'].astype(int)
-            if 'Volume_Maximo_2024' in df_exibicao.columns:
-                df_exibicao['Volume_Maximo_2024'] = df_exibicao['Volume_Maximo_2024'].astype(int)
-            # Criar configuração de colunas de forma mais explícita
+            # Criar configuração de colunas de forma mais explícita (sem risco diário, sem médias móveis)
             column_config = {
                 "CNPJ_PCL": st.column_config.TextColumn(
                     "📄 CNPJ",
@@ -6613,11 +7032,7 @@ def main():
                     key="download_excel_tabela"
                 )
         else:
-            # Se não faz parte de rede, não mostrar lista
-            if not mostrar_rede or rede_filtro == "Todas":
-                st.info("📋 Esta seção é exibida apenas para laboratórios que fazem parte de uma rede. Selecione uma rede específica para visualizar os dados.")
-            else:
-                st.info("📋 Nenhum laboratório encontrado com os filtros aplicados.")
+            st.info("📋 Nenhum laboratório encontrado com os filtros aplicados.")
         
         # ========================================
         # DADOS DO CONCORRENTE GRALAB (FINAL DA PÁGINA)

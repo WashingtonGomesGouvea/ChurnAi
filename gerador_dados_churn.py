@@ -4,6 +4,7 @@ import pymongo
 import pytz
 import schedule
 import time
+import calendar
 from bson import ObjectId
 from datetime import datetime, timedelta
 import pandas as pd
@@ -125,9 +126,14 @@ def gerar_resumo_semanal_mes(base_df: pd.DataFrame,
         return vazio_series, meta
 
     df_mes['createdAt'] = df_mes['createdAt'].dt.tz_convert(timezone_br)
+    inicio_mes = datetime(ano_ref, mes_ref, 1).date()
+    fim_mes = datetime(ano_ref, mes_ref, calendar.monthrange(ano_ref, mes_ref)[1]).date()
+    inicio_janela = inicio_mes - timedelta(days=inicio_mes.weekday())  # segunda da semana que contém o dia 1
+    fim_janela = fim_mes + timedelta(days=6 - fim_mes.weekday())      # domingo da última semana do mês
+    df_mes['createdAt_date'] = df_mes['createdAt'].dt.date
     df_mes = df_mes[
-        (df_mes['createdAt'].dt.year == ano_ref) &
-        (df_mes['createdAt'].dt.month == mes_ref)
+        (df_mes['createdAt_date'] >= inicio_janela) &
+        (df_mes['createdAt_date'] <= fim_janela)
     ].copy()
     if df_mes.empty:
         return vazio_series, meta
@@ -1657,19 +1663,24 @@ def calcular_metricas_churn():
                 limiar_grande=PORTE_GRANDE_MIN,
                 limiar_medio=PORTE_MEDIO_MIN
             )
+            # Calcular risco por dias sem coleta conforme porte
+            # Garantir que as colunas necessárias existam e tenham valores válidos
             base['Risco_Por_Dias_Sem_Coleta'] = base.apply(
                 lambda row: avaliar_risco_por_dias_sem_coleta(
-                    row.get('Dias_Sem_Coleta', 0),
-                    row.get('Dias_Sem_Coleta_Uteis', 0),
-                    row.get('Porte', 'Pequeno')
+                    row.get('Dias_Sem_Coleta', 0) or 0,
+                    row.get('Dias_Sem_Coleta_Uteis', 0) or 0,
+                    row.get('Porte', 'Pequeno') or 'Pequeno'
                 ),
                 axis=1
             )
+            # Classificar perdas conforme regras por porte e limite de 180 dias corridos (6 meses)
+            # Perda Antiga: >180 dias corridos (todos os portes)
+            # Perda Recente: entre mínimo do porte e 180 dias corridos
             base['Classificacao_Perda_V2'] = base.apply(
                 lambda row: classificar_perda_por_dias_sem_coleta(
-                    row.get('Dias_Sem_Coleta', 0),
-                    row.get('Dias_Sem_Coleta_Uteis', 0),
-                    row.get('Porte', 'Pequeno')
+                    row.get('Dias_Sem_Coleta', 0) or 0,
+                    row.get('Dias_Sem_Coleta_Uteis', 0) or 0,
+                    row.get('Porte', 'Pequeno') or 'Pequeno'
                 ) or 'Sem Perda',
                 axis=1
             )

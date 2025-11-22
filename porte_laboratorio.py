@@ -168,57 +168,140 @@ def obter_regra_perda_por_porte(porte: str) -> Dict[str, Union[int, bool]]:
 def avaliar_risco_por_dias_sem_coleta(dias_corridos: int,
                                       dias_uteis: int,
                                       porte: str) -> bool:
+    """
+    Avalia se um laboratório está em risco baseado em dias sem coleta e seu porte.
+    
+    A regra segue a documentação do sistema:
+    - Pequeno: Não aciona por dias sem coleta (apenas por queda de volume)
+    - Médio: Mínimo 2 dias úteis, máximo 15 dias corridos
+    - Médio/Grande: Mínimo 1 dia útil, máximo 15 dias corridos
+    - Grande: Mínimo 1 dia útil, máximo 5 dias úteis
+    
+    Args:
+        dias_corridos: Número de dias corridos sem coleta
+        dias_uteis: Número de dias úteis sem coleta
+        porte: Porte do laboratório ('Grande', 'Médio/Grande', 'Médio', 'Pequeno')
+        
+    Returns:
+        True se está em risco conforme regras do porte, False caso contrário
+    """
     regra = obter_regra_risco_por_porte(porte)
+    
+    # Se o porte não habilita risco por dias sem coleta, retornar False
     if not regra.get('habilita', False):
         return False
-    if dias_corridos is None:
+    
+    # Normalizar valores None/NaN para 0
+    try:
+        if dias_corridos is None or (isinstance(dias_corridos, float) and pd.isna(dias_corridos)):
+            dias_corridos = 0
+        else:
+            dias_corridos = int(dias_corridos)
+    except (ValueError, TypeError):
         dias_corridos = 0
-    if dias_uteis is None:
+    
+    try:
+        if dias_uteis is None or (isinstance(dias_uteis, float) and pd.isna(dias_uteis)):
+            dias_uteis = 0
+        else:
+            dias_uteis = int(dias_uteis)
+    except (ValueError, TypeError):
         dias_uteis = 0
-
+    
+    # Obter limites da regra
     min_uteis = regra.get('min_dias_uteis')
     min_corridos = regra.get('min_dias_corridos')
     max_uteis = regra.get('max_dias_uteis')
     max_corridos = regra.get('max_dias_corridos')
-
+    
+    # Validar mínimos: se especificado e não atingido, não está em risco
     if min_uteis is not None and dias_uteis < min_uteis:
         return False
     if min_corridos is not None and dias_corridos < min_corridos:
         return False
+    
+    # Validar máximos: se especificado e excedido, não está mais em risco (virou perda)
     if max_uteis is not None and dias_uteis > max_uteis:
         return False
     if max_corridos is not None and dias_corridos > max_corridos:
         return False
+    
+    # Se passou em todas as validações, está na janela de risco
     return True
 
 
 def classificar_perda_por_dias_sem_coleta(dias_corridos: int,
                                           dias_uteis: int,
                                           porte: str) -> Optional[str]:
-    if dias_corridos is None:
+    """
+    Classifica perda baseado em dias sem coleta e porte do laboratório.
+    
+    Regras conforme documentação:
+    - Perda Antiga: >180 dias corridos sem coleta (todos os portes)
+    - Perda Recente: Entre mínimo específico do porte e 180 dias corridos
+      - Pequeno: 30-180 dias corridos
+      - Médio: 15-180 dias corridos
+      - Médio/Grande: 15-180 dias corridos
+      - Grande: 5+ dias úteis, máximo 180 dias corridos
+    - Sem Perda: Abaixo dos mínimos ou sem dados
+    
+    Args:
+        dias_corridos: Número de dias corridos sem coleta
+        dias_uteis: Número de dias úteis sem coleta
+        porte: Porte do laboratório ('Grande', 'Médio/Grande', 'Médio', 'Pequeno')
+        
+    Returns:
+        'Perda Antiga', 'Perda Recente' ou None (Sem Perda)
+    """
+    # Normalizar valores None/NaN para 0
+    try:
+        if dias_corridos is None or (isinstance(dias_corridos, float) and pd.isna(dias_corridos)):
+            dias_corridos = 0
+        else:
+            dias_corridos = int(dias_corridos)
+    except (ValueError, TypeError):
         dias_corridos = 0
-    if dias_uteis is None:
+    
+    try:
+        if dias_uteis is None or (isinstance(dias_uteis, float) and pd.isna(dias_uteis)):
+            dias_uteis = 0
+        else:
+            dias_uteis = int(dias_uteis)
+    except (ValueError, TypeError):
         dias_uteis = 0
-
+    
+    # Limite de 180 dias corridos (6 meses) conforme documentação
+    # Valores acima de 180 dias corridos são "Perda Antiga"
     if dias_corridos > PERDA_ANTIGA_LIMITE_CORRIDOS:
         return 'Perda Antiga'
 
+    # Obter regras de perda recente por porte
     regra_perda = obter_regra_perda_por_porte(porte)
     min_corridos = regra_perda.get('min_dias_corridos')
     min_uteis = regra_perda.get('min_dias_uteis')
+    # Máximo de dias corridos é sempre 180 (PERDA_ANTIGA_LIMITE_CORRIDOS)
     max_corridos = regra_perda.get('max_dias_corridos', PERDA_ANTIGA_LIMITE_CORRIDOS)
+    
+    # Garantir que max_corridos não exceda o limite de 180 dias
+    if max_corridos is None or max_corridos > PERDA_ANTIGA_LIMITE_CORRIDOS:
+        max_corridos = PERDA_ANTIGA_LIMITE_CORRIDOS
 
+    # Verificar condições para "Perda Recente"
     cond_corridos = True
     cond_uteis = True
 
+    # Validar mínimo de dias corridos
     if min_corridos is not None:
         cond_corridos = dias_corridos >= min_corridos
+    # Validar mínimo de dias úteis (apenas para porte Grande)
     if min_uteis is not None:
         cond_uteis = dias_uteis >= min_uteis
 
+    # Se atende aos critérios mínimos E está dentro do limite máximo (≤180 dias corridos)
     if cond_corridos and cond_uteis and dias_corridos <= max_corridos:
         return 'Perda Recente'
 
+    # Abaixo dos mínimos ou dados insuficientes = Sem Perda
     return None
 
 

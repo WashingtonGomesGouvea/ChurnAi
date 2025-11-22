@@ -6643,38 +6643,82 @@ def main():
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
-                        # Gráfico semanal (mês atual) + mensal
+                        # Gráfico de coletas diárias (mês atual) + mensal
                         st.markdown("---")
-                        st.subheader("📊 Coletas por Semana (mês atual)")
-                        semanas_raw = lab_info.get('Semanas_Mes_Atual', '[]') if 'lab_info' in locals() else '[]'
-                        try:
-                            semanas_list = json.loads(semanas_raw) if isinstance(semanas_raw, str) else semanas_raw
-                        except Exception:
-                            semanas_list = []
-                        if semanas_list and isinstance(semanas_list, list):
-                            df_sem = pd.DataFrame([
-                                {
-                                    "Semana ISO": f"{s.get('iso_week')}/{s.get('iso_year')}",
-                                    "Volume": s.get('volume_util', 0) or s.get('volume_total', 0) or 0,
-                                    "Anterior": s.get('volume_semana_anterior', 0) or 0
-                                }
-                                for s in semanas_list if s
-                            ])
-                            if not df_sem.empty:
-                                fig_sem = px.bar(
-                                    df_sem,
-                                    x="Semana ISO",
-                                    y="Volume",
-                                    text="Volume",
-                                    hover_data=["Anterior"],
-                                    title="Coletas por semana (mês corrente)"
-                                )
-                                fig_sem.update_layout(height=360, margin=dict(l=10, r=10, t=60, b=10))
-                                st.plotly_chart(fig_sem, use_container_width=True, key="graf_semana_detalhe")
-                            else:
-                                st.info("📊 Sem dados semanais para este laboratório.")
-                        else:
-                            st.info("📊 Sem dados semanais para este laboratório.")
+                        st.subheader("📊 Coletas por Dia (mês atual)")
+                        
+                        # Buscar dados diários do mês atual da base completa
+                        dados_encontrados = False
+                        if lab_final_cnpj and 'Dados_Diarios_2025' in df.columns:
+                            lab_dados = df[df['CNPJ_Normalizado'] == lab_final_cnpj]
+                            if not lab_dados.empty:
+                                dados_diarios_raw = lab_dados.iloc[0].get('Dados_Diarios_2025', '{}')
+                                try:
+                                    import json  # Import explícito para garantir disponibilidade
+                                    # Parse dos dados JSON
+                                    dados_diarios = json.loads(dados_diarios_raw) if isinstance(dados_diarios_raw, str) else dados_diarios_raw
+                                    
+                                    # Obter chave do mês atual
+                                    hoje = datetime.now()
+                                    mes_atual_key = f"{hoje.year}-{hoje.month:02d}"
+                                    mes_nome = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                                              "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"][hoje.month - 1]
+                                    
+                                    # Verificar se há dados para o mês atual
+                                    if mes_atual_key in dados_diarios and dados_diarios[mes_atual_key]:
+                                        dias_mes = dados_diarios[mes_atual_key]
+                                        
+                                        # Criar DataFrame com os dias ordenados
+                                        df_dias = pd.DataFrame([
+                                            {"Dia": int(dia), "Coletas": int(volume)}
+                                            for dia, volume in sorted(dias_mes.items(), key=lambda x: int(x[0]))
+                                        ])
+                                        
+                                        if not df_dias.empty:
+                                            dados_encontrados = True
+                                            
+                                            # Criar gráfico de barras
+                                            fig_dias = px.bar(
+                                                df_dias,
+                                                x="Dia",
+                                                y="Coletas",
+                                                text="Coletas",
+                                                title=f"Coletas por dia - {mes_nome}/{hoje.year}",
+                                                color="Coletas",
+                                                color_continuous_scale="Blues"
+                                            )
+                                            fig_dias.update_traces(textposition='outside', textfont_size=10)
+                                            fig_dias.update_layout(
+                                                height=360,
+                                                margin=dict(l=10, r=10, t=60, b=10),
+                                                xaxis_title="Dia do Mês",
+                                                yaxis_title="Número de Coletas",
+                                                showlegend=False
+                                            )
+                                            fig_dias.update_xaxes(dtick=1)  # Mostrar todos os dias
+                                            
+                                            st.plotly_chart(fig_dias, use_container_width=True, key="graf_dias_mes_detalhe")
+                                            
+                                            # Adicionar estatísticas resumidas
+                                            col1, col2, col3, col4 = st.columns(4)
+                                            with col1:
+                                                st.metric("Total no Mês", f"{df_dias['Coletas'].sum():,}")
+                                            with col2:
+                                                st.metric("Média Diária", f"{df_dias['Coletas'].mean():.1f}")
+                                            with col3:
+                                                st.metric("Dia com Mais Coletas", f"Dia {df_dias.loc[df_dias['Coletas'].idxmax(), 'Dia']}")
+                                            with col4:
+                                                st.metric("Máximo em um Dia", f"{df_dias['Coletas'].max():,}")
+                                
+                                except Exception as e:
+                                    import traceback
+                                    st.warning(f"⚠️ Erro ao processar dados diários: {e}")
+                                    with st.expander("🔍 Detalhes do erro (debug)"):
+                                        st.code(f"Tipo de dados: {type(dados_diarios_raw)}\nConteúdo (primeiros 200 chars): {str(dados_diarios_raw)[:200]}\nErro completo: {traceback.format_exc()}")
+                        
+                        # Mensagem caso não encontre dados
+                        if not dados_encontrados:
+                            st.info("📊 Sem dados diários para o mês atual deste laboratório.")
 
                         st.subheader("📈 Evolução Mensal")
                         ChartManager.criar_grafico_evolucao_mensal(

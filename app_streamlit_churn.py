@@ -3137,7 +3137,15 @@ def renderizar_aba_fechamento_semanal(
     # ============================================================
     # 3. DETALHAMENTO POR SEMANA (O "Filme do Mês")
     # ============================================================
-    st.subheader("📆 Evolução do Mês (Semana a Semana)")
+    
+    # Obter mês de referência dos metadados
+    mes_ref_num = met.get('referencia', {}).get('mes', datetime.now().month)
+    ano_ref = met.get('referencia', {}).get('ano', datetime.now().year)
+    meses_nomes_completos = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
+                             "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    mes_nome = meses_nomes_completos[mes_ref_num - 1] if 1 <= mes_ref_num <= 12 else "Mês Atual"
+    
+    st.subheader(f"📆 Evolução do Mês (Semana a Semana) - {mes_nome}/{ano_ref}")
     
     # met já foi calculado acima nos KPIs executivos
 

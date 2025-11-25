@@ -6609,9 +6609,9 @@ def main():
                         """, unsafe_allow_html=True)
 
                         variacao_ultimo_vs_media = ((metricas_evolucao['media_ultimo_mes'] - metricas_evolucao['media_comparacao']) / metricas_evolucao['media_comparacao'] * 100) if metricas_evolucao['media_comparacao'] > 0 else 0
-                        percentual_maxima = (metricas_evolucao['media_ultimo_mes'] / metricas_evolucao['max_comparacao'] * 100) if metricas_evolucao['max_comparacao'] > 0 else 0
+                        variacao_ultimo_vs_maxima = ((metricas_evolucao['media_ultimo_mes'] - metricas_evolucao['max_comparacao']) / metricas_evolucao['max_comparacao'] * 100) if metricas_evolucao['max_comparacao'] > 0 else 0
                         cor_variacao = "#28a745" if variacao_ultimo_vs_media >= 0 else "#dc3545"
-                        cor_percentual = "#28a745" if percentual_maxima >= 80 else "#ffc107" if percentual_maxima >= 50 else "#dc3545"
+                        cor_maxima = "#28a745" if variacao_ultimo_vs_maxima >= 0 else "#dc3545"
                         ano_comp = metricas_evolucao['ano_comparacao']
                         st.markdown(f"""
                         <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; border-left: 4px solid #6f42c1;">
@@ -6626,8 +6626,8 @@ def main():
                                 </div>
                                 <div>
                                     <div style="font-size: 0.8rem; color: #666;">Último Mês ({metricas_evolucao['ultimo_mes_display']}) vs Máxima {ano_comp}</div>
-                                    <div style="font-size: 1.2rem; font-weight: bold; color: {cor_percentual};">
-                                        {percentual_maxima:.1f}%
+                                    <div style="font-size: 1.2rem; font-weight: bold; color: {cor_maxima};">
+                                        {'+' if variacao_ultimo_vs_maxima >= 0 else ''}{variacao_ultimo_vs_maxima:.1f}%
                                     </div>
                                     <div style="font-size: 0.7rem; color: #666;">{metricas_evolucao['media_ultimo_mes']:,} vs {metricas_evolucao['max_comparacao']:,}</div>
                                 </div>

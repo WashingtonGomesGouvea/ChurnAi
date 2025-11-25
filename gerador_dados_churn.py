@@ -165,7 +165,10 @@ def gerar_resumo_semanal_mes(base_df: pd.DataFrame,
             semana_fim_util = datetime.fromisocalendar(iso_year, iso_week, 5).date()
         except ValueError:
             semana_fim_util = semana_inicio + timedelta(days=4)
-        fechada = hoje.date() > semana_fim_util
+        # Fechamento oficial: sexta 18h
+        fechamento_dt = datetime.combine(semana_fim_util, datetime.min.time()) + timedelta(hours=18)
+        fechamento_dt = timezone_br.localize(fechamento_dt)
+        fechada = hoje > fechamento_dt
         week_meta_map[(iso_year, iso_week)] = {
             "semana_no_mes": semana_no_mes,
             "fechada": fechada,

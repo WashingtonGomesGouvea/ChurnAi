@@ -2566,6 +2566,139 @@ def renderizar_aba_fechamento_semanal(
     st.markdown("## 📅 Fechamento Semanal (Visão Tática)")
     st.caption("Monitoramento de todos os laboratórios. Ordenado por maior queda de volume.")
 
+    # -------------------------------------------------------------
+    # Seleção de fechamento semanal (sem “tempo real”)
+    # -------------------------------------------------------------
+    metricas_sem = calcular_metricas_fechamento_semanal(df)
+    met = metricas_sem
+    semanas_meta = sorted(
+        met.get('semanas_detalhes', []),
+        key=lambda x: (x.get('iso_year', 0), x.get('iso_week', 0))
+    )
+    semanas_map = {
+        (sem.get('iso_year'), sem.get('iso_week')): sem
+        for sem in semanas_meta
+        if sem.get('iso_year') and sem.get('iso_week')
+    }
+
+    def _label_semana(sem):
+        iso_y = sem.get('iso_year')
+        iso_w = sem.get('iso_week')
+        try:
+            inicio = datetime.fromisocalendar(int(iso_y), int(iso_w), 1)
+            fim = inicio + timedelta(days=4)  # corte até sexta
+            intervalo = f"{inicio:%d/%m}–{fim:%d/%m}"
+        except Exception:
+            intervalo = "—"
+        num = sem.get('semana', iso_w)
+        status = "✅" if sem.get('fechada') else "⏳"
+        return f"Semana {num} ({intervalo}) · ISO {iso_w}/{iso_y} {status}"
+
+    semanas_options = [(sem.get('iso_year'), sem.get('iso_week')) for sem in semanas_meta if sem.get('iso_week') and sem.get('iso_year')]
+    idx_default = 0
+    if semanas_options:
+        # Padrão: última semana fechada; se nenhuma fechada, última da lista
+        fechadas_idx = [i for i, key in enumerate(semanas_options) if semanas_map.get(key, {}).get('fechada')]
+        idx_default = (fechadas_idx[-1] if fechadas_idx else len(semanas_options) - 1)
+    semana_state_key = "semana_fechamento_tatica"
+    if semana_state_key not in st.session_state and semanas_options:
+        st.session_state[semana_state_key] = semanas_options[idx_default]
+
+    if semanas_options:
+        sel_default = st.session_state.get(semana_state_key, semanas_options[idx_default])
+        try:
+            idx_current = semanas_options.index(sel_default)
+        except ValueError:
+            idx_current = idx_default
+
+        sel_key = st.selectbox(
+            "Fechamento semanal (relatório fechado, corte sexta-feira)",
+            options=semanas_options,
+            format_func=lambda key: _label_semana(semanas_map.get(key, {})),
+            index=idx_current,
+            key="select_semana_fechamento",
+            help="Escolha apenas semanas fechadas; semanas em andamento são ocultadas."
+        )
+        sel_info = semanas_map.get(sel_key, {})
+        if not sel_info.get('fechada'):
+            st.warning("Esta semana ainda não está fechada. Aguarde o fechamento (sexta 18h) para o relatório oficial.")
+        if st.session_state.get(semana_state_key) != sel_key:
+            st.session_state[semana_state_key] = sel_key
+            st.rerun()
+        semana_escolhida = sel_info if sel_info.get('fechada') else None
+        idx_sel = semanas_options.index(sel_key) if sel_key in semanas_options else 0
+        semana_anterior_meta = semanas_map.get(semanas_options[idx_sel - 1]) if idx_sel > 0 else None
+    else:
+        semana_escolhida = None
+        semana_anterior_meta = None
+    allowed_keys = set()
+    if semana_escolhida:
+        allowed_keys.add(sel_key)
+        if 'idx_sel' in locals() and idx_sel > 0:
+            allowed_keys.add(semanas_options[idx_sel - 1])
+
+    def _aplicar_semana(df_src: pd.DataFrame, semana_meta: Optional[dict], semana_prev_meta: Optional[dict]) -> Tuple[pd.DataFrame, float, float]:
+        """Cria visão do fechamento da semana selecionada, com comparação vs semana imediatamente anterior."""
+        if not semana_meta:
+            return df_src.copy(), float(df_src.get('WoW_Semana_Atual', 0).sum()), float(df_src.get('WoW_Semana_Anterior', 0).sum())
+
+        iso_y_sel = int(semana_meta.get('iso_year', 0) or 0)
+        iso_w_sel = int(semana_meta.get('iso_week', 0) or 0)
+        if semana_prev_meta:
+            iso_y_prev = int(semana_prev_meta.get('iso_year', 0) or 0)
+            iso_w_prev = int(semana_prev_meta.get('iso_week', 0) or 0)
+            prev_key = (iso_y_prev, iso_w_prev)
+        else:
+            try:
+                prev_monday = datetime.fromisocalendar(iso_y_sel, iso_w_sel, 1) - timedelta(days=7)
+                prev_iso = prev_monday.isocalendar()
+                prev_key = (int(prev_iso.year), int(prev_iso.week))
+            except Exception:
+                prev_key = None
+
+        def _map_weeks(val):
+            try:
+                semanas_json = json.loads(val) if isinstance(val, str) else (val if isinstance(val, list) else [])
+            except Exception:
+                return {}
+            mapa = {}
+            for s in semanas_json:
+                ky = (s.get('iso_year'), s.get('iso_week'))
+                if ky[0] and ky[1]:
+                    mapa[ky] = s
+            return mapa
+
+        df_out = df_src.copy()
+        vols_atual = []
+        vols_ant = []
+        for _, row in df_out.iterrows():
+            semanas_map = _map_weeks(row.get('Semanas_Mes_Atual', '[]'))
+            atual_info = semanas_map.get((iso_y_sel, iso_w_sel), {})
+            vol_atual = atual_info.get('volume_util', 0) or 0
+            vol_ant = atual_info.get('volume_semana_anterior')
+            if (vol_ant is None or vol_ant == 0) and prev_key and prev_key in semanas_map:
+                vol_ant = semanas_map[prev_key].get('volume_util', 0) or vol_ant
+            vols_atual.append(float(vol_atual))
+            vols_ant.append(float(vol_ant) if vol_ant is not None else 0.0)
+
+        df_out['WoW_Semana_Atual'] = vols_atual
+        df_out['WoW_Semana_Anterior'] = vols_ant
+        return df_out, sum(vols_atual), sum(vols_ant)
+
+    df_semana_view, total_semana_atual, total_semana_anterior = _aplicar_semana(df, semana_escolhida, semana_anterior_meta)
+    df = df_semana_view
+    if 'WoW_Semana_Atual' in df.columns and 'WoW_Semana_Anterior' in df.columns:
+        df['Variacao_Semanal_Pct'] = np.where(
+            df['WoW_Semana_Anterior'] > 0,
+            ((df['WoW_Semana_Atual'] - df['WoW_Semana_Anterior']) / df['WoW_Semana_Anterior']) * 100,
+            None
+        )
+    # Atualizar metadados para uso em todas as seções com a semana selecionada
+    if semana_escolhida and allowed_keys:
+        met['semanas_detalhes'] = [sem for sem in semanas_meta if (sem.get('iso_year'), sem.get('iso_week')) in allowed_keys]
+        if not met['semanas_detalhes']:
+            met['semanas_detalhes'] = semanas_meta
+
     # 1. Cálculos Específicos da Aba
     if 'CNPJ_Normalizado' not in df.columns and 'CNPJ_PCL' in df.columns:
         df['CNPJ_Normalizado'] = df['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
@@ -2651,19 +2784,25 @@ def renderizar_aba_fechamento_semanal(
     # ============================================================
     st.markdown("### 📊 Resumo Semanal")
     
-    metricas_sem = calcular_metricas_fechamento_semanal(df)
-    met = metricas_sem
-    cards = met.get('resumo_cards', {})
-    # Substituir total_labs pelo valor após filtros
-    cards['total_labs'] = total_labs_filtrado
-    
+    cards = {
+        'volume_semana_atual': float(total_semana_atual),
+        'volume_semana_anterior': float(total_semana_anterior),
+        'media_semana_atual': float(df['WoW_Semana_Atual'].mean()) if len(df) else 0.0,
+        'media_semana_anterior': float(df['WoW_Semana_Anterior'].mean()) if len(df) else 0.0,
+        'variacao_media_pct': calcular_variacao_percentual(
+            float(df['WoW_Semana_Atual'].mean()) if len(df) else 0.0,
+            float(df['WoW_Semana_Anterior'].mean()) if len(df) else 0.0
+        ),
+        'total_labs': total_labs_filtrado
+    }
+
     col1, col2, col3, col4 = st.columns(4)
     col1.metric(
-        "Volume semanal atual",
+        "Volume semanal (selecionada)",
         f"{cards.get('volume_semana_atual', 0):,.0f}"
     )
     col2.metric(
-        "Volume semanal anterior",
+        "Volume semana anterior",
         f"{cards.get('volume_semana_anterior', 0):,.0f}"
     )
     variacao_media = cards.get('variacao_media_pct')
@@ -2678,6 +2817,13 @@ def renderizar_aba_fechamento_semanal(
         "Labs na listagem",
         f"{cards.get('total_labs', 0):,}"
     )
+
+    if semana_escolhida:
+        label_atual = _label_semana(semana_escolhida)
+        label_prev = _label_semana(semana_anterior_meta) if semana_anterior_meta else "Sem semana anterior disponível"
+        st.caption(f"Fechamento selecionado: {label_atual} · Comparação automática: {label_prev}")
+    else:
+        st.caption("Sem semanas fechadas disponíveis para selecionar.")
     
     st.markdown("---")
     
@@ -3213,6 +3359,8 @@ def renderizar_aba_fechamento_semanal(
                     iso_year = semana.get('iso_year')
                     if not iso_week or not iso_year:
                         continue
+                    if allowed_keys and (iso_year, iso_week) not in allowed_keys:
+                        continue
                     key = (iso_year, iso_week)
                     entrada = semanas_indexadas.get(key, {
                         'semana': semana.get('semana', iso_week),
@@ -3228,15 +3376,18 @@ def renderizar_aba_fechamento_semanal(
                     semanas_indexadas[key] = entrada
 
         # Garantir todas as semanas do mês atual (mesmo que zeradas)
-        hoje = datetime.now()
-        primeiro_dia = datetime(hoje.year, hoje.month, 1)
-        ultimo_dia = datetime(hoje.year, hoje.month, calendar.monthrange(hoje.year, hoje.month)[1])
-        dia_corrente = primeiro_dia
-        expected_keys = set()
-        while dia_corrente <= ultimo_dia:
-            iso = dia_corrente.isocalendar()
-            expected_keys.add((iso.year, iso.week))
-            dia_corrente += timedelta(days=1)
+        if not allowed_keys:
+            hoje = datetime.now()
+            primeiro_dia = datetime(hoje.year, hoje.month, 1)
+            ultimo_dia = datetime(hoje.year, hoje.month, calendar.monthrange(hoje.year, hoje.month)[1])
+            dia_corrente = primeiro_dia
+            expected_keys = set()
+            while dia_corrente <= ultimo_dia:
+                iso = dia_corrente.isocalendar()
+                expected_keys.add((iso.year, iso.week))
+                dia_corrente += timedelta(days=1)
+        else:
+            expected_keys = allowed_keys
 
         for iso_year, iso_week in expected_keys:
             if (iso_year, iso_week) not in semanas_indexadas:
@@ -3247,8 +3398,12 @@ def renderizar_aba_fechamento_semanal(
                     'iso_year': iso_year,
                     'volume_total': 0,
                     'volume_semana_anterior': 0,
-                    'fechada': fim_semana.date() < hoje.date()
+                    'fechada': fim_semana.date() < datetime.now().date()
                 }
+
+        # Se houver seleção, garantir que só as semanas permitidas sejam exibidas
+        if allowed_keys:
+            semanas_indexadas = {k: v for k, v in semanas_indexadas.items() if k in allowed_keys}
 
         # Montar tabela final ordenada
         for iso_year, iso_week in sorted(semanas_indexadas.keys()):

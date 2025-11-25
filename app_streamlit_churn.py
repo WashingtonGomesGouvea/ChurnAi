@@ -2758,35 +2758,20 @@ def renderizar_aba_fechamento_semanal(
         _processar_evento_selecao(evento_risco, df_risco_display)
         st.caption("Selecione a caixa ao lado do laboratório para abrir automaticamente a Análise Detalhada.")
         
-    # Botões de exportação CSV
-    csv_filtrado = df_risco_ordenado.drop(columns=['Detalhes'], errors='ignore').to_csv(index=False).encode('utf-8-sig')
-    col_dl1, col_dl2 = st.columns(2)
-    col_dl1.download_button(
-        label="📥 CSV (filtros aplicados)",
-        data=csv_filtrado,
-        file_name="lista_risco_filtrada.csv",
-        mime="text/csv",
-        help="Exporta a tabela considerando os filtros atuais aplicados na lista acima."
-    )
-    # Botão de exportação CSV completo (todos os labs, sem filtro aplicado)
-    if df_total_processado is not None:
-        csv_total = df_total_processado.drop(columns=['Detalhes'], errors='ignore').to_csv(index=False).encode('utf-8-sig')
-        col_dl2.download_button(
-            label="📥 Exportar CSV Completo",
-            data=csv_total,
-            file_name="lista_risco_completa.csv",
-            mime="text/csv",
-            help="Exporta todos os laboratórios sem filtros aplicados (base completa com todas as colunas disponíveis)."
-        )
-    else:
-        # Se não há df_total, oferecer exportar o df original sem filtros
-        csv_total_fallback = df.drop(columns=['Detalhes'], errors='ignore').to_csv(index=False).encode('utf-8-sig')
-        col_dl2.download_button(
-            label="📥 Exportar CSV Completo",
-            data=csv_total_fallback,
-            file_name="lista_risco_completa.csv",
-            mime="text/csv",
-            help="Exporta todos os laboratórios sem filtros aplicados (base completa com todas as colunas disponíveis)."
+    # Botão de exportação Excel (apenas colunas de exibição)
+    if not df_risco_ordenado.empty:
+        # Filtrar apenas as colunas de exibição que existem no DataFrame
+        cols_export_risco = [c for c in cols_risco_view if c in df_risco_ordenado.columns]
+        df_export_risco = df_risco_ordenado[cols_export_risco].copy()
+        excel_buffer = BytesIO()
+        df_export_risco.to_excel(excel_buffer, index=False, engine='openpyxl')
+        excel_data = excel_buffer.getvalue()
+        st.download_button(
+            label="📊 Download Excel (Lista de Risco)",
+            data=excel_data,
+            file_name=f"lista_risco_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Exporta a tabela com filtros aplicados no formato Excel, contendo apenas as colunas relevantes."
         )
 
     st.markdown("---")
@@ -3043,6 +3028,20 @@ def renderizar_aba_fechamento_semanal(
         )
         _processar_evento_selecao(evento_recente, df_perda_recente_display)
         st.caption("Use a caixa de seleção para abrir automaticamente a Análise Detalhada.")
+        
+        # Botão de exportação Excel (apenas colunas de exibição)
+        cols_export_perda_recente = [c for c in cols_perda_extended if c in df_perda_recente.columns]
+        df_export_perda_recente = df_perda_recente[cols_export_perda_recente].copy()
+        excel_buffer = BytesIO()
+        df_export_perda_recente.to_excel(excel_buffer, index=False, engine='openpyxl')
+        excel_data = excel_buffer.getvalue()
+        st.download_button(
+            label="📊 Download Excel (Perdas Recentes)",
+            data=excel_data,
+            file_name=f"perdas_recentes_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Exporta a tabela de perdas recentes no formato Excel, contendo apenas as colunas relevantes."
+        )
     else:
         st.info("Nenhuma perda recente.")
     
@@ -3143,6 +3142,20 @@ def renderizar_aba_fechamento_semanal(
         )
         _processar_evento_selecao(evento_antiga, df_antigas_display)
         st.caption("Use a caixa de seleção para abrir automaticamente a Análise Detalhada.")
+        
+        # Botão de exportação Excel (apenas colunas de exibição)
+        cols_export_perda_antiga = [c for c in cols_perda_antigas if c in df_antigas.columns]
+        df_export_perda_antiga = df_antigas[cols_export_perda_antiga].copy()
+        excel_buffer = BytesIO()
+        df_export_perda_antiga.to_excel(excel_buffer, index=False, engine='openpyxl')
+        excel_data = excel_buffer.getvalue()
+        st.download_button(
+            label="📊 Download Excel (Perdas Antigas)",
+            data=excel_data,
+            file_name=f"perdas_antigas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Exporta a tabela de perdas antigas no formato Excel, contendo apenas as colunas relevantes."
+        )
     else:
         st.info("Nenhuma perda antiga.")
 
@@ -3624,14 +3637,18 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
     _processar_evento_selecao(evento_mensal, df_mensal_display)
     st.caption("Use a caixa de seleção para abrir automaticamente a Análise Detalhada.")
 
-    # Botão Exportação CSV Mensal
-    csv = df_sorted.to_csv(index=False).encode('utf-8-sig')
+    # Botão Exportação Excel Mensal (apenas colunas de exibição)
+    # cols_final já foi filtrado para incluir apenas colunas que existem em df_sorted
+    df_export_mensal = df_sorted[cols_final].copy()
+    excel_buffer = BytesIO()
+    df_export_mensal.to_excel(excel_buffer, index=False, engine='openpyxl')
+    excel_data = excel_buffer.getvalue()
     st.download_button(
-        label="📥 Download Relatório Mensal (CSV)",
-        data=csv,
-        file_name="relatorio_fechamento_mensal.csv",
-        mime="text/csv",
-        help="Baixar tabela completa com todas as colunas"
+        label="📊 Download Excel (Fechamento Mensal)",
+        data=excel_data,
+        file_name=f"relatorio_fechamento_mensal_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="Exporta a listagem geral do fechamento mensal no formato Excel, contendo apenas as colunas relevantes."
     )
 
     st.markdown("---")

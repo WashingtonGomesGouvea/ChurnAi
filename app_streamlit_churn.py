@@ -2991,7 +2991,6 @@ def renderizar_aba_fechamento_semanal(
             'Ano_Maxima',
             'Media_Mensal_Perdas',       # média enquanto estava vivo
             'Queda_Semanal_Abs',         # queda bruta
-            'Variacao_Semanal_Pct',      # queda % em relação à semana anterior
             'CNPJ_Normalizado',          # técnico – final
         ]
         # Filtrar apenas colunas que existem no DataFrame
@@ -3017,13 +3016,6 @@ def renderizar_aba_fechamento_semanal(
             "Maxima_Coletas": st.column_config.NumberColumn("Máxima Coletas", format="%d", help="Máxima de coletas do cliente (pico histórico)"),
             "Mes_Maxima": st.column_config.TextColumn("Mês Máxima", help="Mês da máxima de coletas"),
             "Ano_Maxima": st.column_config.TextColumn("Ano Máxima", help="Ano da máxima de coletas"),
-            # Coluna de variação percentual (se disponível)
-            "Variacao_Semanal_Pct": st.column_config.NumberColumn(
-                "Variação semanal (%)", 
-                format="%.1f%%", 
-                help="Percentual de variação da semana atual vs semana anterior (WoW). Exibe '—' quando volume anterior está zerado ou ausente.", 
-                default=None
-            ),
         })
         
         evento_recente = st.dataframe(
@@ -3118,7 +3110,6 @@ def renderizar_aba_fechamento_semanal(
             'Ano_Maxima',
             'Media_Mensal_Perdas',
             'Queda_Semanal_Abs',
-            'Variacao_Semanal_Pct',
             'CNPJ_Normalizado',
         ]
         # Filtrar apenas colunas que existem no DataFrame

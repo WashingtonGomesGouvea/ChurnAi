@@ -1969,6 +1969,19 @@ def calcular_metricas_churn():
                     })
                     connector.write_csv(df_churn, arquivo_remoto, overwrite=True)
                     logger.info("Arquivo de churn enviado ao SharePoint com sucesso.")
+
+                    # Upload também o metadados de fechamento (essencial para o app)
+                    meta_path = os.path.join(OUTPUT_DIR, "fechamentos_meta.json")
+                    if os.path.exists(meta_path):
+                        remote_dir = os.path.dirname(arquivo_remoto)
+                        remote_meta_path = f"{remote_dir}/fechamentos_meta.json" if remote_dir else "fechamentos_meta.json"
+                        remote_meta_path = remote_meta_path.replace("\\", "/")
+                        
+                        with open(meta_path, 'rb') as f:
+                            meta_content = f.read()
+                        
+                        connector.upload_small(remote_meta_path, meta_content, overwrite=True)
+                        logger.info(f"Metadados enviados ao SharePoint: {remote_meta_path}")
     except Exception as e:
         logger.warning(f"Falha ao enviar arquivo ao SharePoint (ignorado): {e}")
 

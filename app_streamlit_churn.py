@@ -2107,6 +2107,20 @@ def calcular_metricas_fechamento_semanal(df: pd.DataFrame) -> Dict[str, Any]:
     try:
         import os
         meta_path = os.path.join(OUTPUT_DIR, "fechamentos_meta.json")
+        
+        # Tentar baixar do SharePoint se não existir localmente
+        if not os.path.exists(meta_path):
+            try:
+                cfg = _get_graph_config()
+                if cfg:
+                    arquivo_remoto = cfg.get("arquivo", "Data Analysis/Churn PCLs/churn_analysis_latest.csv")
+                    remote_dir = os.path.dirname(arquivo_remoto)
+                    remote_meta_path = f"{remote_dir}/fechamentos_meta.json" if remote_dir else "fechamentos_meta.json"
+                    remote_meta_path = remote_meta_path.replace("\\", "/")
+                    baixar_sharepoint(arquivo_remoto=remote_meta_path)
+            except Exception as e_download:
+                logger.warning(f"Falha ao tentar baixar metadados do SharePoint: {e_download}")
+
         if os.path.exists(meta_path):
             with open(meta_path, 'r', encoding='utf-8') as f:
                 meta_fechamento = json.load(f)

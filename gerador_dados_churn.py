@@ -198,48 +198,49 @@ def gerar_resumo_semanal_mes(base_df: pd.DataFrame,
     # Metadados globais por semana
     weeks_meta_list = []
     
-    # Buscar volume da última semana do mês anterior para usar como prev_total inicial
+    # Buscar volume da semana ISO imediatamente anterior à primeira semana do mês (evita overlap de mês)
     prev_total = None
-    if mes_ref > 1:
-        mes_anterior = mes_ref - 1
-        ano_anterior = ano_ref
-    else:
-        mes_anterior = 12
-        ano_anterior = ano_ref - 1
-    
-    # Calcular a última semana do mês anterior
+    prev_vol_by_lab = {}
     try:
-        ultimo_dia_mes_anterior = datetime(ano_anterior, mes_anterior, calendar.monthrange(ano_anterior, mes_anterior)[1]).date()
-        iso_ultima_semana_anterior = ultimo_dia_mes_anterior.isocalendar()
-        
-        # Buscar volume dessa semana no df_gatherings_2025
+        first_iso_year, first_iso_week = min(week_meta_map.keys(), key=lambda k: (k[0], k[1]))
+        primeira_segunda = datetime.fromisocalendar(first_iso_year, first_iso_week, 1)
+        prev_monday = primeira_segunda - timedelta(days=7)
+        prev_iso = prev_monday.isocalendar()
+        prev_iso_year, prev_iso_week = int(prev_iso.year), int(prev_iso.week)
+
         if df_gatherings_2025 is not None and not df_gatherings_2025.empty:
-            df_mes_anterior = df_gatherings_2025.copy()
-            df_mes_anterior['createdAt'] = pd.to_datetime(df_mes_anterior.get('createdAt'), errors='coerce', utc=True)
-            df_mes_anterior = df_mes_anterior.dropna(subset=['createdAt'])
-            
-            if not df_mes_anterior.empty:
-                df_mes_anterior['createdAt'] = df_mes_anterior['createdAt'].dt.tz_convert(timezone_br)
-                df_mes_anterior['weekday'] = df_mes_anterior['createdAt'].dt.weekday
-                df_mes_anterior = df_mes_anterior[df_mes_anterior['weekday'] < 5]  # Apenas dias úteis
-                
-                if not df_mes_anterior.empty:
-                    iso_anterior = df_mes_anterior['createdAt'].dt.isocalendar()
-                    df_mes_anterior['iso_week'] = iso_anterior.week.astype(int)
-                    df_mes_anterior['iso_year'] = iso_anterior.year.astype(int)
-                    
-                    # Filtrar pela última semana do mês anterior
-                    df_ultima_semana = df_mes_anterior[
-                        (df_mes_anterior['iso_year'] == iso_ultima_semana_anterior.year) &
-                        (df_mes_anterior['iso_week'] == iso_ultima_semana_anterior.week)
+            df_prev = df_gatherings_2025.copy()
+            df_prev['createdAt'] = pd.to_datetime(df_prev.get('createdAt'), errors='coerce', utc=True)
+            df_prev = df_prev.dropna(subset=['createdAt'])
+
+            if not df_prev.empty:
+                df_prev['createdAt'] = df_prev['createdAt'].dt.tz_convert(timezone_br)
+                df_prev['weekday'] = df_prev['createdAt'].dt.weekday
+                df_prev = df_prev[df_prev['weekday'] < 5]  # Apenas dias úteis
+
+                if not df_prev.empty:
+                    iso_prev = df_prev['createdAt'].dt.isocalendar()
+                    df_prev['iso_week'] = iso_prev.week.astype(int)
+                    df_prev['iso_year'] = iso_prev.year.astype(int)
+
+                    df_prev_week = df_prev[
+                        (df_prev['iso_year'] == prev_iso_year) &
+                        (df_prev['iso_week'] == prev_iso_week)
                     ]
-                    
-                    if not df_ultima_semana.empty:
-                        prev_total = int(df_ultima_semana.shape[0])  # Total de coletas na última semana
-                        logger.info(f"Volume da última semana do mês anterior (ISO {iso_ultima_semana_anterior.week}/{iso_ultima_semana_anterior.year}): {prev_total}")
+
+                    if not df_prev_week.empty:
+                        prev_total = int(df_prev_week.shape[0])  # Total de coletas na semana anterior
+                        prev_vol_by_lab = (
+                            df_prev_week.groupby('_laboratory')
+                            .size()
+                            .astype(int)
+                            .to_dict()
+                        )
+                        logger.info(f"Volume da semana anterior à primeira semana do mês (ISO {prev_iso_week}/{prev_iso_year}): {prev_total}")
     except Exception as e:
-        logger.warning(f"Erro ao buscar volume da última semana do mês anterior: {e}")
+        logger.warning(f"Erro ao buscar volume da semana anterior ao mês: {e}")
         prev_total = None
+        prev_vol_by_lab = {}
     
     for _, row in volumes.groupby(['iso_year', 'iso_week', 'semana_no_mes'])['volume'].sum().reset_index().sort_values('semana_no_mes').iterrows():
         iso_year = int(row['iso_year'])
@@ -262,7 +263,7 @@ def gerar_resumo_semanal_mes(base_df: pd.DataFrame,
     for lab_id, grupo in volumes.groupby('_laboratory'):
         grupo = grupo.sort_values('semana_no_mes')
         registros = []
-        prev_volume_lab = None
+        prev_volume_lab = prev_vol_by_lab.get(lab_id, None)
         for _, row in grupo.iterrows():
             iso_year = int(row['iso_year'])
             iso_week = int(row['iso_week'])

@@ -6917,6 +6917,170 @@ def main():
                         if not dados_encontrados:
                             st.info("📊 Sem dados diários para o mês atual deste laboratório.")
 
+                        # Evolução semanal do mês (visão do laboratório)
+                        hoje_ref = datetime.now()
+                        try:
+                            mes_ref_num = met.get('referencia', {}).get('mes', hoje_ref.month)  # usa mesmo mês da visão geral
+                            ano_ref = met.get('referencia', {}).get('ano', hoje_ref.year)
+                        except Exception:
+                            mes_ref_num = hoje_ref.month
+                            ano_ref = hoje_ref.year
+                        meses_nomes_completos = [
+                            "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                            "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+                        ]
+                        mes_ref_nome = meses_nomes_completos[mes_ref_num - 1]
+                        st.subheader(f"📆 Evolução do Mês (Semana a Semana) - {mes_ref_nome}/{ano_ref}")
+
+                        semanas_raw = []
+                        df_semana_ref = df_para_metricas.copy()
+                        if 'CNPJ_Normalizado' not in df_semana_ref.columns and 'CNPJ_PCL' in df_semana_ref.columns:
+                            df_semana_ref['CNPJ_Normalizado'] = df_semana_ref['CNPJ_PCL'].apply(
+                                lambda x: ''.join(filter(str.isdigit, str(x))) if pd.notna(x) else ''
+                            )
+                        if lab_final_cnpj:
+                            lab_semana = df_semana_ref[df_semana_ref['CNPJ_Normalizado'] == lab_final_cnpj]
+                        else:
+                            lab_semana = df_semana_ref[df_semana_ref['Nome_Fantasia_PCL'] == lab_final]
+
+                        fallback_vol_semana_anterior = 0
+                        if not lab_semana.empty:
+                            # Usa a mesma base do fechamento semanal para preencher a primeira semana quando faltarem dados anteriores
+                            fallback_vol_semana_anterior = pd.to_numeric(
+                                lab_semana.iloc[0].get('WoW_Semana_Anterior', 0), errors='coerce'
+                            )
+                            if pd.isna(fallback_vol_semana_anterior):
+                                fallback_vol_semana_anterior = 0
+
+                        if not lab_semana.empty and 'Semanas_Mes_Atual' in lab_semana.columns:
+                            semanas_val = lab_semana.iloc[0].get('Semanas_Mes_Atual', [])
+                            if isinstance(semanas_val, str) and semanas_val and semanas_val != '[]':
+                                try:
+                                    import json
+                                    semanas_raw = json.loads(semanas_val)
+                                except Exception:
+                                    semanas_raw = []
+                            elif isinstance(semanas_val, list):
+                                semanas_raw = semanas_val
+
+                        if semanas_raw:
+                            semanas_indexadas = {}
+                            for semana in semanas_raw:
+                                iso_week = semana.get('iso_week')
+                                iso_year = semana.get('iso_year')
+                                if not iso_week or not iso_year:
+                                    continue
+                                key = (iso_year, iso_week)
+                                entrada = semanas_indexadas.get(key, {
+                                    'semana': semana.get('semana', iso_week),
+                                    'iso_week': iso_week,
+                                    'iso_year': iso_year,
+                                    'volume_total': 0,
+                                    'volume_semana_anterior': 0,
+                                    'fechada': False
+                                })
+                                entrada['volume_total'] += semana.get('volume_util', 0) or 0
+                                entrada['volume_semana_anterior'] += semana.get('volume_semana_anterior', 0) or 0
+                                entrada['fechada'] = entrada['fechada'] or semana.get('fechada', False)
+                                semanas_indexadas[key] = entrada
+
+                            # Garantir semanas do mês corrente mesmo quando zeradas
+                            primeiro_dia = datetime(ano_ref, mes_ref_num, 1)
+                            ultimo_dia = datetime(ano_ref, mes_ref_num, calendar.monthrange(ano_ref, mes_ref_num)[1])
+                            dia_corrente = primeiro_dia
+                            expected_keys = set()
+                            while dia_corrente <= ultimo_dia:
+                                iso_info = dia_corrente.isocalendar()
+                                expected_keys.add((iso_info.year, iso_info.week))
+                                dia_corrente += timedelta(days=1)
+
+                            for iso_year, iso_week in expected_keys:
+                                if (iso_year, iso_week) not in semanas_indexadas:
+                                    fim_semana = datetime.fromisocalendar(iso_year, iso_week, 7)
+                                    semanas_indexadas[(iso_year, iso_week)] = {
+                                        'semana': iso_week,
+                                        'iso_week': iso_week,
+                                        'iso_year': iso_year,
+                                        'volume_total': 0,
+                                        'volume_semana_anterior': 0,
+                                        'fechada': fim_semana.date() < hoje_ref.date()
+                                    }
+
+                            dados_semanas = []
+                            prev_vol = fallback_vol_semana_anterior or 0
+                            for iso_year, iso_week in sorted(semanas_indexadas.keys()):
+                                info = semanas_indexadas[(iso_year, iso_week)]
+                                vol_atual = info.get('volume_total', 0) or 0
+                                vol_ant_data = info.get('volume_semana_anterior', 0) or 0
+
+                                prev_label = "-"
+                                try:
+                                    prev_monday = datetime.fromisocalendar(iso_year, iso_week, 1) - timedelta(days=7)
+                                    prev_iso = prev_monday.isocalendar()
+                                    prev_key = (prev_iso.year, prev_iso.week)
+                                    prev_label = f"{prev_iso.week}/{prev_iso.year}"
+                                except Exception:
+                                    prev_key = None
+
+                                # Se não temos volume anterior na base, usar volume da semana anterior calculado
+                                vol_ant_calc = prev_vol if prev_vol else 0
+                                vol_ant = vol_ant_data or vol_ant_calc
+
+                                if vol_ant == 0 and prev_key and prev_key in semanas_indexadas:
+                                    vol_ant = semanas_indexadas[prev_key].get('volume_total', 0) or vol_ant
+
+                                if vol_ant == 0:
+                                    variacao_pct = 100.0 if vol_atual > 0 else 0.0
+                                else:
+                                    variacao_pct = ((vol_atual - vol_ant) / vol_ant) * 100
+
+                                try:
+                                    semana_inicio = datetime.fromisocalendar(iso_year, iso_week, 1)
+                                    semana_fim = semana_inicio + timedelta(days=6)
+                                    intervalo_str = f"{semana_inicio:%d/%m}-{semana_fim:%d/%m}"
+                                except Exception:
+                                    intervalo_str = "-"
+
+                                dados_semanas.append({
+                                    "Semana": f"Semana {info.get('semana', iso_week)}",
+                                    "ISO": iso_week,
+                                    "Intervalo (seg-dom)": intervalo_str,
+                                    "Semana Anterior (ISO)": prev_label,
+                                    "Volume Útil": round(float(vol_atual), 1),
+                                    "Volume Anterior": round(float(vol_ant), 1),
+                                    "WoW %": round(variacao_pct, 2),
+                                    "Status": "✅ Fechada" if info.get('fechada') else "⏳ Em Andamento",
+                                    "is_active": not info.get('fechada')
+                                })
+
+                                prev_vol = vol_atual
+
+                            df_semanas_lab = pd.DataFrame(dados_semanas)
+
+                            def _highlight_active_week(row):
+                                if row['is_active']:
+                                    return ['background-color: #fff3cd; color: #856404'] * len(row)
+                                return [''] * len(row)
+
+                            st.dataframe(
+                                df_semanas_lab.style.apply(_highlight_active_week, axis=1),
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "Semana": st.column_config.TextColumn("Semana", width="small", help="Semana na visão do mês corrente (1, 2, 3...)."),
+                                    "ISO": st.column_config.NumberColumn("ISO Week", format="%d", help="Semana ISO correspondente."),
+                                    "Intervalo (seg-dom)": st.column_config.TextColumn("Dias da Semana", help="Intervalo (segunda a domingo) que compõe a semana ISO."),
+                                    "Semana Anterior (ISO)": st.column_config.TextColumn("Semana ISO anterior", help="ISO week imediatamente anterior (pode ser do mês/ano anterior)."),
+                                    "Volume Útil": st.column_config.NumberColumn("Volume Realizado", format="%d"),
+                                    "Volume Anterior": st.column_config.NumberColumn("Volume Anterior", format="%d"),
+                                    "WoW %": st.column_config.NumberColumn("Variação WoW (%)", format="%.1f%%"),
+                                    "Status": st.column_config.TextColumn("Status"),
+                                    "is_active": None
+                                }
+                            )
+                        else:
+                            st.info("📆 Sem dados semanais para o mês atual deste laboratório.")
+
                         st.subheader("📈 Evolução Mensal")
                         ChartManager.criar_grafico_evolucao_mensal(
                             df_para_metricas,

@@ -1939,17 +1939,17 @@ def calcular_metricas_churn():
         return
 
     # Salvar análise (parquet + CSV) e tentar upload opcional para SharePoint
-        timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
-        arquivo_timestamp = os.path.join(OUTPUT_DIR, f"churn_analysis_{timestamp}.parquet")
-        df_churn.to_parquet(arquivo_timestamp, engine='pyarrow', compression='snappy', index=False)
-        
-        arquivo_latest = os.path.join(OUTPUT_DIR, CHURN_ANALYSIS_FILE)
-        df_churn.to_parquet(arquivo_latest, engine='pyarrow', compression='snappy', index=False)
-        
-        arquivo_csv = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
-        df_churn.to_csv(arquivo_csv, index=False, encoding=ENCODING)
-        logger.info(f"Análise de churn salva: {arquivo_latest}")
-        
+    timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
+    arquivo_timestamp = os.path.join(OUTPUT_DIR, f"churn_analysis_{timestamp}.parquet")
+    df_churn.to_parquet(arquivo_timestamp, engine='pyarrow', compression='snappy', index=False)
+    
+    arquivo_latest = os.path.join(OUTPUT_DIR, CHURN_ANALYSIS_FILE)
+    df_churn.to_parquet(arquivo_latest, engine='pyarrow', compression='snappy', index=False)
+    
+    arquivo_csv = os.path.join(OUTPUT_DIR, "churn_analysis_latest.csv")
+    df_churn.to_csv(arquivo_csv, index=False, encoding=ENCODING)
+    logger.info(f"Análise de churn salva: {arquivo_latest}")
+    
     # Tentar upload para SharePoint usando secrets locais (se disponível)
     try:
         if tomllib is not None and ChurnSPConnector is not None:
@@ -1971,6 +1971,7 @@ def calcular_metricas_churn():
                     logger.info("Arquivo de churn enviado ao SharePoint com sucesso.")
     except Exception as e:
         logger.warning(f"Falha ao enviar arquivo ao SharePoint (ignorado): {e}")
+
 
         # Estatísticas resumidas
     try:

@@ -2928,7 +2928,7 @@ def renderizar_aba_fechamento_semanal(
     if filtros_ativos:
         st.caption(f"Filtros de queda ativos: {', '.join(filtros_ativos)}.")
     else:
-        st.caption("Nenhum filtro de variação aplicado. Mostrando todos os laboratórios do porte selecionado, ordenados por maior queda semanal.")
+        st.caption("Nenhum filtro de variação aplicado. Mostrando todos os laboratórios do porte selecionado, ordenados por dias sem coleta (maior primeiro).")
     
     # Calcular perdas PRIMEIRO (recentes + antigas) para excluir da classificação de risco
     # Isso garante que NENHUM laboratório de perda apareça na Lista de Risco
@@ -2951,7 +2951,7 @@ def renderizar_aba_fechamento_semanal(
     if cnpjs_perdas and 'CNPJ_Normalizado' in df_risco_filtrado.columns:
         df_risco_filtrado = df_risco_filtrado[~df_risco_filtrado['CNPJ_Normalizado'].isin(cnpjs_perdas)].copy()
     
-    df_risco_ordenado = df_risco_filtrado.sort_values('Queda_Semanal_Pct', ascending=False, na_position='last')
+    df_risco_ordenado = df_risco_filtrado.sort_values('Dias_Sem_Coleta', ascending=False, na_position='last')
     
     # Calcular totais APÓS filtros aplicados
     total_labs_filtrado = len(df_risco_filtrado) if not df_risco_filtrado.empty else 0

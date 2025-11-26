@@ -2769,13 +2769,21 @@ def renderizar_aba_fechamento_semanal(
     # Preparar dados de risco ANTES de calcular métricas para obter total filtrado
     df_risco_base = preparar_dataframe_risco(df)
     
-    # Obter filtro de variação do estado da sessão ou usar padrão
+    # Obter filtro de variação do estado da sessão
     variacoes_opcoes = list(VARIACAO_QUEDA_FAIXAS.keys())
-    variacoes_sel = st.session_state.get('filtro_variacao_risco', ["Acima de 50%"])
-    if not variacoes_sel or (isinstance(variacoes_sel, list) and len(variacoes_sel) == 0):
+    # Inicializar com padrão "Acima de 50%" se não houver no session_state
+    # Mas se o usuário explicitamente removeu tudo (lista vazia), respeitar isso
+    if 'filtro_variacao_risco' not in st.session_state:
+        # Primeira vez: usar padrão
         variacoes_sel = ["Acima de 50%"]
+    else:
+        # Já existe no session_state: usar o valor (pode ser lista vazia se usuário removeu tudo)
+        variacoes_sel = st.session_state.get('filtro_variacao_risco', ["Acima de 50%"])
+        if not isinstance(variacoes_sel, list):
+            variacoes_sel = ["Acima de 50%"]
     
-    # Aplicar filtro de variação para calcular total correto
+    # Aplicar filtro de variação para calcular contagem correta para o card
+    # Se variacoes_sel estiver vazio, aplicar_filtro_variacao retorna o dataframe original (sem filtro)
     df_risco_filtrado_preview = aplicar_filtro_variacao(df_risco_base, variacoes_sel)
     total_labs_filtrado = len(df_risco_filtrado_preview) if not df_risco_filtrado_preview.empty else 0
     
@@ -2836,20 +2844,60 @@ def renderizar_aba_fechamento_semanal(
         "Filtro de variação percentual",
         options=variacoes_opcoes,
         default=variacoes_sel if isinstance(variacoes_sel, list) else ["Acima de 50%"],
-        help="Seleciona a faixa de queda percentual (semana atual vs semana anterior).",
+        help="Seleciona a faixa de queda percentual (semana atual vs semana anterior). Padrão: 'Acima de 50%'. Deixe vazio para mostrar todos os laboratórios do porte selecionado.",
         key="filtro_variacao_risco"
     )
     filtros['faixas_variacao_risco'] = variacoes_sel
-    st.caption("Configuração padrão: porte = Grandes (sidebar) e variação = Acima de 50%.")
-
+    
+    if variacoes_sel:
+        st.caption(f"Filtro ativo: {', '.join(variacoes_sel)}. Mostrando apenas laboratórios com queda percentual nas faixas selecionadas.")
+    else:
+        st.caption("Nenhum filtro de variação aplicado. Mostrando todos os laboratórios do porte selecionado, ordenados por maior queda semanal.")
+    
+    # Aplicar filtro de variação apenas se houver seleção
+    # Se variacoes_sel estiver vazio, aplicar_filtro_variacao retorna o dataframe original (sem filtro)
     df_risco_filtrado = aplicar_filtro_variacao(df_risco_base, variacoes_sel)
     df_risco_ordenado = df_risco_filtrado.sort_values('Queda_Semanal_Pct', ascending=False, na_position='last')
     
     # Atualizar métrica "Labs na listagem" com o número após aplicar filtros
+    # (pode ter mudado se o usuário alterou o filtro no multiselect)
     total_labs_filtrado = len(df_risco_filtrado) if not df_risco_filtrado.empty else 0
-    # Atualizar a métrica exibida anteriormente usando st.session_state ou recalculando
+    # Atualizar a métrica exibida anteriormente (será usada na próxima renderização)
     cards['total_labs'] = total_labs_filtrado
     df_total_processado = preparar_dataframe_risco(df_total) if df_total is not None else None
+    
+    # Ordem ideal das colunas (2025 - versão definitiva testada pela usuária)
+    # 
+    # PRIMEIRAS 6 COLUNAS = IDENTIFICAÇÃO RÁPIDA (FIXAS AO ROLAR HORIZONTAL)
+    # Nota: O Streamlit não suporta nativamente congelamento de colunas no st.dataframe.
+    # A ordem fixa garante que essas colunas sempre apareçam primeiro e sejam
+    # as primeiras visíveis mesmo com scroll horizontal, servindo como "congelamento visual".
+    # Estas colunas são críticas para identificação rápida e são usadas 100% do tempo.
+    # 
+    # COLUNAS 7-12 = PERFORMANCE ATUAL DO LAB (o que ela olha 90% do tempo)
+    # Variacao_Semanal_Pct na posição 12ª → aparece sempre na tela sem scroll horizontal
+    # (é a coluna mais importante e precisa estar sempre visível)
+    # 
+    # COLUNAS RESTANTES = CONTEXTO E INFORMAÇÕES COMPLEMENTARES
+    cols_risco_view = [
+        "Nome_Fantasia_PCL",           # identificação principal
+        "Rede",                        # ela olha muito por rede
+        "Estado",                      # logo depois (agrupa mentalmente por UF)
+        "Porte",                       # importante para contexto de regra de dias
+        "VIP",                         # ela filtra muito por VIP
+        "Data_Ultima_Coleta",          # crítica — se está há muitos dias sem coleta já salta o olho
+        "Dias_Sem_Coleta",             # logo em seguida (risco imediato)
+        "WoW_Semana_Anterior",         # volume anterior
+        "WoW_Semana_Atual",            # volume atual
+        "Queda_Semanal_Abs",           # queda absoluta (ela ama ver o número bruto)
+        "Variacao_Semanal_Pct",        # ← coluna mais importante – deixar bem visível
+        "Media_Semanal_2025",          # média semanal do ano (contexto)
+        "Controle_Semanal_Estado_Anterior",  # comparação com estado
+        "Controle_Semanal_Estado_Atual",     # 
+        "Variacao_Media_Estado_Pct",   # variação do estado (ela pediu essa coluna nova e usa muito)
+        "Em_Risco",                    # Sim/Não – útil quando mostrar todos os labs
+        "CNPJ_Normalizado",            # técnico – pode ficar por último
+    ]
     
     if df_risco_ordenado.empty:
         st.info("Nenhum laboratório encontrado para os filtros selecionados.")
@@ -2858,38 +2906,7 @@ def renderizar_aba_fechamento_semanal(
         df_risco_display['Em_Risco'] = df_risco_display['Em_Risco'].apply(lambda x: "Sim" if bool(x) else "—")
         df_risco_display = adicionar_coluna_detalhes(df_risco_display, 'CNPJ_Normalizado')
         
-        # Ordem ideal das colunas (2025 - versão definitiva testada pela usuária)
-        # 
-        # PRIMEIRAS 6 COLUNAS = IDENTIFICAÇÃO RÁPIDA (FIXAS AO ROLAR HORIZONTAL)
-        # Nota: O Streamlit não suporta nativamente congelamento de colunas no st.dataframe.
-        # A ordem fixa garante que essas colunas sempre apareçam primeiro e sejam
-        # as primeiras visíveis mesmo com scroll horizontal, servindo como "congelamento visual".
-        # Estas colunas são críticas para identificação rápida e são usadas 100% do tempo.
-        # 
-        # COLUNAS 7-12 = PERFORMANCE ATUAL DO LAB (o que ela olha 90% do tempo)
-        # Variacao_Semanal_Pct na posição 12ª → aparece sempre na tela sem scroll horizontal
-        # (é a coluna mais importante e precisa estar sempre visível)
-        # 
-        # COLUNAS RESTANTES = CONTEXTO E INFORMAÇÕES COMPLEMENTARES
-        cols_risco_view = [
-            "Nome_Fantasia_PCL",           # identificação principal
-            "Rede",                        # ela olha muito por rede
-            "Estado",                      # logo depois (agrupa mentalmente por UF)
-            "Porte",                       # importante para contexto de regra de dias
-            "VIP",                         # ela filtra muito por VIP
-            "Data_Ultima_Coleta",          # crítica — se está há muitos dias sem coleta já salta o olho
-            "Dias_Sem_Coleta",             # logo em seguida (risco imediato)
-            "WoW_Semana_Anterior",         # volume anterior
-            "WoW_Semana_Atual",            # volume atual
-            "Queda_Semanal_Abs",           # queda absoluta (ela ama ver o número bruto)
-            "Variacao_Semanal_Pct",        # ← coluna mais importante – deixar bem visível
-            "Media_Semanal_2025",          # média semanal do ano (contexto)
-            "Controle_Semanal_Estado_Anterior",  # comparação com estado
-            "Controle_Semanal_Estado_Atual",     # 
-            "Variacao_Media_Estado_Pct",   # variação do estado (ela pediu essa coluna nova e usa muito)
-            "Em_Risco",                    # Sim/Não – útil quando mostrar todos os labs
-            "CNPJ_Normalizado",            # técnico – pode ficar por último
-        ]
+        # Usar cols_risco_view já definida antes do bloco if/else
         df_risco_display = df_risco_display[cols_risco_view].reset_index(drop=True)
         
         evento_risco = st.dataframe(
@@ -2906,9 +2923,16 @@ def renderizar_aba_fechamento_semanal(
         
     # Botão de exportação Excel (apenas colunas de exibição)
     if not df_risco_ordenado.empty:
+        # Usar o mesmo dataframe que é exibido na tela (com as mesmas transformações)
+        # Aplicar as mesmas transformações do df_risco_display
+        df_export_risco = df_risco_ordenado.copy()
+        # Converter Em_Risco para formato de exibição (igual ao que é mostrado na tela)
+        df_export_risco['Em_Risco'] = df_export_risco['Em_Risco'].apply(lambda x: "Sim" if bool(x) else "—")
+        
         # Filtrar apenas as colunas de exibição que existem no DataFrame
-        cols_export_risco = [c for c in cols_risco_view if c in df_risco_ordenado.columns]
-        df_export_risco = df_risco_ordenado[cols_export_risco].copy()
+        cols_export_risco = [c for c in cols_risco_view if c in df_export_risco.columns]
+        df_export_risco = df_export_risco[cols_export_risco].copy()
+        
         excel_buffer = BytesIO()
         df_export_risco.to_excel(excel_buffer, index=False, engine='openpyxl')
         excel_data = excel_buffer.getvalue()
@@ -2917,7 +2941,7 @@ def renderizar_aba_fechamento_semanal(
             data=excel_data,
             file_name=f"lista_risco_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            help="Exporta a tabela com filtros aplicados no formato Excel, contendo apenas as colunas relevantes."
+            help="Exporta a tabela com filtros aplicados no formato Excel, contendo exatamente as mesmas colunas e dados exibidos na tela."
         )
 
     st.markdown("---")

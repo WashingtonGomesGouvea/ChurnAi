@@ -4092,6 +4092,29 @@ class FilterManager:
         st.sidebar.markdown('<div class="sidebar-header" style="font-size: 1rem; font-weight: 600; color: var(--primary-color);">🔧 Filtros</div>', unsafe_allow_html=True)
         filtros = {}
         
+        # Filtro por Porte
+        if 'Porte' in df.columns:
+            portes_lista = (
+                df['Porte']
+                .astype(str)
+                .str.strip()
+                .replace({'nan': '', 'None': ''})
+            )
+            # Ordem desejada
+            ordem_porte = {'Grande': 0, 'Médio/Grande': 1, 'Médio': 2, 'Pequeno': 3}
+            portes_opcoes = sorted({p for p in portes_lista if p}, key=lambda x: ordem_porte.get(x, 99))
+            default_portes = ['Grande'] if 'Grande' in portes_opcoes else portes_opcoes
+        else:
+            portes_opcoes = []
+            default_portes = []
+        
+        filtros['portes'] = st.sidebar.multiselect(
+            "🏗️ Porte do Laboratório",
+            options=portes_opcoes,
+            default=default_portes,
+            help="Selecione um ou mais portes para filtrar os laboratórios exibidos."
+        )
+        
         # ===== FILTRO UF (SISTEMA V2 - PRIORITÁRIO) =====
         if 'Estado' in df.columns:
             # Filtrar valores válidos de UF (não vazios, não NaN, não None)
@@ -4137,29 +4160,6 @@ class FilterManager:
             "👤 Representantes",
             options=representantes_opcoes,
             help="Selecione um ou mais representantes para filtrar os laboratórios exibidos."
-        )
-
-        # Filtro por Porte
-        if 'Porte' in df.columns:
-            portes_lista = (
-                df['Porte']
-                .astype(str)
-                .str.strip()
-                .replace({'nan': '', 'None': ''})
-            )
-            # Ordem desejada
-            ordem_porte = {'Grande': 0, 'Médio/Grande': 1, 'Médio': 2, 'Pequeno': 3}
-            portes_opcoes = sorted({p for p in portes_lista if p}, key=lambda x: ordem_porte.get(x, 99))
-            default_portes = ['Grande'] if 'Grande' in portes_opcoes else portes_opcoes
-        else:
-            portes_opcoes = []
-            default_portes = []
-        
-        filtros['portes'] = st.sidebar.multiselect(
-            "🏗️ Porte do Laboratório",
-            options=portes_opcoes,
-            default=default_portes,
-            help="Selecione um ou mais portes para filtrar os laboratórios exibidos."
         )
 
         st.sidebar.markdown("---")

@@ -1845,9 +1845,9 @@ DETALHES_COLUMN_CONFIG = st.column_config.TextColumn(
 )
 VARIACAO_QUEDA_FAIXAS = {
     "Acima de 50%": (50, None),
+
     "Entre 40% e 50%": (40, 50),
-    "Entre 30% e 40%": (30, 40),
-    "Entre 20% e 30%": (20, 30),
+    "Entre 20% e 40%": (20, 40),
     "Abaixo de 20%": (None, 20),
 }
 
@@ -2498,7 +2498,7 @@ def aplicar_coloracao_variacao_semanal(df: pd.DataFrame) -> pd.DataFrame:
                 return 'background-color: #d4edda; font-weight: 600;'  # Verde claro
             elif valor_float >= -40:
                 return 'background-color: #fff3cd; font-weight: 600;'  # Amarelo
-            elif valor_float >= -60:
+            elif valor_float >= -50:
                 return 'background-color: #ffeaa7; font-weight: 600;'  # Laranja
             else:
                 return 'background-color: #f8d7da; color: #721c24; font-weight: 700;'  # Vermelho forte
@@ -2533,7 +2533,7 @@ def criar_styler_com_coloracao(df: pd.DataFrame) -> 'pd.io.formats.style.Styler'
                     estilos[idx_col] = 'background-color: #d4edda; font-weight: 600;'  # Verde claro
                 elif valor_float >= -40:
                     estilos[idx_col] = 'background-color: #fff3cd; font-weight: 600;'  # Amarelo
-                elif valor_float >= -60:
+                elif valor_float >= -50:
                     estilos[idx_col] = 'background-color: #ffeaa7; font-weight: 600;'  # Laranja
                 else:
                     estilos[idx_col] = 'background-color: #f8d7da; color: #721c24; font-weight: 700;'  # Vermelho forte
@@ -2820,18 +2820,52 @@ def renderizar_aba_fechamento_semanal(
         "WoW_Semana_Atual": st.column_config.NumberColumn("Vol. Atual", format="%d", help="Volume realizado na semana atual"),
         "Queda_Semanal_Abs": st.column_config.NumberColumn("Queda de volume", format="%d", help="Diferença absoluta de volume entre semana anterior e atual"),
         "Controle_Semanal_Estado_Atual": st.column_config.NumberColumn("Média do Estado", format="%.1f", help="Média de todos os labs do mesmo estado nesta semana"),
-        "Variacao_vs_Estado_Pct": st.column_config.NumberColumn("Var. % vs Estado", format="%.1f%%", help="Variação percentual do volume atual vs média do estado. Exibe '—' quando média está zerada ou ausente.", default=None),
+        "Variacao_vs_Estado_Pct": st.column_config.NumberColumn("Var. % vs Estado", format="%.1f%%", help="Compara o volume atual do laboratório com a média do estado na semana atual. Mostra se o lab está acima ou abaixo da média do estado. Exibe '—' quando média está zerada ou ausente.", default=None),
         "Variacao_Semanal_Pct": st.column_config.NumberColumn(
             "Variação WoW (%)", 
             format="%.1f%%", 
-            help="🔴 COLUNA MAIS IMPORTANTE - Percentual de variação da semana atual vs anterior (WoW). Cores: ≥-20% verde, -20% a -40% amarelo, -40% a -60% laranja, <-60% vermelho. Exibe '—' quando volume anterior está zerado ou ausente.", 
+            help="Percentual de variação da semana atual vs anterior (WoW). Cores baseadas na Queda: <20% verde, 20-40% amarelo, 40-50% laranja, >50% vermelho. Exibe '—' quando volume anterior está zerado ou ausente.", 
             default=None
         ),
         "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias Off", format="%d ⚠️", help="Dias úteis consecutivos sem coleta registrados"),
         "Em_Risco": st.column_config.TextColumn("Em Risco?", width="small", help="Aplica regra: queda ≥50% ou dias sem coleta conforme porte"),
         "Controle_Semanal_Estado_Anterior": st.column_config.NumberColumn("Média UF (Ant)", format="%.1f", help="Média de todos os labs do mesmo porte no estado na semana anterior"),
-        "Variacao_Media_Estado_Pct": st.column_config.NumberColumn("Variação média UF (%)", format="%.1f%%", help="Variação percentual da média estadual (semana atual vs anterior). Exibe '—' quando média anterior está zerada ou ausente.", default=None),
+        "Variacao_Media_Estado_Pct": st.column_config.NumberColumn("Variação média UF (%)", format="%.1f%%", help="Compara a média do estado na semana atual com a média do estado na semana anterior. Mostra a variação da média do estado entre semanas (tendência do estado). Exibe '—' quando média anterior está zerada ou ausente.", default=None),
         "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Última coleta registrada (qualquer ano)")
+    }
+    
+    # Mapa explícito para exportação Excel (garante nomes amigáveis)
+    MAPA_COLUNAS_EXCEL = {
+        "Nome_Fantasia_PCL": "Laboratório",
+        "CNPJ_Normalizado": "CNPJ",
+        "VIP": "VIP",
+        "Rede": "Rede",
+        "Estado": "UF",
+        "Porte": "Porte",
+        "Media_Semanal_2025": "Média Semanal 25",
+        "Pct_Dif_Media_Historica": "Var. % vs Média 25",
+        "Media_Semanal_2024": "Média Semanal 24",
+        "Variacao_Media_24_Pct": "Var. % vs Média 24",
+        "WoW_Semana_Anterior": "Vol. Ant.",
+        "WoW_Semana_Atual": "Vol. Atual",
+        "Queda_Semanal_Abs": "Queda de volume",
+        "Controle_Semanal_Estado_Atual": "Média do Estado",
+        "Variacao_vs_Estado_Pct": "Var. % vs Estado",
+        "Variacao_Semanal_Pct": "Variação WoW (%)",
+        "Dias_Sem_Coleta": "Dias Off",
+        "Em_Risco": "Em Risco?",
+        "Controle_Semanal_Estado_Anterior": "Média UF (Ant)",
+        "Variacao_Media_Estado_Pct": "Variação média UF (%)",
+        "Data_Ultima_Coleta": "Última Coleta",
+        # Colunas de Perdas
+        "Media_Mensal_Perdas": "Média Mensal",
+        "Volume_Ultimo_Mes_Coleta": "Vol. Último Mês",
+        "Mes_Ultimo_Coleta": "Mês Última Coleta",
+        "Volume_Ultima_Semana_Coleta": "Vol. Última Semana",
+        "Semana_Ultima_Coleta": "Semana Última Coleta",
+        "Maxima_Coletas": "Máxima Coletas",
+        "Mes_Maxima": "Mês Máxima",
+        "Ano_Maxima": "Ano Máxima"
     }
     
     cols_view = ['Nome_Fantasia_PCL', 'CNPJ_Normalizado', 'VIP', 'Rede', 'Estado', 'Porte', 
@@ -2915,7 +2949,7 @@ def renderizar_aba_fechamento_semanal(
     st.caption("Todos os laboratórios ordenados pela maior queda semanal. Reﬁne usando os filtros.")
     
     variacoes_sel = st.multiselect(
-        "Filtro de variação percentual",
+        "Filtro de Queda Percentual",
         options=variacoes_opcoes,
         default=variacoes_sel if isinstance(variacoes_sel, list) else ["Acima de 50%"],
         help="Seleciona a faixa de queda percentual (semana atual vs semana anterior). Padrão: 'Acima de 50%'. Deixe vazio para mostrar todos os laboratórios do porte selecionado.",
@@ -2965,12 +2999,12 @@ def renderizar_aba_fechamento_semanal(
         "Dias_Sem_Coleta",             # logo em seguida (risco imediato) - informação relevante
         "WoW_Semana_Anterior",         # volume anterior
         "WoW_Semana_Atual",            # volume atual
+        "Variacao_Semanal_Pct",        # ← coluna mais importante – deixar bem visível
+        "Queda_Semanal_Abs",           # queda absoluta (ela ama ver o número bruto)
         "Media_Semanal_2025",          # média semanal do ano (contexto)
         "Pct_Dif_Media_Historica",     # Var. % vs Média 25
         "Media_Semanal_2024",          # Média Semanal 24
         "Variacao_Media_24_Pct",       # Var. % vs Média 24
-        "Queda_Semanal_Abs",           # queda absoluta (ela ama ver o número bruto)
-        "Variacao_Semanal_Pct",        # ← coluna mais importante – deixar bem visível
         "Controle_Semanal_Estado_Anterior",  # comparação com estado
         "Controle_Semanal_Estado_Atual",     # Média do Estado
         "Variacao_vs_Estado_Pct",     # Var. % vs Estado
@@ -3012,6 +3046,9 @@ def renderizar_aba_fechamento_semanal(
         # Filtrar apenas as colunas de exibição que existem no DataFrame
         cols_export_risco = [c for c in cols_risco_view if c in df_export_risco.columns]
         df_export_risco = df_export_risco[cols_export_risco].copy()
+        
+        # Renomear colunas para o Excel usando mapa explícito
+        df_export_risco = df_export_risco.rename(columns=MAPA_COLUNAS_EXCEL)
         
         excel_buffer = BytesIO()
         df_export_risco.to_excel(excel_buffer, index=False, engine='openpyxl')
@@ -3282,6 +3319,9 @@ def renderizar_aba_fechamento_semanal(
         # Botão de exportação Excel (apenas colunas de exibição)
         cols_export_perda_recente = [c for c in cols_perda_extended if c in df_perda_recente.columns]
         df_export_perda_recente = df_perda_recente[cols_export_perda_recente].copy()
+        
+        # Renomear colunas para o Excel usando mapa explícito
+        df_export_perda_recente = df_export_perda_recente.rename(columns=MAPA_COLUNAS_EXCEL)
         excel_buffer = BytesIO()
         df_export_perda_recente.to_excel(excel_buffer, index=False, engine='openpyxl')
         excel_data = excel_buffer.getvalue()
@@ -3396,6 +3436,9 @@ def renderizar_aba_fechamento_semanal(
         # Botão de exportação Excel (apenas colunas de exibição)
         cols_export_perda_antiga = [c for c in cols_perda_antigas if c in df_antigas.columns]
         df_export_perda_antiga = df_antigas[cols_export_perda_antiga].copy()
+        
+        # Renomear colunas para o Excel usando mapa explícito
+        df_export_perda_antiga = df_export_perda_antiga.rename(columns=MAPA_COLUNAS_EXCEL)
         excel_buffer = BytesIO()
         df_export_perda_antiga.to_excel(excel_buffer, index=False, engine='openpyxl')
         excel_data = excel_buffer.getvalue()

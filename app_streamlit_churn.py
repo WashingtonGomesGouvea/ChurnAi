@@ -1917,11 +1917,17 @@ def preparar_dataframe_risco(df: pd.DataFrame) -> pd.DataFrame:
         'WoW_Semana_Atual',
         'WoW_Semana_Anterior',
         'Media_Semanal_2025',
+        'Media_Semanal_2024',
         'Controle_Semanal_Estado_Atual',
         'Controle_Semanal_Estado_Anterior'
     ]:
         if col in work.columns:
             work[col] = pd.to_numeric(work[col], errors='coerce')
+    
+    # Calcular Media_Semanal_2024 se não existir
+    if 'Media_Semanal_2024' not in work.columns and 'Total_Coletas_2024' in work.columns:
+        work['Media_Semanal_2024'] = pd.to_numeric(work['Total_Coletas_2024'], errors='coerce') / 52
+        work['Media_Semanal_2024'] = work['Media_Semanal_2024'].fillna(0.0)
 
     vol_ant = work['WoW_Semana_Anterior'] if 'WoW_Semana_Anterior' in work.columns else pd.Series(0, index=work.index, dtype=float)
     vol_atual = work['WoW_Semana_Atual'] if 'WoW_Semana_Atual' in work.columns else pd.Series(0, index=work.index, dtype=float)
@@ -2756,12 +2762,27 @@ def renderizar_aba_fechamento_semanal(
     # Queda Absoluta (Anterior - Atual). Positivo = Perda de volume.
     df['Queda_Semanal_Abs'] = df['WoW_Semana_Anterior'] - df['WoW_Semana_Atual']
     
-    # % Diferença da Média Histórica (sem uso no risco por enquanto)
+    # % Diferença da Média Histórica (vs Média 2025)
     df['Pct_Dif_Media_Historica'] = np.where(
         df['Media_Semanal_2025'] > 0,
-        (df['WoW_Semana_Atual'] - df['Media_Semanal_2025']) / df['Media_Semanal_2025'],
-        0
+        ((df['WoW_Semana_Atual'] - df['Media_Semanal_2025']) / df['Media_Semanal_2025']) * 100,
+        np.nan
     )
+    
+    # Calcular Media_Semanal_2024 = Total_Coletas_2024 / 52
+    if 'Total_Coletas_2024' in df.columns:
+        df['Media_Semanal_2024'] = pd.to_numeric(df['Total_Coletas_2024'], errors='coerce') / 52
+    else:
+        df['Media_Semanal_2024'] = 0.0
+    
+    # Calcular Variacao_Media_24_Pct = (WoW_Semana_Atual - Media_Semanal_2024) / Media_Semanal_2024 * 100
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mask_valido_2024 = (df['Media_Semanal_2024'] > 0) & df['Media_Semanal_2024'].notna() & df['WoW_Semana_Atual'].notna()
+        df['Variacao_Media_24_Pct'] = np.where(
+            mask_valido_2024,
+            ((df['WoW_Semana_Atual'] - df['Media_Semanal_2024']) / df['Media_Semanal_2024']) * 100,
+            np.nan
+        )
 
     # Variáveis de Controle (Média do Estado)
     # Semana Atual
@@ -2773,6 +2794,15 @@ def renderizar_aba_fechamento_semanal(
     if 'Controle_Semanal_Estado_Anterior' not in df.columns:
         media_estado_anterior = df.groupby('Estado')['WoW_Semana_Anterior'].transform('mean')
         df['Controle_Semanal_Estado_Anterior'] = media_estado_anterior
+    
+    # Calcular Variacao_vs_Estado_Pct = (WoW_Semana_Atual - Controle_Semanal_Estado_Atual) / Controle_Semanal_Estado_Atual * 100
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mask_valido_estado = (df['Controle_Semanal_Estado_Atual'] > 0) & df['Controle_Semanal_Estado_Atual'].notna() & df['WoW_Semana_Atual'].notna()
+        df['Variacao_vs_Estado_Pct'] = np.where(
+            mask_valido_estado,
+            ((df['WoW_Semana_Atual'] - df['Controle_Semanal_Estado_Atual']) / df['Controle_Semanal_Estado_Atual']) * 100,
+            np.nan
+        )
 
     # Configuração das Colunas
     col_config = {
@@ -2782,23 +2812,26 @@ def renderizar_aba_fechamento_semanal(
         "Rede": st.column_config.TextColumn("Rede", width="medium", help="Rede à qual o laboratório pertence"),
         "Estado": st.column_config.TextColumn("UF", width="small", help="Unidade Federativa do laboratório"),
         "Porte": st.column_config.TextColumn("Porte", width="small", help="Segmentação por volume médio (Grande, Médio/Grande, etc.)"),
-        "Media_Semanal_2025": st.column_config.NumberColumn("Média semanal", format="%.0f", help="Média semanal de coletas no ano"),
+        "Media_Semanal_2025": st.column_config.NumberColumn("Média Semanal 25", format="%.0f", help="Média semanal de coletas no ano 2025"),
+        "Pct_Dif_Media_Historica": st.column_config.NumberColumn("Var. % vs Média 25", format="%.1f%%", help="Variação percentual do volume atual vs média semanal de 2025. Exibe '—' quando média está zerada ou ausente.", default=None),
+        "Media_Semanal_2024": st.column_config.NumberColumn("Média Semanal 24", format="%.0f", help="Média semanal de coletas no ano 2024 (Total_Coletas_2024 / 52)"),
+        "Variacao_Media_24_Pct": st.column_config.NumberColumn("Var. % vs Média 24", format="%.1f%%", help="Variação percentual do volume atual vs média semanal de 2024. Exibe '—' quando média está zerada ou ausente.", default=None),
         "WoW_Semana_Anterior": st.column_config.NumberColumn("Vol. Ant.", format="%d", help="Volume realizado na semana anterior"),
         "WoW_Semana_Atual": st.column_config.NumberColumn("Vol. Atual", format="%d", help="Volume realizado na semana atual"),
         "Queda_Semanal_Abs": st.column_config.NumberColumn("Queda de volume", format="%d", help="Diferença absoluta de volume entre semana anterior e atual"),
+        "Controle_Semanal_Estado_Atual": st.column_config.NumberColumn("Média do Estado", format="%.1f", help="Média de todos os labs do mesmo estado nesta semana"),
+        "Variacao_vs_Estado_Pct": st.column_config.NumberColumn("Var. % vs Estado", format="%.1f%%", help="Variação percentual do volume atual vs média do estado. Exibe '—' quando média está zerada ou ausente.", default=None),
         "Variacao_Semanal_Pct": st.column_config.NumberColumn(
-            "Variação semanal (%)", 
+            "Variação WoW (%)", 
             format="%.1f%%", 
             help="🔴 COLUNA MAIS IMPORTANTE - Percentual de variação da semana atual vs anterior (WoW). Cores: ≥-20% verde, -20% a -40% amarelo, -40% a -60% laranja, <-60% vermelho. Exibe '—' quando volume anterior está zerado ou ausente.", 
             default=None
         ),
         "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias Off", format="%d ⚠️", help="Dias úteis consecutivos sem coleta registrados"),
+        "Em_Risco": st.column_config.TextColumn("Em Risco?", width="small", help="Aplica regra: queda ≥50% ou dias sem coleta conforme porte"),
         "Controle_Semanal_Estado_Anterior": st.column_config.NumberColumn("Média UF (Ant)", format="%.1f", help="Média de todos os labs do mesmo porte no estado na semana anterior"),
-        "Controle_Semanal_Estado_Atual": st.column_config.NumberColumn("Média UF (Atual)", format="%.1f", help="Média de todos os labs do mesmo porte no estado nesta semana"),
         "Variacao_Media_Estado_Pct": st.column_config.NumberColumn("Variação média UF (%)", format="%.1f%%", help="Variação percentual da média estadual (semana atual vs anterior). Exibe '—' quando média anterior está zerada ou ausente.", default=None),
-        "Em_Risco": st.column_config.TextColumn("Em risco?", width="small", help="Aplica regra: queda ≥50% ou dias sem coleta conforme porte"),
-        "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Última coleta registrada (qualquer ano)"),
-        "Classificacao_Unificada": st.column_config.TextColumn("Classificação", width="medium", help="Classificação unificada: Perda Recente (Alto Risco), Perda Antiga (Alto Risco) ou Risco Médio/Alto")
+        "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Última coleta registrada (qualquer ano)")
     }
     
     cols_view = ['Nome_Fantasia_PCL', 'CNPJ_Normalizado', 'VIP', 'Rede', 'Estado', 'Porte', 
@@ -2912,11 +2945,6 @@ def renderizar_aba_fechamento_semanal(
     if cnpjs_perdas and 'CNPJ_Normalizado' in df_risco_filtrado.columns:
         df_risco_filtrado = df_risco_filtrado[~df_risco_filtrado['CNPJ_Normalizado'].isin(cnpjs_perdas)].copy()
     
-    # Adicionar classificação unificada para risco
-    if not df_risco_filtrado.empty:
-        df_risco_filtrado['Classificacao_Unificada'] = df_risco_filtrado['Em_Risco'].map({True: 'Risco Médio/Alto', False: 'Sem Risco'})
-        df_risco_filtrado['Classificacao_Unificada'] = df_risco_filtrado['Classificacao_Unificada'].fillna('Sem Risco')
-    
     df_risco_ordenado = df_risco_filtrado.sort_values('Queda_Semanal_Pct', ascending=False, na_position='last')
     
     # Atualizar métrica "Labs na listagem" com o número após aplicar filtros
@@ -2926,19 +2954,7 @@ def renderizar_aba_fechamento_semanal(
     cards['total_labs'] = total_labs_filtrado
     df_total_processado = preparar_dataframe_risco(df_total) if df_total is not None else None
     
-    # Ordem ideal das colunas (2025 - versão definitiva testada pela usuária)
-    # 
-    # PRIMEIRAS 6 COLUNAS = IDENTIFICAÇÃO RÁPIDA (FIXAS AO ROLAR HORIZONTAL)
-    # Nota: O Streamlit não suporta nativamente congelamento de colunas no st.dataframe.
-    # A ordem fixa garante que essas colunas sempre apareçam primeiro e sejam
-    # as primeiras visíveis mesmo com scroll horizontal, servindo como "congelamento visual".
-    # Estas colunas são críticas para identificação rápida e são usadas 100% do tempo.
-    # 
-    # COLUNAS 7-12 = PERFORMANCE ATUAL DO LAB (o que ela olha 90% do tempo)
-    # Variacao_Semanal_Pct na posição 12ª → aparece sempre na tela sem scroll horizontal
-    # (é a coluna mais importante e precisa estar sempre visível)
-    # 
-    # COLUNAS RESTANTES = CONTEXTO E INFORMAÇÕES COMPLEMENTARES
+    # Ordem das colunas mantendo padrão original com novas colunas integradas
     cols_risco_view = [
         "Nome_Fantasia_PCL",           # identificação principal
         "Rede",                        # ela olha muito por rede
@@ -2946,17 +2962,20 @@ def renderizar_aba_fechamento_semanal(
         "Porte",                       # importante para contexto de regra de dias
         "VIP",                         # ela filtra muito por VIP
         "Data_Ultima_Coleta",          # crítica — se está há muitos dias sem coleta já salta o olho
-        "Dias_Sem_Coleta",             # logo em seguida (risco imediato)
+        "Dias_Sem_Coleta",             # logo em seguida (risco imediato) - informação relevante
         "WoW_Semana_Anterior",         # volume anterior
         "WoW_Semana_Atual",            # volume atual
+        "Media_Semanal_2025",          # média semanal do ano (contexto)
+        "Pct_Dif_Media_Historica",     # Var. % vs Média 25
+        "Media_Semanal_2024",          # Média Semanal 24
+        "Variacao_Media_24_Pct",       # Var. % vs Média 24
         "Queda_Semanal_Abs",           # queda absoluta (ela ama ver o número bruto)
         "Variacao_Semanal_Pct",        # ← coluna mais importante – deixar bem visível
-        "Media_Semanal_2025",          # média semanal do ano (contexto)
         "Controle_Semanal_Estado_Anterior",  # comparação com estado
-        "Controle_Semanal_Estado_Atual",     # 
+        "Controle_Semanal_Estado_Atual",     # Média do Estado
+        "Variacao_vs_Estado_Pct",     # Var. % vs Estado
         "Variacao_Media_Estado_Pct",   # variação do estado (ela pediu essa coluna nova e usa muito)
         "Em_Risco",                    # Sim/Não – útil quando mostrar todos os labs
-        "Classificacao_Unificada",     # classificação unificada (Alto Risco para perdas)
         "CNPJ_Normalizado",            # técnico – pode ficar por último
     ]
     
@@ -3204,9 +3223,6 @@ def renderizar_aba_fechamento_semanal(
         )
         df_perda_recente = df_perda_recente.drop(columns=['_ordem_dias', '_ordem_queda', '_ordem_data'])
         
-        # Adicionar classificação unificada
-        df_perda_recente['Classificacao_Unificada'] = 'Perda Recente (Alto Risco)'
-        
         # Ordem ideal das colunas para Perdas (2025 - versão definitiva)
         # Alinhada com a Lista de Risco - colunas de contexto essenciais adicionadas
         cols_perda_extended = [
@@ -3217,7 +3233,6 @@ def renderizar_aba_fechamento_semanal(
             'VIP',                       # ela filtra por VIP direto
             'Data_Ultima_Coleta',        # a coluna mais importante em perdas – tem que estar logo no começo
             'Dias_Sem_Coleta',           # logo depois da data
-            'Classificacao_Unificada',   # classificação unificada (Alto Risco para perdas)
             'Volume_Ultimo_Mes_Coleta',  # volume antes de morrer
             'Mes_Ultimo_Coleta',         # mês/ano da última coleta
             'Maxima_Coletas',            # pico histórico
@@ -3250,7 +3265,6 @@ def renderizar_aba_fechamento_semanal(
             "Maxima_Coletas": st.column_config.NumberColumn("Máxima Coletas", format="%d", help="Máxima de coletas do cliente (pico histórico)"),
             "Mes_Maxima": st.column_config.TextColumn("Mês Máxima", help="Mês da máxima de coletas"),
             "Ano_Maxima": st.column_config.TextColumn("Ano Máxima", help="Ano da máxima de coletas"),
-            "Classificacao_Unificada": st.column_config.TextColumn("Classificação", width="medium", help="Classificação unificada: Perda Recente (Alto Risco), Perda Antiga (Alto Risco) ou Risco Médio/Alto"),
         })
         
         evento_recente = st.dataframe(
@@ -3344,9 +3358,6 @@ def renderizar_aba_fechamento_semanal(
         )
         df_antigas = df_antigas.drop(columns=['_ordem_dias', '_ordem_queda', '_ordem_data'])
         
-        # Adicionar classificação unificada
-        df_antigas['Classificacao_Unificada'] = 'Perda Antiga (Alto Risco)'
-        
         cols_perda_antigas = [
             'Nome_Fantasia_PCL',
             'Rede',
@@ -3355,7 +3366,6 @@ def renderizar_aba_fechamento_semanal(
             'VIP',
             'Data_Ultima_Coleta',
             'Dias_Sem_Coleta',
-            'Classificacao_Unificada',   # classificação unificada (Alto Risco para perdas)
             'Volume_Ultimo_Mes_Coleta',
             'Mes_Ultimo_Coleta',
             'Maxima_Coletas',
@@ -3407,7 +3417,7 @@ def renderizar_aba_fechamento_semanal(
     df_perda_recente_filtrado = df_perda_recente.copy() if not df_perda_recente.empty else pd.DataFrame()
     df_perda_antiga_filtrado = df_antigas.copy() if not df_antigas.empty else pd.DataFrame()
     
-    # Garantir que todas tenham CNPJ_Normalizado e Classificacao_Unificada
+    # Garantir que todas tenham CNPJ_Normalizado
     listas_para_union = []
     if not df_risco_filtrado_final.empty and 'CNPJ_Normalizado' in df_risco_filtrado_final.columns:
         listas_para_union.append(df_risco_filtrado_final)

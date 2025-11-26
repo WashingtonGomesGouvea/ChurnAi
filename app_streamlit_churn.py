@@ -6083,6 +6083,11 @@ def main():
     
     elif st.session_state.page == "🏢 Ranking Rede":
         st.header("🏢 Ranking por Rede")
+        
+        # Mensagem de manutenção
+        st.error("🚧 **TELA EM MANUTENÇÃO** 🚧\n\nEsta funcionalidade está temporariamente indisponível. Por favor, utilize outras telas do sistema.")
+        st.stop()
+        
         # Carregar dados VIP para análise de rede
         df_vips = DataManager.carregar_dados_vip()
         
@@ -6155,6 +6160,11 @@ def main():
                     st.info("Nenhum laboratório encontrado para esta rede.")
     elif st.session_state.page == "🔧 Manutenção VIPs":
         st.header("🔧 Manutenção de Dados VIP")
+        
+        # Mensagem de manutenção
+        st.error("🚧 **TELA EM MANUTENÇÃO** 🚧\n\nEsta funcionalidade está temporariamente indisponível. Por favor, utilize outras telas do sistema.")
+        st.stop()
+        
         st.markdown("""
         Gerencie a lista de laboratórios VIPs. Você pode adicionar novos laboratórios,
         editar informações existentes ou remover laboratórios da lista.
@@ -8586,6 +8596,11 @@ def main():
             st.warning("⚠️ Dados VIP não disponíveis. Verifique se o arquivo Excel foi carregado corretamente.")
     elif st.session_state.page == "🔧 Manutenção VIPs":
         st.header("🔧 Manutenção de Dados VIP")
+        
+        # Mensagem de manutenção
+        st.error("🚧 **TELA EM MANUTENÇÃO** 🚧\n\nEsta funcionalidade está temporariamente indisponível. Por favor, utilize outras telas do sistema.")
+        st.stop()
+        
         st.markdown("""
         <div style="background: linear-gradient(135deg, #6BBF47 0%, #52B54B 100%);
                     color: white; padding: 1rem; border-radius: 8px; margin-bottom: 2rem;">

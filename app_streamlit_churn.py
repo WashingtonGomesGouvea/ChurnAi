@@ -3011,29 +3011,29 @@ def renderizar_aba_fechamento_semanal(
     
     df_total_processado = preparar_dataframe_risco(df_total) if df_total is not None else None
     
-    # Ordem das colunas mantendo padrão original com novas colunas integradas
+    # Ordem das colunas conforme especificado
     cols_risco_view = [
-        "Nome_Fantasia_PCL",           # identificação principal
-        "Rede",                        # ela olha muito por rede
-        "Estado",                      # logo depois (agrupa mentalmente por UF)
-        "Porte",                       # importante para contexto de regra de dias
-        "VIP",                         # ela filtra muito por VIP
-        "Data_Ultima_Coleta",          # crítica — se está há muitos dias sem coleta já salta o olho
-        "Dias_Sem_Coleta",             # logo em seguida (risco imediato) - informação relevante
-        "WoW_Semana_Anterior",         # volume anterior
-        "WoW_Semana_Atual",            # volume atual
-        "Media_Semanal_2025",          # média semanal do ano (contexto)
-        "Pct_Dif_Media_Historica",     # Var. % vs Média 25
-        "Media_Semanal_2024",          # Média Semanal 24
-        "Variacao_Media_24_Pct",       # Var. % vs Média 24
-        "Queda_Semanal_Abs",           # queda absoluta (ela ama ver o número bruto)
-        "Variacao_Semanal_Pct",        # ← coluna mais importante – deixar bem visível
-        "Controle_Semanal_Estado_Anterior",  # comparação com estado
-        "Controle_Semanal_Estado_Atual",     # Média do Estado
-        "Variacao_vs_Estado_Pct",     # Var. % vs Estado
-        "Variacao_Media_Estado_Pct",   # variação do estado (ela pediu essa coluna nova e usa muito)
-        "Em_Risco",                    # Sim/Não – útil quando mostrar todos os labs
-        "CNPJ_Normalizado",            # técnico – pode ficar por último
+        "Nome_Fantasia_PCL",                 # 1. lab
+        "Rede",                              # 2. rede
+        "Estado",                            # 3. uf
+        "Porte",                             # 4. porte
+        "VIP",                               # 5. vip
+        "Data_Ultima_Coleta",                # 6. última coleta
+        "Dias_Sem_Coleta",                   # 7. dias off
+        "WoW_Semana_Anterior",               # 8. volume anterior
+        "WoW_Semana_Atual",                  # 9. volume atual
+        "Queda_Semanal_Abs",                 # 10. queda de volume
+        "Variacao_Semanal_Pct",              # 11. variação semana anterior e atual
+        "Media_Semanal_2025",                # 12. média semanal 25
+        "Pct_Dif_Media_Historica",           # 13. variação média semanal 25 com semana atual
+        "Media_Semanal_2024",                # 14. média semanal 24
+        "Variacao_Media_24_Pct",             # 15. variação média semanal 24 com semana atual
+        "Controle_Semanal_Estado_Anterior",  # 16. média uf anterior
+        "Controle_Semanal_Estado_Atual",     # 17. média uf semana atual
+        "Variacao_vs_Estado_Pct",            # 18. variação semana atual com média do estado semana atual
+        "Variacao_Media_Estado_Pct",         # 19. variação média estado
+        "Em_Risco",                          # útil quando mostrar todos os labs
+        "CNPJ_Normalizado",                  # técnico – pode ficar por último
     ]
     
     if df_risco_ordenado.empty:
@@ -3043,8 +3043,9 @@ def renderizar_aba_fechamento_semanal(
         df_risco_display['Em_Risco'] = df_risco_display['Em_Risco'].apply(lambda x: "Sim" if bool(x) else "—")
         df_risco_display = adicionar_coluna_detalhes(df_risco_display, 'CNPJ_Normalizado')
         
-        # Usar cols_risco_view já definida antes do bloco if/else
-        df_risco_display = df_risco_display[cols_risco_view].reset_index(drop=True)
+        # Filtrar apenas as colunas de exibição que existem no DataFrame, mantendo a ordem de cols_risco_view
+        cols_display_risco = [c for c in cols_risco_view if c in df_risco_display.columns]
+        df_risco_display = df_risco_display[cols_display_risco].reset_index(drop=True)
         
         evento_risco = st.dataframe(
             df_risco_display,
@@ -4103,7 +4104,10 @@ class FilterManager:
             # Ordem desejada
             ordem_porte = {'Grande': 0, 'Médio/Grande': 1, 'Médio': 2, 'Pequeno': 3}
             portes_opcoes = sorted({p for p in portes_lista if p}, key=lambda x: ordem_porte.get(x, 99))
-            default_portes = ['Grande'] if 'Grande' in portes_opcoes else portes_opcoes
+            # Default: Grande e Médio/Grande
+            default_portes = [p for p in ['Grande', 'Médio/Grande'] if p in portes_opcoes]
+            if not default_portes:  # Fallback se nenhum dos dois existir
+                default_portes = portes_opcoes
         else:
             portes_opcoes = []
             default_portes = []

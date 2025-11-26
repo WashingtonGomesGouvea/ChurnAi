@@ -773,6 +773,18 @@ class DataManager:
         """Prepara e limpa os dados carregados - Atualizado para coerência entre telas."""
         if df is None or df.empty:
             return pd.DataFrame()
+        
+        # VALIDAÇÃO: Remover duplicatas baseadas em CNPJ antes de qualquer processamento
+        if 'CNPJ_PCL' in df.columns:
+            # Criar CNPJ_Normalizado temporariamente para deduplicação se ainda não existir
+            if 'CNPJ_Normalizado' not in df.columns:
+                df['CNPJ_Normalizado'] = df['CNPJ_PCL'].apply(DataManager.normalizar_cnpj)
+            # Remover duplicatas mantendo o primeiro registro
+            df = df.drop_duplicates(subset=['CNPJ_Normalizado'], keep='first')
+        elif 'CNPJ_Normalizado' in df.columns:
+            # Se já existe CNPJ_Normalizado mas não CNPJ_PCL, usar CNPJ_Normalizado
+            df = df.drop_duplicates(subset=['CNPJ_Normalizado'], keep='first')
+        
         # Removido bloco de debug da sidebar para manter interface limpa
         # Garantir tipos de dados corretos
         if 'Data_Analise' in df.columns:
@@ -806,12 +818,18 @@ class DataManager:
                 if 'CNPJ_Normalizado' not in df_vip.columns:
                      df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
                 
+                # Garantir que não há duplicatas no df_vip antes do merge
+                df_vip = df_vip.drop_duplicates(subset=['CNPJ_Normalizado'], keep='first')
+                
                 # Colunas para trazer
                 cols_vip = ['CNPJ_Normalizado', 'Rede', 'Ranking', 'Ranking Rede']
                 cols_vip = [c for c in cols_vip if c in df_vip.columns]
                 
                 # Merge mantendo TODOS os laboratórios (Left Join)
                 df = df.merge(df_vip[cols_vip], on='CNPJ_Normalizado', how='left', suffixes=('', '_vip'))
+                
+                # Remover duplicatas após merge (caso o df original já tivesse duplicatas)
+                df = df.drop_duplicates(subset=['CNPJ_Normalizado'], keep='first')
                 
                 # Consolidar Rede
                 if 'Rede' not in df.columns and 'Rede_vip' in df.columns:
@@ -1000,6 +1018,8 @@ class DataManager:
                 # Ler CNPJ como string para preservar zeros à esquerda
                 df_vip['CNPJ'] = df_vip['CNPJ'].astype(str)
                 df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
+                # Remover duplicatas baseadas em CNPJ_Normalizado (manter primeiro registro)
+                df_vip = df_vip.drop_duplicates(subset=['CNPJ_Normalizado'], keep='first')
                 # Toast removido - será exibido onde a função é chamada
                 return df_vip
          
@@ -1024,6 +1044,8 @@ class DataManager:
                 # Garantir que CNPJ seja string e normalizar
                 df_vip['CNPJ'] = df_vip['CNPJ'].astype(str)
                 df_vip['CNPJ_Normalizado'] = df_vip['CNPJ'].apply(DataManager.normalizar_cnpj)
+                # Remover duplicatas baseadas em CNPJ_Normalizado (manter primeiro registro)
+                df_vip = df_vip.drop_duplicates(subset=['CNPJ_Normalizado'], keep='first')
                 # Toast removido - será exibido onde a função é chamada
                 return df_vip
             else:

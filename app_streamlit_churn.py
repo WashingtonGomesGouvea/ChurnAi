@@ -1978,7 +1978,25 @@ def preparar_dataframe_risco(df: pd.DataFrame) -> pd.DataFrame:
     # Risco por queda: apenas considerar quando Queda_Semanal_Pct é válido (não NaN) e >= 50%
     # Não considerar NaN como 0% (evita falsos positivos quando vol_ant está zerado)
     queda_valida = work['Queda_Semanal_Pct'].notna() & (work['Queda_Semanal_Pct'] >= 50)
+    
+    # Calcular perdas PRIMEIRO (recentes + antigas) para excluir da classificação de risco
+    cnpjs_perdas = set()
+    if 'Classificacao_Perda_V2' in work.columns:
+        # Identificar CNPJs de perdas recentes e antigas
+        perdas_recentes = work[work['Classificacao_Perda_V2'] == 'Perda Recente']
+        perdas_antigas = work[work['Classificacao_Perda_V2'].isin(['Perda Antiga', 'Perda Consolidada'])]
+        
+        if 'CNPJ_Normalizado' in work.columns:
+            cnpjs_perdas = set(perdas_recentes['CNPJ_Normalizado'].dropna()) | set(perdas_antigas['CNPJ_Normalizado'].dropna())
+    
+    # Calcular Em_Risco normalmente
     work['Em_Risco'] = risco_dias | queda_valida
+    
+    # Ao classificar risco, pule se for perda (forçar Em_Risco = False para perdas)
+    if cnpjs_perdas and 'CNPJ_Normalizado' in work.columns:
+        mask_perdas = work['CNPJ_Normalizado'].isin(cnpjs_perdas)
+        work.loc[mask_perdas, 'Em_Risco'] = False
+    
     return work
 
 
@@ -2779,7 +2797,8 @@ def renderizar_aba_fechamento_semanal(
         "Controle_Semanal_Estado_Atual": st.column_config.NumberColumn("Média UF (Atual)", format="%.1f", help="Média de todos os labs do mesmo porte no estado nesta semana"),
         "Variacao_Media_Estado_Pct": st.column_config.NumberColumn("Variação média UF (%)", format="%.1f%%", help="Variação percentual da média estadual (semana atual vs anterior). Exibe '—' quando média anterior está zerada ou ausente.", default=None),
         "Em_Risco": st.column_config.TextColumn("Em risco?", width="small", help="Aplica regra: queda ≥50% ou dias sem coleta conforme porte"),
-        "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Última coleta registrada (qualquer ano)")
+        "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Última coleta registrada (qualquer ano)"),
+        "Classificacao_Unificada": st.column_config.TextColumn("Classificação", width="medium", help="Classificação unificada: Perda Recente (Alto Risco), Perda Antiga (Alto Risco) ou Risco Médio/Alto")
     }
     
     cols_view = ['Nome_Fantasia_PCL', 'CNPJ_Normalizado', 'VIP', 'Rede', 'Estado', 'Porte', 
@@ -2876,9 +2895,28 @@ def renderizar_aba_fechamento_semanal(
     else:
         st.caption("Nenhum filtro de variação aplicado. Mostrando todos os laboratórios do porte selecionado, ordenados por maior queda semanal.")
     
+    # Calcular perdas PRIMEIRO (recentes + antigas) para excluir da classificação de risco
+    # Isso garante que NENHUM laboratório de perda apareça na Lista de Risco
+    cnpjs_perdas = set()
+    if 'Classificacao_Perda_V2' in df.columns and 'CNPJ_Normalizado' in df.columns:
+        # Identificar CNPJs de perdas recentes e antigas
+        perdas_recentes = df[df['Classificacao_Perda_V2'] == 'Perda Recente']
+        perdas_antigas = df[df['Classificacao_Perda_V2'].isin(['Perda Antiga', 'Perda Consolidada'])]
+        cnpjs_perdas = set(perdas_recentes['CNPJ_Normalizado'].dropna()) | set(perdas_antigas['CNPJ_Normalizado'].dropna())
+    
     # Aplicar filtro de variação apenas se houver seleção
     # Se variacoes_sel estiver vazio, aplicar_filtro_variacao retorna o dataframe original (sem filtro)
     df_risco_filtrado = aplicar_filtro_variacao(df_risco_base, variacoes_sel)
+    
+    # EXCLUIR perdas da lista de risco - CRÍTICO para evitar overlaps
+    if cnpjs_perdas and 'CNPJ_Normalizado' in df_risco_filtrado.columns:
+        df_risco_filtrado = df_risco_filtrado[~df_risco_filtrado['CNPJ_Normalizado'].isin(cnpjs_perdas)].copy()
+    
+    # Adicionar classificação unificada para risco
+    if not df_risco_filtrado.empty:
+        df_risco_filtrado['Classificacao_Unificada'] = df_risco_filtrado['Em_Risco'].map({True: 'Risco Médio/Alto', False: 'Sem Risco'})
+        df_risco_filtrado['Classificacao_Unificada'] = df_risco_filtrado['Classificacao_Unificada'].fillna('Sem Risco')
+    
     df_risco_ordenado = df_risco_filtrado.sort_values('Queda_Semanal_Pct', ascending=False, na_position='last')
     
     # Atualizar métrica "Labs na listagem" com o número após aplicar filtros
@@ -2918,6 +2956,7 @@ def renderizar_aba_fechamento_semanal(
         "Controle_Semanal_Estado_Atual",     # 
         "Variacao_Media_Estado_Pct",   # variação do estado (ela pediu essa coluna nova e usa muito)
         "Em_Risco",                    # Sim/Não – útil quando mostrar todos os labs
+        "Classificacao_Unificada",     # classificação unificada (Alto Risco para perdas)
         "CNPJ_Normalizado",            # técnico – pode ficar por último
     ]
     
@@ -3165,6 +3204,9 @@ def renderizar_aba_fechamento_semanal(
         )
         df_perda_recente = df_perda_recente.drop(columns=['_ordem_dias', '_ordem_queda', '_ordem_data'])
         
+        # Adicionar classificação unificada
+        df_perda_recente['Classificacao_Unificada'] = 'Perda Recente (Alto Risco)'
+        
         # Ordem ideal das colunas para Perdas (2025 - versão definitiva)
         # Alinhada com a Lista de Risco - colunas de contexto essenciais adicionadas
         cols_perda_extended = [
@@ -3175,6 +3217,7 @@ def renderizar_aba_fechamento_semanal(
             'VIP',                       # ela filtra por VIP direto
             'Data_Ultima_Coleta',        # a coluna mais importante em perdas – tem que estar logo no começo
             'Dias_Sem_Coleta',           # logo depois da data
+            'Classificacao_Unificada',   # classificação unificada (Alto Risco para perdas)
             'Volume_Ultimo_Mes_Coleta',  # volume antes de morrer
             'Mes_Ultimo_Coleta',         # mês/ano da última coleta
             'Maxima_Coletas',            # pico histórico
@@ -3207,6 +3250,7 @@ def renderizar_aba_fechamento_semanal(
             "Maxima_Coletas": st.column_config.NumberColumn("Máxima Coletas", format="%d", help="Máxima de coletas do cliente (pico histórico)"),
             "Mes_Maxima": st.column_config.TextColumn("Mês Máxima", help="Mês da máxima de coletas"),
             "Ano_Maxima": st.column_config.TextColumn("Ano Máxima", help="Ano da máxima de coletas"),
+            "Classificacao_Unificada": st.column_config.TextColumn("Classificação", width="medium", help="Classificação unificada: Perda Recente (Alto Risco), Perda Antiga (Alto Risco) ou Risco Médio/Alto"),
         })
         
         evento_recente = st.dataframe(
@@ -3300,6 +3344,9 @@ def renderizar_aba_fechamento_semanal(
         )
         df_antigas = df_antigas.drop(columns=['_ordem_dias', '_ordem_queda', '_ordem_data'])
         
+        # Adicionar classificação unificada
+        df_antigas['Classificacao_Unificada'] = 'Perda Antiga (Alto Risco)'
+        
         cols_perda_antigas = [
             'Nome_Fantasia_PCL',
             'Rede',
@@ -3308,6 +3355,7 @@ def renderizar_aba_fechamento_semanal(
             'VIP',
             'Data_Ultima_Coleta',
             'Dias_Sem_Coleta',
+            'Classificacao_Unificada',   # classificação unificada (Alto Risco para perdas)
             'Volume_Ultimo_Mes_Coleta',
             'Mes_Ultimo_Coleta',
             'Maxima_Coletas',
@@ -3350,6 +3398,37 @@ def renderizar_aba_fechamento_semanal(
         )
     else:
         st.info("Nenhuma perda antiga.")
+
+    # ============================================================
+    # UNION DEDUP: Unificar todas as listas com classificação unificada
+    # ============================================================
+    # Filtrar apenas CNPJs válidos (se necessário) e fazer union deduplicada
+    df_risco_filtrado_final = df_risco_filtrado.copy() if not df_risco_filtrado.empty else pd.DataFrame()
+    df_perda_recente_filtrado = df_perda_recente.copy() if not df_perda_recente.empty else pd.DataFrame()
+    df_perda_antiga_filtrado = df_antigas.copy() if not df_antigas.empty else pd.DataFrame()
+    
+    # Garantir que todas tenham CNPJ_Normalizado e Classificacao_Unificada
+    listas_para_union = []
+    if not df_risco_filtrado_final.empty and 'CNPJ_Normalizado' in df_risco_filtrado_final.columns:
+        listas_para_union.append(df_risco_filtrado_final)
+    if not df_perda_recente_filtrado.empty and 'CNPJ_Normalizado' in df_perda_recente_filtrado.columns:
+        listas_para_union.append(df_perda_recente_filtrado)
+    if not df_perda_antiga_filtrado.empty and 'CNPJ_Normalizado' in df_perda_antiga_filtrado.columns:
+        listas_para_union.append(df_perda_antiga_filtrado)
+    
+    # Union dedup
+    if listas_para_union:
+        df_total_dedup = pd.concat(listas_para_union, ignore_index=True).drop_duplicates(subset=['CNPJ_Normalizado'], keep='first')
+        total_union = len(df_total_dedup)
+    else:
+        df_total_dedup = pd.DataFrame()
+        total_union = 0
+    
+    # Validação no App
+    if total_union > 5634:
+        st.error("❌ > Banco! Cheque vazamentos.")
+    else:
+        st.success(f"✅ {total_union}/5634 labs monitorados.")
 
     st.markdown("---")
 

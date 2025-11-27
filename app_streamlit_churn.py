@@ -2847,21 +2847,24 @@ def renderizar_aba_fechamento_semanal(
     # Calcular magnitude da queda (positivo) para os novos filtros
     # Queda vs Média 25 (Pct_Dif_Media_Historica)
     if 'Pct_Dif_Media_Historica' in df_risco_base.columns:
-        df_risco_base['Queda_Media_25_Pct'] = df_risco_base['Pct_Dif_Media_Historica'].apply(lambda x: max(0.0, -float(x)) if pd.notna(x) and isinstance(x, (int, float)) else 0.0)
+        serie_queda_25 = pd.to_numeric(df_risco_base['Pct_Dif_Media_Historica'], errors='coerce')
+        df_risco_base['Queda_Media_25_Pct'] = np.where(serie_queda_25 < 0, -serie_queda_25, np.nan)
     else:
-        df_risco_base['Queda_Media_25_Pct'] = 0.0
+        df_risco_base['Queda_Media_25_Pct'] = np.nan
 
     # Queda vs Média 24 (Variacao_Media_24_Pct)
     if 'Variacao_Media_24_Pct' in df_risco_base.columns:
-        df_risco_base['Queda_Media_24_Pct'] = df_risco_base['Variacao_Media_24_Pct'].apply(lambda x: max(0.0, -float(x)) if pd.notna(x) and isinstance(x, (int, float)) else 0.0)
+        serie_queda_24 = pd.to_numeric(df_risco_base['Variacao_Media_24_Pct'], errors='coerce')
+        df_risco_base['Queda_Media_24_Pct'] = np.where(serie_queda_24 < 0, -serie_queda_24, np.nan)
     else:
-        df_risco_base['Queda_Media_24_Pct'] = 0.0
+        df_risco_base['Queda_Media_24_Pct'] = np.nan
 
     # Queda vs Estado (Variacao_vs_Estado_Pct)
     if 'Variacao_vs_Estado_Pct' in df_risco_base.columns:
-        df_risco_base['Queda_Estado_Pct'] = df_risco_base['Variacao_vs_Estado_Pct'].apply(lambda x: max(0.0, -float(x)) if pd.notna(x) and isinstance(x, (int, float)) else 0.0)
+        serie_queda_estado = pd.to_numeric(df_risco_base['Variacao_vs_Estado_Pct'], errors='coerce')
+        df_risco_base['Queda_Estado_Pct'] = np.where(serie_queda_estado < 0, -serie_queda_estado, np.nan)
     else:
-        df_risco_base['Queda_Estado_Pct'] = 0.0
+        df_risco_base['Queda_Estado_Pct'] = np.nan
 
     # --- LISTA DE RISCO ---
     st.markdown("### 📊 Resumo Semanal")

@@ -1929,6 +1929,50 @@ def preparar_dataframe_risco(df: pd.DataFrame) -> pd.DataFrame:
         work['Media_Semanal_2024'] = pd.to_numeric(work['Total_Coletas_2024'], errors='coerce') / 52
         work['Media_Semanal_2024'] = work['Media_Semanal_2024'].fillna(0.0)
 
+    # Calcular média mensal dos top 3 meses de 2024
+    meses_nomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+    colunas_2024 = [f'N_Coletas_{m}_24' for m in meses_nomes]
+    colunas_2024_existentes = [col for col in colunas_2024 if col in work.columns]
+    
+    if colunas_2024_existentes:
+        def calcular_media_top3(row, colunas):
+            """Calcula a média dos top 3 meses com coletas > 0."""
+            valores = []
+            for col in colunas:
+                val = pd.to_numeric(row.get(col, 0), errors='coerce')
+                if pd.notna(val) and val > 0:
+                    valores.append(val)
+            
+            if not valores:
+                return 0.0
+            
+            # Ordenar decrescente e pegar top 3 (ou menos se não tiver 3)
+            valores_ordenados = sorted(valores, reverse=True)
+            top3 = valores_ordenados[:3]
+            return sum(top3) / len(top3)
+        
+        work['Media_Mensal_Top3_2024'] = work.apply(
+            lambda row: calcular_media_top3(row, colunas_2024_existentes), 
+            axis=1
+        )
+    else:
+        work['Media_Mensal_Top3_2024'] = 0.0
+    
+    # Calcular média mensal dos top 3 meses de 2025 (apenas até o mês atual)
+    from datetime import datetime
+    mes_atual = datetime.now().month
+    meses_2025_disponiveis = meses_nomes[:mes_atual]
+    colunas_2025 = [f'N_Coletas_{m}_25' for m in meses_2025_disponiveis]
+    colunas_2025_existentes = [col for col in colunas_2025 if col in work.columns]
+    
+    if colunas_2025_existentes:
+        work['Media_Mensal_Top3_2025'] = work.apply(
+            lambda row: calcular_media_top3(row, colunas_2025_existentes), 
+            axis=1
+        )
+    else:
+        work['Media_Mensal_Top3_2025'] = 0.0
+
     vol_ant = work['WoW_Semana_Anterior'] if 'WoW_Semana_Anterior' in work.columns else pd.Series(0, index=work.index, dtype=float)
     vol_atual = work['WoW_Semana_Atual'] if 'WoW_Semana_Atual' in work.columns else pd.Series(0, index=work.index, dtype=float)
     
@@ -1973,6 +2017,26 @@ def preparar_dataframe_risco(df: pd.DataFrame) -> pd.DataFrame:
         work['Variacao_Media_Estado_Pct'] = np.where(
             mask_estado_valido,
             (media_estado_atual - media_estado_ant) / media_estado_ant * 100,
+            np.nan
+        )
+
+    # Calcular variação vs média mensal top 3 de 2024
+    media_top3_2024 = pd.to_numeric(work['Media_Mensal_Top3_2024'], errors='coerce')
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mask_top3_2024_valido = (media_top3_2024 > 0) & media_top3_2024.notna() & vol_atual.notna()
+        work['Variacao_vs_Top3_2024_Pct'] = np.where(
+            mask_top3_2024_valido,
+            (vol_atual - media_top3_2024) / media_top3_2024 * 100,
+            np.nan
+        )
+    
+    # Calcular variação vs média mensal top 3 de 2025
+    media_top3_2025 = pd.to_numeric(work['Media_Mensal_Top3_2025'], errors='coerce')
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mask_top3_2025_valido = (media_top3_2025 > 0) & media_top3_2025.notna() & vol_atual.notna()
+        work['Variacao_vs_Top3_2025_Pct'] = np.where(
+            mask_top3_2025_valido,
+            (vol_atual - media_top3_2025) / media_top3_2025 * 100,
             np.nan
         )
 
@@ -2816,11 +2880,15 @@ def renderizar_aba_fechamento_semanal(
         "Pct_Dif_Media_Historica": st.column_config.NumberColumn("Var. % vs Média 25", format="%.1f%%", help="Variação percentual do volume atual vs média semanal de 2025. Exibe '—' quando média está zerada ou ausente.", default=None),
         "Media_Semanal_2024": st.column_config.NumberColumn("Média Semanal 24", format="%.0f", help="Média semanal de coletas no ano 2024 (Total_Coletas_2024 / 52)"),
         "Variacao_Media_24_Pct": st.column_config.NumberColumn("Var. % vs Média 24", format="%.1f%%", help="Variação percentual do volume atual vs média semanal de 2024. Exibe '—' quando média está zerada ou ausente.", default=None),
+        "Media_Mensal_Top3_2024": st.column_config.NumberColumn("Média Mensal Top 3 (2024)", format="%.0f", help="Média dos 3 melhores meses de coleta em 2024 (usa menos se não tiver 3 meses)"),
+        "Variacao_vs_Top3_2024_Pct": st.column_config.NumberColumn("Var. % vs Top 3 Meses 2024", format="%.1f%%", help="Variação percentual do volume da semana atual vs média dos top 3 meses de 2024. Exibe '—' quando média está zerada ou ausente.", default=None),
+        "Media_Mensal_Top3_2025": st.column_config.NumberColumn("Média Mensal Top 3 (2025)", format="%.0f", help="Média dos 3 melhores meses de coleta em 2025 (usa menos se não tiver 3 meses)"),
+        "Variacao_vs_Top3_2025_Pct": st.column_config.NumberColumn("Var. % vs Top 3 Meses 2025", format="%.1f%%", help="Variação percentual do volume da semana atual vs média dos top 3 meses de 2025. Exibe '—' quando média está zerada ou ausente.", default=None),
         "WoW_Semana_Anterior": st.column_config.NumberColumn("Vol. Ant.", format="%d", help="Volume realizado na semana anterior"),
         "WoW_Semana_Atual": st.column_config.NumberColumn("Vol. Atual", format="%d", help="Volume realizado na semana atual"),
         "Queda_Semanal_Abs": st.column_config.NumberColumn("Queda de volume", format="%d", help="Diferença absoluta de volume entre semana anterior e atual"),
         "Controle_Semanal_Estado_Atual": st.column_config.NumberColumn("Média do Estado", format="%.1f", help="Média de todos os labs do mesmo estado nesta semana"),
-        "Variacao_vs_Estado_Pct": st.column_config.NumberColumn("Var. % vs Estado", format="%.1f%%", help="Variação percentual do volume atual vs média do estado. Exibe '—' quando média está zerada ou ausente.", default=None),
+        "Variacao_vs_Estado_Pct": st.column_config.NumberColumn("Var. % semana atual vs média UF semana atual", format="%.1f%%", help="Variação percentual do volume da semana atual vs média do estado na semana atual. Exibe '—' quando média está zerada ou ausente.", default=None),
         "Variacao_Semanal_Pct": st.column_config.NumberColumn(
             "Variação WoW (%)", 
             format="%.1f%%", 
@@ -2830,7 +2898,7 @@ def renderizar_aba_fechamento_semanal(
         "Dias_Sem_Coleta": st.column_config.NumberColumn("Dias Off", format="%d ⚠️", help="Dias úteis consecutivos sem coleta registrados"),
         "Em_Risco": st.column_config.TextColumn("Em Risco?", width="small", help="Aplica regra: queda ≥50% ou dias sem coleta conforme porte"),
         "Controle_Semanal_Estado_Anterior": st.column_config.NumberColumn("Média UF (Ant)", format="%.1f", help="Média de todos os labs do mesmo porte no estado na semana anterior"),
-        "Variacao_Media_Estado_Pct": st.column_config.NumberColumn("Variação média UF (%)", format="%.1f%%", help="Variação percentual da média estadual (semana atual vs anterior). Exibe '—' quando média anterior está zerada ou ausente.", default=None),
+        "Variacao_Media_Estado_Pct": st.column_config.NumberColumn("Var. % média UF semana anterior vs atual", format="%.1f%%", help="Variação percentual da média estadual (semana atual vs anterior). Exibe '—' quando média anterior está zerada ou ausente.", default=None),
         "Data_Ultima_Coleta": st.column_config.DateColumn("Última Coleta", format="DD/MM/YYYY", help="Última coleta registrada (qualquer ano)")
     }
     
@@ -3025,16 +3093,17 @@ def renderizar_aba_fechamento_semanal(
         "Dias_Sem_Coleta",                   # 7. dias off
         "WoW_Semana_Anterior",               # 8. volume anterior
         "WoW_Semana_Atual",                  # 9. volume atual
-        "Queda_Semanal_Abs",                 # 10. queda de volume
-        "Variacao_Semanal_Pct",              # 11. variação semana anterior e atual
-        "Media_Semanal_2025",                # 12. média semanal 25
-        "Pct_Dif_Media_Historica",           # 13. variação média semanal 25 com semana atual
-        "Media_Semanal_2024",                # 14. média semanal 24
-        "Variacao_Media_24_Pct",             # 15. variação média semanal 24 com semana atual
-        "Controle_Semanal_Estado_Anterior",  # 16. média uf anterior
-        "Controle_Semanal_Estado_Atual",     # 17. média uf semana atual
-        "Variacao_vs_Estado_Pct",            # 18. variação semana atual com média do estado semana atual
-        "Variacao_Media_Estado_Pct",         # 19. variação média estado
+        "Variacao_Semanal_Pct",              # 10. variação semana anterior e atual
+        "Media_Semanal_2025",                # 11. média semanal 25
+        "Pct_Dif_Media_Historica",           # 12. variação média semanal 25 com semana atual
+        "Media_Mensal_Top3_2025",            # 13. média mensal top 3 meses 2025
+        "Variacao_vs_Top3_2025_Pct",         # 14. variação vs top 3 meses 2025
+        "Media_Semanal_2024",                # 15. média semanal 24
+        "Variacao_Media_24_Pct",             # 16. variação média semanal 24 com semana atual
+        "Media_Mensal_Top3_2024",            # 17. média mensal top 3 meses 2024
+        "Variacao_vs_Top3_2024_Pct",         # 18. variação vs top 3 meses 2024
+        "Variacao_vs_Estado_Pct",            # 19. variação semana atual vs média do estado semana atual
+        "Variacao_Media_Estado_Pct",         # 20. variação média estado
         "Em_Risco",                          # útil quando mostrar todos os labs
         "CNPJ_Normalizado",                  # técnico – pode ficar por último
     ]

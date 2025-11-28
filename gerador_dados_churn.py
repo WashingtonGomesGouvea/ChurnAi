@@ -25,12 +25,24 @@ except Exception:
 from config_churn import *
 
 # Configurações de log
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL),
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()]
-)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)  # Nível mais baixo para capturar tudo
+
+# Handler para arquivo (todos os níveis)
+file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+file_handler.setLevel(logging.DEBUG)
+file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+file_handler.setFormatter(file_formatter)
+
+# Handler para console (apenas INFO, WARNING, ERROR - mais limpo)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter('%(levelname)s: %(message)s')
+console_handler.setFormatter(console_formatter)
+
+# Adicionar handlers
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
 # Importar novos módulos do sistema v2
 try:
@@ -239,7 +251,7 @@ def gerar_resumo_semanal_mes(base_df: pd.DataFrame,
                             .astype(int)
                             .to_dict()
                         )
-                        logger.info(f"Volume da semana anterior à primeira semana do mês (ISO {prev_iso_week}/{prev_iso_year}): {prev_total}")
+                        logger.debug(f"Volume da semana anterior à primeira semana do mês (ISO {prev_iso_week}/{prev_iso_year}): {prev_total}")
     except Exception as e:
         logger.warning(f"Erro ao buscar volume da semana anterior ao mês: {e}")
         prev_total = None
@@ -320,7 +332,6 @@ def atualizar_csv_incremental(arquivo_path: str, novos_dados_df: pd.DataFrame, c
         if os.path.exists(arquivo_path):
             # Ler dados existentes
             df_existente = pd.read_csv(arquivo_path, encoding=ENCODING, low_memory=False)
-            logger.info(f"Arquivo existente carregado: {len(df_existente)} registros")
             
             # Converter chave_id para string em ambos DataFrames
             df_existente[chave_id] = df_existente[chave_id].astype(str)
@@ -330,18 +341,17 @@ def atualizar_csv_incremental(arquivo_path: str, novos_dados_df: pd.DataFrame, c
             df_final = pd.concat([df_existente, novos_dados_df], ignore_index=True)
             df_final = df_final.drop_duplicates(subset=[chave_id], keep='last')
             
-            logger.info(f"Merge concluído: {len(df_final)} registros (existente: {len(df_existente)}, novos: {len(novos_dados_df)})")
+            logger.debug(f"CSV atualizado: {os.path.basename(arquivo_path)} - {len(df_existente)} existentes + {len(novos_dados_df)} novos → {len(df_final)} total")
         else:
             # Primeira execução - usar apenas novos dados
             df_final = novos_dados_df
-            logger.info(f"Primeira execução: {len(df_final)} registros")
+            logger.debug(f"CSV criado: {os.path.basename(arquivo_path)} - {len(df_final)} registros")
         
         # Salvar CSV atualizado
         df_final.to_csv(arquivo_path, index=False, encoding=ENCODING)
-        logger.info(f"CSV atualizado: {arquivo_path}")
         
     except Exception as e:
-        logger.error(f"Erro ao atualizar CSV {arquivo_path}: {e}")
+        logger.error(f"Erro ao atualizar CSV {os.path.basename(arquivo_path)}: {e}")
         # Em caso de erro, salvar apenas os novos dados
         novos_dados_df.to_csv(arquivo_path, index=False, encoding=ENCODING)
         logger.warning(f"Salvando apenas novos dados devido ao erro")
@@ -351,10 +361,8 @@ def extrair_gatherings_2024():
     arquivo_path = os.path.join(OUTPUT_DIR, GATHERINGS_2024_FILE)
     
     if os.path.exists(arquivo_path):
-        logger.info(f"Arquivo {GATHERINGS_2024_FILE} já existe. Pulando extração de 2024.")
+        logger.debug(f"Arquivo {GATHERINGS_2024_FILE} já existe. Pulando extração de 2024.")
         return
-    
-    logger.info("Iniciando extração de gatherings 2024...")
     
     db = connect_mongodb()
     if db is None:
@@ -372,8 +380,6 @@ def extrair_gatherings_2024():
         "active": True
     }))
     
-    logger.info(f"Encontrados {len(gatherings_2024)} gatherings de 2024")
-    
     if gatherings_2024:
         # Converter para DataFrame
         df_gatherings = pd.DataFrame(gatherings_2024)
@@ -381,14 +387,12 @@ def extrair_gatherings_2024():
         # Salvar CSV
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         df_gatherings.to_csv(arquivo_path, index=False, encoding=ENCODING)
-        logger.info(f"Gatherings 2024 salvos: {arquivo_path}")
+        logger.info(f"Gatherings 2024: {len(gatherings_2024)} registros extraídos")
     else:
-        logger.warning("Nenhum gathering encontrado para 2024")
+        logger.debug("Nenhum gathering encontrado para 2024")
 
 def extrair_gatherings_2025():
     """Extrai gatherings de 2025 com merge incremental."""
-    logger.info("Iniciando extração de gatherings 2025...")
-    
     db = connect_mongodb()
     if db is None:
         return
@@ -404,8 +408,6 @@ def extrair_gatherings_2025():
         "active": True
     }))
     
-    logger.info(f"Encontrados {len(gatherings_2025)} gatherings de 2025")
-    
     if gatherings_2025:
         # Converter para DataFrame
         df_gatherings = pd.DataFrame(gatherings_2025)
@@ -414,13 +416,12 @@ def extrair_gatherings_2025():
         arquivo_path = os.path.join(OUTPUT_DIR, GATHERINGS_2025_FILE)
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         atualizar_csv_incremental(arquivo_path, df_gatherings, '_id')
+        logger.info(f"Gatherings 2025: {len(gatherings_2025)} registros processados")
     else:
-        logger.warning("Nenhum gathering encontrado para 2025")
+        logger.debug("Nenhum gathering encontrado para 2025")
 
 def extrair_laboratories():
     """Extrai laboratories com merge incremental (sem filtro de active)."""
-    logger.info("Iniciando extração de laboratories...")
-    
     db = connect_mongodb()
     if db is None:
         return
@@ -430,8 +431,6 @@ def extrair_laboratories():
     # Buscar todos laboratories (sem filtro)
     laboratories = list(collections["laboratories"].find({}))
     
-    logger.info(f"Encontrados {len(laboratories)} laboratories")
-    
     if laboratories:
         # Converter para DataFrame
         df_laboratories = pd.DataFrame(laboratories)
@@ -440,13 +439,12 @@ def extrair_laboratories():
         arquivo_path = os.path.join(OUTPUT_DIR, LABORATORIES_FILE)
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         atualizar_csv_incremental(arquivo_path, df_laboratories, '_id')
+        logger.info(f"Laboratories: {len(laboratories)} registros processados")
     else:
         logger.warning("Nenhum laboratory encontrado")
 
 def extrair_representatives():
     """Extrai representatives com merge incremental."""
-    logger.info("Iniciando extração de representatives...")
-    
     db = connect_mongodb()
     if db is None:
         return
@@ -456,8 +454,6 @@ def extrair_representatives():
     # Buscar todos representatives
     representatives = list(collections["representatives"].find({}))
     
-    logger.info(f"Encontrados {len(representatives)} representatives")
-    
     if representatives:
         # Converter para DataFrame
         df_representatives = pd.DataFrame(representatives)
@@ -466,14 +462,13 @@ def extrair_representatives():
         arquivo_path = os.path.join(OUTPUT_DIR, REPRESENTATIVES_FILE)
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         atualizar_csv_incremental(arquivo_path, df_representatives, '_id')
+        logger.info(f"Representatives: {len(representatives)} registros processados")
     else:
-        logger.warning("Nenhum representative encontrado")
+        logger.debug("Nenhum representative encontrado")
 
 
 def extrair_chainofcustodies():
     """Extrai chain of custodies com merge incremental."""
-    logger.info("Iniciando extração de chain of custodies...")
-
     db = connect_mongodb()
     if db is None:
         return
@@ -512,8 +507,6 @@ def extrair_chainofcustodies():
             'is_recollection': _extract_recollection_status(doc.get('analysisStatus'))
         })
 
-    logger.info(f"Encontradas {len(chain_docs)} chain of custodies")
-
     if chain_docs:
         df_chain = pd.DataFrame(chain_docs)
         df_chain['_id'] = df_chain['_id'].astype(str)
@@ -526,13 +519,12 @@ def extrair_chainofcustodies():
         arquivo_path = os.path.join(OUTPUT_DIR, CHAIN_OF_CUSTODIES_FILE)
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         atualizar_csv_incremental(arquivo_path, df_chain, '_id')
+        logger.info(f"Chain of custodies: {len(chain_docs)} registros processados")
     else:
-        logger.warning("Nenhuma chain of custody encontrada")
+        logger.debug("Nenhuma chain of custody encontrada")
 
 def extrair_prices():
     """Extrai preços por laboratório com merge incremental."""
-    logger.info("Iniciando extração de prices...")
-
     db = connect_mongodb()
     if db is None:
         return
@@ -549,8 +541,6 @@ def extrair_prices():
         **{key: 1 for key in PRICE_CATEGORIES.keys()}
     })
     prices_docs = list(cursor)
-
-    logger.info(f"Encontrados {len(prices_docs)} registros de prices")
 
     if prices_docs:
         df_prices = pd.DataFrame(prices_docs)
@@ -616,8 +606,9 @@ def extrair_prices():
         arquivo_path = os.path.join(OUTPUT_DIR, PRICES_FILE)
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         atualizar_csv_incremental(arquivo_path, df_prices, '_id')
+        logger.info(f"Prices: {len(prices_docs)} registros processados")
     else:
-        logger.warning("Nenhum price encontrado")
+        logger.debug("Nenhum price encontrado")
 
 def carregar_dados_csv() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Carrega dados dos CSVs gerados."""
@@ -626,55 +617,54 @@ def carregar_dados_csv() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.D
         arquivo_2024 = os.path.join(OUTPUT_DIR, GATHERINGS_2024_FILE)
         if os.path.exists(arquivo_2024):
             df_gatherings_2024 = pd.read_csv(arquivo_2024, encoding=ENCODING, low_memory=False)
-            logger.info(f"Gatherings 2024 carregados: {len(df_gatherings_2024)} registros")
         else:
             df_gatherings_2024 = pd.DataFrame()
-            logger.warning("Arquivo gatherings 2024 não encontrado")
+            logger.debug("Arquivo gatherings 2024 não encontrado")
         
         # Carregar gatherings 2025
         arquivo_2025 = os.path.join(OUTPUT_DIR, GATHERINGS_2025_FILE)
         if os.path.exists(arquivo_2025):
             df_gatherings_2025 = pd.read_csv(arquivo_2025, encoding=ENCODING, low_memory=False)
-            logger.info(f"Gatherings 2025 carregados: {len(df_gatherings_2025)} registros")
         else:
             df_gatherings_2025 = pd.DataFrame()
-            logger.warning("Arquivo gatherings 2025 não encontrado")
+            logger.debug("Arquivo gatherings 2025 não encontrado")
         
         # Carregar laboratories
         arquivo_labs = os.path.join(OUTPUT_DIR, LABORATORIES_FILE)
         if os.path.exists(arquivo_labs):
             df_laboratories = pd.read_csv(arquivo_labs, encoding=ENCODING, low_memory=False)
-            logger.info(f"Laboratories carregados: {len(df_laboratories)} registros")
         else:
             df_laboratories = pd.DataFrame()
-            logger.warning("Arquivo laboratories não encontrado")
+            logger.debug("Arquivo laboratories não encontrado")
         
         # Carregar representatives
         arquivo_reps = os.path.join(OUTPUT_DIR, REPRESENTATIVES_FILE)
         if os.path.exists(arquivo_reps):
             df_representatives = pd.read_csv(arquivo_reps, encoding=ENCODING, low_memory=False)
-            logger.info(f"Representatives carregados: {len(df_representatives)} registros")
         else:
             df_representatives = pd.DataFrame()
-            logger.warning("Arquivo representatives não encontrado")
+            logger.debug("Arquivo representatives não encontrado")
 
         # Carregar chain of custodies
         arquivo_chain = os.path.join(OUTPUT_DIR, CHAIN_OF_CUSTODIES_FILE)
         if os.path.exists(arquivo_chain):
             df_chain = pd.read_csv(arquivo_chain, encoding=ENCODING, low_memory=False)
-            logger.info(f"Chain of custodies carregadas: {len(df_chain)} registros")
         else:
             df_chain = pd.DataFrame()
-            logger.warning("Arquivo chain of custodies não encontrado")
+            logger.debug("Arquivo chain of custodies não encontrado")
 
         # Carregar prices
         arquivo_prices = os.path.join(OUTPUT_DIR, PRICES_FILE)
         if os.path.exists(arquivo_prices):
             df_prices = pd.read_csv(arquivo_prices, encoding=ENCODING, low_memory=False)
-            logger.info(f"Prices carregados: {len(df_prices)} registros")
         else:
             df_prices = pd.DataFrame()
-            logger.warning("Arquivo prices não encontrado")
+            logger.debug("Arquivo prices não encontrado")
+        
+        # Resumo consolidado
+        logger.info(f"Dados carregados: Gatherings 2024={len(df_gatherings_2024)}, 2025={len(df_gatherings_2025)}, "
+                   f"Labs={len(df_laboratories)}, Reps={len(df_representatives)}, "
+                   f"Chain={len(df_chain)}, Prices={len(df_prices)}")
         
         return (
             df_gatherings_2024,
@@ -712,7 +702,7 @@ def calcular_baseline_mensal_robusta(base_df: pd.DataFrame, meses_nomes: List[st
     Returns:
         Série com baseline mensal para cada laboratório
     """
-    logger.info(f"Calculando baseline mensal robusta (top-{top_n} meses de 2024 e 2025)")
+    logger.debug(f"Calculando baseline mensal robusta (top-{top_n} meses de 2024 e 2025)")
     
     # Colunas de coletas de 2024
     colunas_2024 = [f'N_Coletas_{m}_24' for m in meses_nomes]
@@ -737,7 +727,7 @@ def calcular_baseline_mensal_robusta(base_df: pd.DataFrame, meses_nomes: List[st
         axis=1
     )
     
-    logger.info(f"Baseline calculada (2024+2025): média={baseline.mean():.2f}, mediana={baseline.median():.2f}")
+    logger.debug(f"Baseline calculada (2024+2025): média={baseline.mean():.2f}, mediana={baseline.median():.2f}")
     return baseline
 
 
@@ -791,7 +781,7 @@ def calcular_wow_iso(base_df: pd.DataFrame, df_gatherings_2025: pd.DataFrame, uf
     Returns:
         DataFrame com colunas WoW_Semana_Atual, WoW_Semana_Anterior, WoW_Percentual
     """
-    logger.info(f"Calculando WoW (Week over Week) com semanas ISO e dias úteis{f' para UF={uf}' if uf else ''}")
+    logger.debug(f"Calculando WoW (Week over Week) com semanas ISO e dias úteis{f' para UF={uf}' if uf else ''}")
     
     if df_gatherings_2025.empty:
         logger.warning("Sem dados de 2025 para calcular WoW")
@@ -860,7 +850,7 @@ def calcular_wow_iso(base_df: pd.DataFrame, df_gatherings_2025: pd.DataFrame, uf
         })
     
     df_wow_result = pd.DataFrame(wow_data).set_index('_id')
-    logger.info(f"WoW calculado: {len(df_wow_result)} laboratórios")
+    logger.debug(f"WoW calculado: {len(df_wow_result)} laboratórios")
     
     return df_wow_result.reindex(base_df.index, fill_value=0)
 
@@ -875,7 +865,7 @@ def integrar_dados_gralab(base_df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame com colunas Apareceu_Gralab, Gralab_Data, Gralab_Tipo
     """
-    logger.info("Integrando dados de concorrência do Gralab")
+    logger.debug("Integrando dados de concorrência do Gralab")
     
     # Inicializar colunas
     base_df = base_df.copy()
@@ -967,13 +957,13 @@ def integrar_dados_gralab(base_df: pd.DataFrame) -> pd.DataFrame:
             base_df_merged['Gralab_Tipo'] = base_df_merged['Gralab_Tipo'].fillna('')
         
         qtd_com_gralab = base_df_merged['Apareceu_Gralab'].sum()
-        logger.info(f"Integração Gralab concluída: {qtd_com_gralab} laboratórios com sinal de concorrência")
+        logger.debug(f"Integração Gralab concluída: {qtd_com_gralab} laboratórios com sinal de concorrência")
         
         # Log de exemplo para debug
         if qtd_com_gralab > 0:
             exemplo = base_df_merged[base_df_merged['Apareceu_Gralab']].head(1)
             if not exemplo.empty:
-                logger.info(f"Exemplo de match: CNPJ={exemplo.iloc[0].get('CNPJ_PCL', 'N/A')}, Data={exemplo.iloc[0].get('Gralab_Data', 'N/A')}")
+                logger.debug(f"Exemplo de match Gralab: CNPJ={exemplo.iloc[0].get('CNPJ_PCL', 'N/A')}, Data={exemplo.iloc[0].get('Gralab_Data', 'N/A')}")
         
         return base_df_merged
         
@@ -1028,7 +1018,6 @@ def classificar_risco_v2(row: pd.Series) -> Tuple[str, str]:
 
 def calcular_metricas_churn():
     """Calcula métricas de churn com agregações vetorizadas (rápidas)."""
-    logger.info("Iniciando cálculo de métricas de churn...")
     
     (
         df_gatherings_2024,
@@ -1520,7 +1509,7 @@ def calcular_metricas_churn():
     base['Nome_Fantasia_PCL'] = df_laboratories.set_index('_id').reindex(base.index).get('fantasyName') if 'fantasyName' in df_laboratories.columns else ''
 
     # Debug: verificar colunas de endereço disponíveis
-    logger.info(f"Colunas disponíveis em df_laboratories: {list(df_laboratories.columns)}")
+    logger.debug(f"Colunas disponíveis em df_laboratories: {list(df_laboratories.columns)}")
 
     # Estado e Cidade - extrair da coluna 'address' que contém dados JSON
     import re
@@ -1579,9 +1568,9 @@ def calcular_metricas_churn():
     base['Cidade'] = enderecos_extraidos.apply(lambda x: x[1])
 
     # Debug: mostrar alguns exemplos
-    logger.info(f"Exemplos de endereços processados:")
+    logger.debug(f"Exemplos de endereços processados:")
     for i, (estado, cidade) in enumerate(enderecos_extraidos.head(3)):
-        logger.info(f"  Lab {i+1}: Estado='{estado}', Cidade='{cidade}'")
+        logger.debug(f"  Lab {i+1}: Estado='{estado}', Cidade='{cidade}'")
 
     # Garantir que não há valores None
     base['Estado'] = base['Estado'].fillna('')
@@ -1684,8 +1673,6 @@ def calcular_metricas_churn():
     # SISTEMA DE ALERTAS V2
     # ================================
     if MODULOS_V2_DISPONIVEIS:
-        logger.info("Aplicando sistema de alertas v2...")
-        
         try:
             # 1. Calcular baseline mensal robusta
             base['Baseline_Mensal'] = calcular_baseline_mensal_robusta(base, meses_nomes, BASELINE_TOP_N)
@@ -1770,18 +1757,17 @@ def calcular_metricas_churn():
             
             base_com_coletas_2025 = base[mask_coletas_2025].copy()
             
-            # Log detalhado para debug
+            # Log resumido (detalhes em DEBUG)
             labs_filtrados = len(base) - len(base_com_coletas_2025)
-            logger.info(f"Filtro de coletas 2025: {len(base)} labs → {len(base_com_coletas_2025)} labs com coletas em 2025 ({labs_filtrados} filtrados)")
-            
-            # Log de exemplo de labs filtrados (para debug)
             if labs_filtrados > 0:
+                logger.debug(f"Filtro de coletas 2025: {len(base)} labs → {len(base_com_coletas_2025)} labs com coletas em 2025 ({labs_filtrados} filtrados)")
+                # Log de exemplo de labs filtrados (para debug)
                 labs_sem_coleta = base[~mask_coletas_2025].head(5)
                 for idx, lab in labs_sem_coleta.iterrows():
                     nome = lab.get('Nome_Fantasia_PCL', lab.get('Razao_Social_PCL', 'N/A'))
                     total_2025 = lab.get('Total_Coletas_2025', 0)
                     ultima_coleta = lab.get('Data_Ultima_Coleta', 'N/A')
-                    logger.info(f"  Lab filtrado: {nome} - Total_2025={total_2025}, Ultima_Coleta={ultima_coleta}")
+                    logger.debug(f"  Lab filtrado: {nome} - Total_2025={total_2025}, Ultima_Coleta={ultima_coleta}")
             
             # 8. Preparar alertas prioritários
             df_alto_risco = base_com_coletas_2025[base_com_coletas_2025['Status_Risco_V2'] == 'Perda (Risco Alto)'].copy()
@@ -1801,21 +1787,20 @@ def calcular_metricas_churn():
                 # 11. Gerar e salvar relatório
                 relatorio = gerar_relatorio_alertas(df_alertas_cap)
                 relatorio_texto = formatar_relatorio_texto(relatorio)
-                logger.info(f"\n{relatorio_texto}")
+                logger.debug(f"\n{relatorio_texto}")  # Relatório completo apenas em DEBUG
                 
                 # Salvar alertas prioritários em arquivo separado
                 arquivo_alertas = os.path.join(OUTPUT_DIR, "alertas_prioritarios.csv")
                 df_alertas_cap.to_csv(arquivo_alertas, index=False, encoding=ENCODING)
-                logger.info(f"Alertas prioritários salvos: {arquivo_alertas}")
                 
                 # Salvar alertas por UF
                 for uf, df_uf_alertas in alertas_por_uf.items():
                     arquivo_uf = os.path.join(OUTPUT_DIR, f"alertas_uf_{uf}.csv")
                     df_uf_alertas.to_csv(arquivo_uf, index=False, encoding=ENCODING)
                 
-                logger.info(f"Sistema v2: {len(df_alto_risco)} alertas identificados, {len(df_alertas_cap)} após cap")
+                logger.info(f"Alertas v2: {len(df_alto_risco)} identificados → {len(df_alertas_cap)} após cap")
             else:
-                logger.info("Sistema v2: Nenhum alerta de risco alto identificado")
+                logger.debug("Sistema v2: Nenhum alerta de risco alto identificado")
             
         except Exception as e:
             logger.error(f"Erro ao aplicar sistema v2: {e}. Continuando com sistema legado.", exc_info=True)
@@ -2000,7 +1985,9 @@ def calcular_metricas_churn():
 
 def executar_extracoes():
     """Executa todas as extrações de dados."""
-    logger.info("Iniciando extrações de dados...")
+    logger.info("=" * 60)
+    logger.info("ETAPA 1: EXTRAÇÃO DE DADOS")
+    logger.info("=" * 60)
     
     # Extrair 2024 apenas se arquivo não existir
     extrair_gatherings_2024()
@@ -2012,10 +1999,16 @@ def executar_extracoes():
     extrair_chainofcustodies()
     extrair_prices()
     
+    logger.info("-" * 60)
+    logger.info("ETAPA 2: CÁLCULO DE MÉTRICAS")
+    logger.info("-" * 60)
+    
     # Calcular métricas de churn
     calcular_metricas_churn()
     
-    logger.info("Extrações concluídas!")
+    logger.info("=" * 60)
+    logger.info("PROCESSO CONCLUÍDO")
+    logger.info("=" * 60)
 
 def executar_gerador():
     """Executa o gerador em loop com agendamento."""

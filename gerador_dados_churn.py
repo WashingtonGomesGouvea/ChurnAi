@@ -107,7 +107,8 @@ def calcular_dias_sem_coleta_uteis(data_ultima: Optional[pd.Timestamp],
 def gerar_resumo_semanal_mes(base_df: pd.DataFrame,
                              df_gatherings_2025: pd.DataFrame) -> Tuple[pd.Series, dict]:
     """
-    Gera resumo semanal (por laboratório) do mês corrente e metadados globais.
+    Gera resumo semanal (por laboratório) dos últimos 2 meses completos (mês atual + mês anterior) e metadados globais.
+    Isso permite comparações contínuas mesmo quando um mês novo começa.
 
     Returns:
         (Series com JSON por laboratório, dict de metadados)
@@ -121,8 +122,17 @@ def gerar_resumo_semanal_mes(base_df: pd.DataFrame,
     ano_ref = hoje.year
     mes_ref = hoje.month
 
+    # Calcular também mês anterior
+    if mes_ref == 1:
+        mes_anterior = 12
+        ano_anterior = ano_ref - 1
+    else:
+        mes_anterior = mes_ref - 1
+        ano_anterior = ano_ref
+
     meta = {
-        "referencia": {"ano": ano_ref, "mes": mes_ref},
+        "referencia_atual": {"ano": ano_ref, "mes": mes_ref},
+        "referencia_anterior": {"ano": ano_anterior, "mes": mes_anterior},
         "semanas_fechadas": 0,
         "total_semanas": 0,
         "weeks": []
@@ -138,10 +148,11 @@ def gerar_resumo_semanal_mes(base_df: pd.DataFrame,
         return vazio_series, meta
 
     df_mes['createdAt'] = df_mes['createdAt'].dt.tz_convert(timezone_br)
-    inicio_mes = datetime(ano_ref, mes_ref, 1).date()
-    fim_mes = datetime(ano_ref, mes_ref, calendar.monthrange(ano_ref, mes_ref)[1]).date()
-    inicio_janela = inicio_mes - timedelta(days=inicio_mes.weekday())  # segunda da semana que contém o dia 1
-    fim_janela = fim_mes + timedelta(days=6 - fim_mes.weekday())      # domingo da última semana do mês
+    # Expandir janela para incluir mês anterior
+    inicio_mes_anterior = datetime(ano_anterior, mes_anterior, 1).date()
+    fim_mes_atual = datetime(ano_ref, mes_ref, calendar.monthrange(ano_ref, mes_ref)[1]).date()
+    inicio_janela = inicio_mes_anterior - timedelta(days=inicio_mes_anterior.weekday())  # segunda da semana que contém o dia 1 do mês anterior
+    fim_janela = fim_mes_atual + timedelta(days=6 - fim_mes_atual.weekday())      # domingo da última semana do mês atual
     df_mes['createdAt_date'] = df_mes['createdAt'].dt.date
     df_mes = df_mes[
         (df_mes['createdAt_date'] >= inicio_janela) &
@@ -167,11 +178,23 @@ def gerar_resumo_semanal_mes(base_df: pd.DataFrame,
         .sort_values(['iso_year', 'iso_week'])
         .reset_index(drop=True)
     )
+    # Identificar início do mês atual para distinguir semanas do mês anterior
+    inicio_mes_atual = datetime(ano_ref, mes_ref, 1).date()
+    
     for idx, row in unique_weeks.iterrows():
         iso_year = int(row['iso_year'])
         iso_week = int(row['iso_week'])
-        semana_no_mes = idx + 1
         semana_inicio = row['semana_inicio']
+        
+        # Determinar a qual mês a semana pertence (baseado no início da semana)
+        if semana_inicio < inicio_mes_atual:
+            mes_referencia_ano = ano_anterior
+            mes_referencia_mes = mes_anterior
+        else:
+            mes_referencia_ano = ano_ref
+            mes_referencia_mes = mes_ref
+        
+        semana_no_mes = idx + 1
         semana_fim_util = semana_inicio + timedelta(days=4)
         try:
             semana_fim_util = datetime.fromisocalendar(iso_year, iso_week, 5).date()
@@ -184,7 +207,8 @@ def gerar_resumo_semanal_mes(base_df: pd.DataFrame,
         week_meta_map[(iso_year, iso_week)] = {
             "semana_no_mes": semana_no_mes,
             "fechada": fechada,
-            "week_end": semana_fim_util
+            "week_end": semana_fim_util,
+            "mes_referencia": {"ano": mes_referencia_ano, "mes": mes_referencia_mes}
         }
 
     if not week_meta_map:
@@ -262,13 +286,15 @@ def gerar_resumo_semanal_mes(base_df: pd.DataFrame,
         iso_week = int(row['iso_week'])
         semana_no_mes = int(row['semana_no_mes'])
         total_volume = int(row['volume'])
+        week_info = week_meta_map.get((iso_year, iso_week), {})
         weeks_meta_list.append({
             "semana": semana_no_mes,
             "iso_week": iso_week,
             "iso_year": iso_year,
             "volume_total": total_volume,
             "volume_semana_anterior": prev_total,
-            "fechada": week_meta_map[(iso_year, iso_week)]['fechada']
+            "fechada": week_info.get('fechada', False),
+            "mes_referencia": week_info.get('mes_referencia', {"ano": ano_ref, "mes": mes_ref})
         })
         prev_total = total_volume
     meta['weeks'] = weeks_meta_list
@@ -290,7 +316,8 @@ def gerar_resumo_semanal_mes(base_df: pd.DataFrame,
                 "iso_year": iso_year,
                 "volume_util": int(row['volume']),
                 "volume_semana_anterior": prev_volume_lab,
-                "fechada": info_semana.get('fechada', False)
+                "fechada": info_semana.get('fechada', False),
+                "mes_referencia": info_semana.get('mes_referencia', {"ano": ano_ref, "mes": mes_ref})
             })
             prev_volume_lab = int(row['volume'])
         lab_json_map[lab_id] = json.dumps(registros, ensure_ascii=False)

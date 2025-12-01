@@ -2242,6 +2242,23 @@ def calcular_metricas_fechamento_semanal(df: pd.DataFrame) -> Dict[str, Any]:
             metricas['media_semanal_2024'] = meta_fechamento.get('media_semanal_pais_2024', metricas['media_semanal_2024'])
             metricas['media_semanal_2025'] = meta_fechamento.get('media_semanal_pais_2025', metricas['media_semanal_2025'])
             metricas['medias_por_uf'] = meta_fechamento.get('media_semanal_por_uf', {})
+            
+            # Identificar semanas por mês quando vier do arquivo
+            if metricas['semanas_detalhes']:
+                metricas['semanas_por_mes'] = {}
+                for w in metricas['semanas_detalhes']:
+                    iso_year = w.get('iso_year')
+                    iso_week = w.get('iso_week')
+                    if not iso_year or not iso_week:
+                        continue
+                    try:
+                        inicio_semana = datetime.fromisocalendar(int(iso_year), int(iso_week), 1)
+                        mes_key = f"{inicio_semana.year}-{inicio_semana.month:02d}"
+                        if mes_key not in metricas['semanas_por_mes']:
+                            metricas['semanas_por_mes'][mes_key] = []
+                        metricas['semanas_por_mes'][mes_key].append(w)
+                    except Exception:
+                        continue
     except Exception as e:
         logger.warning(f"Metadados de fechamento não disponíveis, usando cálculos básicos: {e}")
     
@@ -2294,6 +2311,24 @@ def calcular_metricas_fechamento_semanal(df: pd.DataFrame) -> Dict[str, Any]:
                 metricas['semanas_detalhes'] = weeks_list
                 metricas['total_semanas'] = len(weeks_list)
                 metricas['semanas_fechadas'] = sum(1 for w in weeks_list if w['fechada'])
+                
+                # NOVO: Identificar semanas por mês
+                metricas['semanas_por_mes'] = {}
+                for w in weeks_list:
+                    # Determinar mês da semana com base na data de início
+                    iso_year = w.get('iso_year')
+                    iso_week = w.get('iso_week')
+                    if not iso_year or not iso_week:
+                        continue
+                    try:
+                        inicio_semana = datetime.fromisocalendar(int(iso_year), int(iso_week), 1)
+                        mes_key = f"{inicio_semana.year}-{inicio_semana.month:02d}"
+                        if mes_key not in metricas['semanas_por_mes']:
+                            metricas['semanas_por_mes'][mes_key] = []
+                        metricas['semanas_por_mes'][mes_key].append(w)
+                    except Exception:
+                        continue
+                
                 logger.info(f"Semanas reconstruídas via fallback: {len(weeks_list)} semanas encontradas")
                 
         except Exception as e:
@@ -2677,14 +2712,37 @@ def renderizar_aba_fechamento_semanal(
     st.caption("Monitoramento de todos os laboratórios. Ordenado por maior queda de volume.")
 
     # -------------------------------------------------------------
-    # Seleção de fechamento semanal (sem “tempo real”)
+    # Seleção de fechamento semanal (sem "tempo real")
     # -------------------------------------------------------------
     metricas_sem = calcular_metricas_fechamento_semanal(df)
     met = metricas_sem
+    
+    # Detectar se estamos na primeira semana do mês
+    hoje = datetime.now()
+    primeiro_dia_mes = hoje.replace(day=1)
+    semana_inicio_mes = primeiro_dia_mes.isocalendar().week
+    semana_hoje = hoje.isocalendar().week
+    
+    # Se estamos na primeira semana ISO do mês ou nos primeiros 7 dias, incluir mês anterior por padrão
+    primeira_semana_mes = (semana_hoje == semana_inicio_mes or hoje.day <= 7)
+    
     semanas_meta = sorted(
         met.get('semanas_detalhes', []),
         key=lambda x: (x.get('iso_year', 0), x.get('iso_week', 0))
     )
+    
+    # Filtrar semanas a exibir baseado em se estamos na primeira semana
+    if primeira_semana_mes:
+        # Mostrar semanas do mês anterior + mês atual (todas as semanas já vêm do gerador)
+        st.info("ℹ️ Exibindo semanas do mês anterior para comparação (primeira semana do mês)")
+    else:
+        # Mostrar apenas mês atual (comportamento padrão)
+        mes_atual = f"{hoje.year}-{hoje.month:02d}"
+        if 'semanas_por_mes' in met and met['semanas_por_mes']:
+            semanas_do_mes_atual = met['semanas_por_mes'].get(mes_atual, [])
+            if semanas_do_mes_atual:
+                semanas_meta = semanas_do_mes_atual
+    
     semanas_map = {
         (sem.get('iso_year'), sem.get('iso_week')): sem
         for sem in semanas_meta
@@ -2698,11 +2756,13 @@ def renderizar_aba_fechamento_semanal(
             inicio = datetime.fromisocalendar(int(iso_y), int(iso_w), 1)
             fim = inicio + timedelta(days=4)  # corte até sexta
             intervalo = f"{inicio:%d/%m}–{fim:%d/%m}"
+            mes_nome = inicio.strftime("%b/%y")  # NOVO: adicionar mês
         except Exception:
             intervalo = "—"
+            mes_nome = ""
         num = sem.get('semana', iso_w)
         status = "✅" if sem.get('fechada') else "⏳"
-        return f"Semana {num} ({intervalo}) · ISO {iso_w}/{iso_y} {status}"
+        return f"Semana {num} ({intervalo}) · {mes_nome} · ISO {iso_w}/{iso_y} {status}"
 
     semanas_options = [(sem.get('iso_year'), sem.get('iso_week')) for sem in semanas_meta if sem.get('iso_week') and sem.get('iso_year')]
     idx_default = 0
@@ -2786,8 +2846,18 @@ def renderizar_aba_fechamento_semanal(
             atual_info = semanas_map.get((iso_y_sel, iso_w_sel), {})
             vol_atual = atual_info.get('volume_util', 0) or 0
             vol_ant = atual_info.get('volume_semana_anterior')
-            if (vol_ant is None or vol_ant == 0) and prev_key and prev_key in semanas_map:
-                vol_ant = semanas_map[prev_key].get('volume_util', 0) or vol_ant
+            
+            # MELHORAR: Se não encontrou, buscar na última semana do JSON (pode ser do mês anterior)
+            if (vol_ant is None or vol_ant == 0):
+                if prev_key and prev_key in semanas_map:
+                    vol_ant = semanas_map[prev_key].get('volume_util', 0) or vol_ant
+                else:
+                    # Fallback: buscar a semana imediatamente anterior no JSON
+                    todas_semanas = sorted(semanas_map.items(), key=lambda x: (x[0][0], x[0][1]))
+                    idx_atual = next((i for i, (k, _) in enumerate(todas_semanas) if k == (iso_y_sel, iso_w_sel)), None)
+                    if idx_atual is not None and idx_atual > 0:
+                        vol_ant = todas_semanas[idx_atual - 1][1].get('volume_util', 0) or vol_ant
+            
             vols_atual.append(float(vol_atual))
             vols_ant.append(float(vol_ant) if vol_ant is not None else 0.0)
 

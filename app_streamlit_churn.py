@@ -375,6 +375,64 @@ def baixar_excel_gralab(force: bool = False) -> Optional[str]:
             return arquivo_local
         return None
 
+def baixar_excel_sodre(force: bool = False) -> Optional[str]:
+    """
+    Baixa arquivo Excel do Sodre do SharePoint.
+    
+    Args:
+        force: Força download mesmo se cache válido
+    
+    Returns:
+        Caminho local do arquivo baixado ou None se falhar
+    """
+    arquivo_remoto = "/personal/washington_gouvea_synvia_com_/Documents/Data Analysis/Churn PCLs/Automations/sodre/relatorio_completo_laboratorios_sodre.xlsx"
+    base_name = "relatorio_completo_laboratorios_sodre.xlsx"
+    arquivo_local = os.path.join(OUTPUT_DIR, base_name)
+    
+    # Verificar cache (4 horas = 14400 segundos)
+    if not force and os.path.exists(arquivo_local):
+        import time
+        idade_arquivo = time.time() - os.path.getmtime(arquivo_local)
+        if idade_arquivo < 14400:  # 4 horas
+            return arquivo_local
+    
+    cfg = _get_graph_config()
+    
+    # Sem configuração Graph, retornar arquivo local se existir
+    if not cfg or not (cfg.get("tenant_id") and cfg.get("client_id") and cfg.get("client_secret")):
+        if os.path.exists(arquivo_local):
+            return arquivo_local
+        return None
+    
+    try:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        
+        # Usar ChurnSPConnector
+        from churn_sp_connector import ChurnSPConnector
+        
+        connector = ChurnSPConnector(config=st.secrets)
+        
+        # Baixar arquivo
+        content = connector.download(arquivo_remoto)
+        
+        # Salvar localmente
+        with open(arquivo_local, "wb") as f:
+            f.write(content)
+        
+        # Validar se é Excel válido
+        try:
+            import openpyxl
+            openpyxl.load_workbook(arquivo_local, read_only=True)
+            return arquivo_local
+        except Exception:
+            return None
+        
+    except Exception as e:
+        # Tentar usar arquivo local se existir
+        if os.path.exists(arquivo_local):
+            return arquivo_local
+        return None
+
 def show_overlay_loader(title: str = "Carregando...", subtitle: str = "Por favor, aguarde enquanto processamos os dados."):
     """
     Função helper para criar o overlay loader facilmente.
@@ -1150,6 +1208,44 @@ class DataManager:
         try:
             # Baixar arquivo Excel do SharePoint
             arquivo_excel = baixar_excel_gralab()
+            
+            if not arquivo_excel or not os.path.exists(arquivo_excel):
+                return None
+            
+            # Ler todas as abas do Excel
+            todas_abas = pd.read_excel(arquivo_excel, sheet_name=None, engine='openpyxl')
+            
+            # Normalizar CNPJ em todas as abas que tenham coluna CNPJ ou Cnpj
+            for nome_aba, df in todas_abas.items():
+                # Procurar coluna de CNPJ (case insensitive)
+                coluna_cnpj = None
+                for col in df.columns:
+                    if col.upper() == 'CNPJ':
+                        coluna_cnpj = col
+                        break
+                
+                if coluna_cnpj:
+                    df[coluna_cnpj] = df[coluna_cnpj].astype(str)
+                    df['CNPJ_Normalizado'] = df[coluna_cnpj].apply(DataManager.normalizar_cnpj)
+            
+            return todas_abas
+            
+        except Exception as e:
+            # Erro silencioso - será tratado onde a função é chamada
+            return None
+    
+    @staticmethod
+    @st.cache_data(ttl=14400)  # Cache de 4 horas
+    def carregar_dados_sodre() -> Optional[Dict[str, pd.DataFrame]]:
+        """
+        Carrega dados do Excel do concorrente Sodre com todas as abas.
+        
+        Returns:
+            Dicionário com DataFrames das abas ou None se falhar
+        """
+        try:
+            # Baixar arquivo Excel do SharePoint
+            arquivo_excel = baixar_excel_sodre()
             
             if not arquivo_excel or not os.path.exists(arquivo_excel):
                 return None
@@ -4150,11 +4246,12 @@ def renderizar_aba_fechamento_mensal(df: pd.DataFrame, metrics: KPIMetrics, filt
 
 def exibir_bloco_concorrencia(row: pd.Series):
     """
-    Exibe bloco de alerta de concorrência se laboratório apareceu no Gralab.
+    Exibe bloco de alerta de concorrência se laboratório apareceu no Gralab ou Sodre.
     
     Args:
         row: Série com dados do laboratório
     """
+    # Verificar Gralab
     if row.get('Apareceu_Gralab', False):
         data_gralab = row.get('Gralab_Data')
         tipo_gralab = row.get('Gralab_Tipo', 'Não especificado')
@@ -4165,10 +4262,30 @@ def exibir_bloco_concorrencia(row: pd.Series):
             data_formatada = 'Data não disponível'
         
         st.warning(f"""
-        ⚠️ **ALERTA DE CONCORRÊNCIA**
+        ⚠️ **ALERTA DE CONCORRÊNCIA - GRALAB (CunhaLab)**
         - **Data**: {data_formatada}
         - **Tipo**: {tipo_gralab}
         - CNPJ apareceu no sistema Gralab nos últimos 14 dias
+        """)
+        
+        with st.expander("ℹ️ O que isso significa?"):
+            st.info(HELPERS_V2['concorrencia'])
+    
+    # Verificar Sodre
+    if row.get('Apareceu_Sodre', False):
+        data_sodre = row.get('Sodre_Data')
+        tipo_sodre = row.get('Sodre_Tipo', 'Não especificado')
+        
+        if pd.notna(data_sodre):
+            data_formatada = pd.to_datetime(data_sodre).strftime('%d/%m/%Y')
+        else:
+            data_formatada = 'Data não disponível'
+        
+        st.warning(f"""
+        ⚠️ **ALERTA DE CONCORRÊNCIA - SODRE (SodreLab)**
+        - **Data**: {data_formatada}
+        - **Tipo**: {tipo_sodre}
+        - CNPJ apareceu no sistema Sodre nos últimos 14 dias
         """)
         
         with st.expander("ℹ️ O que isso significa?"):
@@ -8196,6 +8313,239 @@ def main():
                     st.warning("⚠️ Não foi possível carregar dados do Gralab (CunhaLab)")
             except Exception as e:
                 st.error(f"❌ Erro ao carregar dados do Gralab (CunhaLab): {e}")
+        
+        # ========================================
+        # DADOS DO CONCORRENTE SODRE
+        # ========================================
+        if lab_final_cnpj:  # Só mostrar se houver laboratório selecionado
+            st.markdown("---")
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #9333ea 0%, #a855f7 100%);
+                        color: white; padding: 2rem; border-radius: 12px;
+                        margin: 2rem 0; box-shadow: 0 6px 12px rgba(147,51,234,0.3);">
+                <h2 style="margin: 0; font-size: 1.8rem; color: white; font-weight: 700;">
+                    🏅 Dados no Concorrente Sodre (SodreLab)
+                </h2>
+                <p style="margin: 0.5rem 0 0 0; font-size: 1.1rem; color: rgba(255,255,255,0.9);">
+                    Compare os dados deste laboratório com a base do concorrente Sodre
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            try:
+                loader = show_overlay_loader(
+                    "Carregando dados do Sodre...",
+                    "Buscando informações do concorrente. Isso pode levar alguns segundos."
+                )
+                try:
+                    dados_sodre = DataManager.carregar_dados_sodre()
+                finally:
+                    loader.empty()
+                
+                if dados_sodre and 'Dados Completos' in dados_sodre:
+                    df_sodre = dados_sodre['Dados Completos']
+                    
+                    # Buscar laboratório pelo CNPJ normalizado
+                    lab_sodre = df_sodre[df_sodre['CNPJ_Normalizado'] == lab_final_cnpj]
+                    
+                    if not lab_sodre.empty:
+                        lab_s = lab_sodre.iloc[0]
+                        
+                        # Verificar se está na aba EntradaSaida
+                        status_movimentacao = ""
+                        if 'EntradaSaida' in dados_sodre:
+                            df_entrada_saida = dados_sodre['EntradaSaida']
+                            lab_entrada = df_entrada_saida[df_entrada_saida['CNPJ_Normalizado'] == lab_final_cnpj]
+                            if not lab_entrada.empty:
+                                tipo_mov = lab_entrada.iloc[0].get('Tipo Movimentação', '')
+                                status_lab = lab_entrada.iloc[0].get('Status', '')
+                                if tipo_mov or status_lab:
+                                    status_movimentacao = f"<div style='margin-top: 1rem; padding: 1rem; background: #f3e8ff; border-radius: 8px; border-left: 4px solid #9333ea;'>"
+                                    status_movimentacao += f"<strong style='font-size: 1.1rem;'>Movimentação:</strong> {tipo_mov} | <strong>Status:</strong> {status_lab}</div>"
+                        
+                        # Extrair preços - tentar múltiplas variações de nomes de colunas
+                        def extrair_preco_coluna(row, possiveis_nomes):
+                            """Tenta extrair preço de múltiplas variações de nome de coluna"""
+                            for nome in possiveis_nomes:
+                                if nome in row.index:
+                                    valor = row.get(nome, 'N/A')
+                                    if pd.notna(valor) and valor != '' and valor != 'N/A':
+                                        return valor
+                            return 'N/A'
+                        
+                        preco_cnh = extrair_preco_coluna(lab_s, ['Preço CNH', 'Preco_CNH', 'preco_cnh', 'CNH'])
+                        preco_concurso = extrair_preco_coluna(lab_s, ['Preço Concurso', 'Preco_Concurso', 'preco_concurso', 'Concurso'])
+                        preco_clt = extrair_preco_coluna(lab_s, ['Preço CLT', 'Preco_CLT', 'preco_clt', 'CLT'])
+                        
+                        # Formatar preços - com tratamento robusto de strings
+                        def formatar_preco(preco):
+                            try:
+                                if pd.notna(preco) and preco != '' and preco != 'N/A':
+                                    # Se já for número
+                                    if isinstance(preco, (int, float)):
+                                        return f"R$ {float(preco):.2f}"
+                                    # Se for string, limpar e converter
+                                    preco_str = str(preco).strip()
+                                    # Remover R$ e espaços
+                                    preco_str = preco_str.replace('R$', '').replace('r$', '').strip()
+                                    # Trocar vírgula por ponto
+                                    preco_str = preco_str.replace(',', '.')
+                                    # Remover pontos exceto o último (separador decimal)
+                                    partes = preco_str.split('.')
+                                    if len(partes) > 1:
+                                        preco_str = ''.join(partes[:-1]) + '.' + partes[-1]
+                                    return f"R$ {float(preco_str):.2f}"
+                                return "N/A"
+                            except Exception as e:
+                                return "N/A"
+                        
+                        preco_cnh_fmt = formatar_preco(preco_cnh)
+                        preco_concurso_fmt = formatar_preco(preco_concurso)
+                        preco_clt_fmt = formatar_preco(preco_clt)
+                        
+                        st.markdown(f"""
+                        <div style="background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%); 
+                                    border-radius: 12px; padding: 2rem; margin: 1rem 0 2rem 0;
+                                    border: 3px solid #9333ea; box-shadow: 0 4px 12px rgba(147,51,234,0.4);">
+                            <h3 style="margin: 0 0 1.5rem 0; color: #7e22ce; font-weight: 700; font-size: 1.5rem;">
+                                ✅ Laboratório Encontrado na Base do Sodre (SodreLab)
+                            </h3>
+                            <div style="background: white; border-radius: 10px; padding: 1.5rem; margin-bottom: 1rem; box-shadow: 0 2px 6px rgba(0,0,0,0.1);">
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+                                    <div>
+                                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">NOME</div>
+                                        <div style="font-size: 1.2rem; font-weight: 700; color: #2c3e50;">{lab_s.get('Nome', 'N/A')}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">CIDADE / UF</div>
+                                        <div style="font-size: 1.2rem; font-weight: 700; color: #2c3e50;">{lab_s.get('Cidade', 'N/A')} / {lab_s.get('UF', 'N/A')}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">TELEFONE</div>
+                                        <div style="font-size: 1.1rem; font-weight: 600; color: #2c3e50;">{lab_s.get('Telefone', 'N/A')}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">ENDEREÇO</div>
+                                        <div style="font-size: 1rem; color: #2c3e50;">{lab_s.get('Endereco', 'N/A')[:60]}...</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="background: linear-gradient(135deg, #ddd6fe 0%, #c4b5fd 100%); 
+                                        border-radius: 10px; padding: 1.5rem; margin-top: 1rem; 
+                                        border-left: 5px solid #9333ea; box-shadow: 0 2px 6px rgba(147,51,234,0.3);">
+                                <div style="font-size: 1.1rem; color: #6b21a8; margin-bottom: 1rem; font-weight: 700;">💰 PREÇOS PRATICADOS PELO CONCORRENTE</div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem; text-align: center;">
+                                    <div style="background: white; border-radius: 8px; padding: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">🎫 CNH</div>
+                                        <div style="font-size: 1.5rem; font-weight: bold; color: #9333ea;">{preco_cnh_fmt}</div>
+                                    </div>
+                                    <div style="background: white; border-radius: 8px; padding: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">📝 Concurso</div>
+                                        <div style="font-size: 1.5rem; font-weight: bold; color: #9333ea;">{preco_concurso_fmt}</div>
+                                    </div>
+                                    <div style="background: white; border-radius: 8px; padding: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">👔 CLT</div>
+                                        <div style="font-size: 1.5rem; font-weight: bold; color: #9333ea;">{preco_clt_fmt}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            {status_movimentacao}
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        # Comparativo com nossos preços
+                        def _to_float_preco_sodre(valor):
+                            """Converte preço do Sodre para float, tratando diferentes formatos"""
+                            if pd.isna(valor) or valor == '' or valor == 'N/A':
+                                return np.nan
+                            
+                            # Se já for número
+                            if isinstance(valor, (int, float)):
+                                return float(valor)
+                            
+                            # Se for string
+                            if isinstance(valor, str):
+                                # Remover R$ e espaços
+                                valor = valor.replace('R$', '').replace('r$', '').strip()
+                                # Trocar vírgula por ponto
+                                valor = valor.replace(',', '.')
+                                # Remover pontos de milhar (mantendo apenas o último ponto como decimal)
+                                partes = valor.split('.')
+                                if len(partes) > 2:
+                                    # Tem mais de um ponto, então os primeiros são milhares
+                                    valor = ''.join(partes[:-1]) + '.' + partes[-1]
+                            
+                            return pd.to_numeric(valor, errors='coerce')
+
+                        def _to_float_local(valor):
+                            return pd.to_numeric(valor, errors='coerce')
+
+                        comparacoes_precos = []
+                        nosso_preco_clt = _to_float_local(lab_info.get('Preco_CLT_Total'))
+                        nosso_preco_cnh = _to_float_local(lab_info.get('Preco_CNH_Total'))
+                        nosso_preco_civil = _to_float_local(lab_info.get('Preco_Civil_Service_Total'))
+                        if pd.isna(nosso_preco_civil):
+                            nosso_preco_civil = _to_float_local(lab_info.get('Preco_Civil_Service50_Total'))
+
+                        comparacoes_dados = [
+                            ("CLT", nosso_preco_clt, _to_float_preco_sodre(preco_clt)),
+                            ("CNH", nosso_preco_cnh, _to_float_preco_sodre(preco_cnh)),
+                            ("Concurso Público", nosso_preco_civil, _to_float_preco_sodre(preco_concurso))
+                        ]
+
+                        def _formatar_delta(valor):
+                            if pd.isna(valor):
+                                return "—"
+                            sinal = "+" if valor > 0 else ""
+                            # Não trocar ponto por vírgula - manter formato padrão
+                            return f"{sinal}R$ {abs(valor):.2f}"
+
+                        for label, nosso_val, conc_val in comparacoes_dados:
+                            if pd.isna(nosso_val) and pd.isna(conc_val):
+                                continue
+                            delta_val = nosso_val - conc_val if pd.notna(nosso_val) and pd.notna(conc_val) else np.nan
+                            cor_delta = '#6c757d'
+                            if pd.notna(delta_val):
+                                if delta_val > 0:
+                                    cor_delta = '#dc3545'
+                                elif delta_val < 0:
+                                    cor_delta = '#198754'
+                            comparacoes_precos.append(
+                                f"<div style=\"background: white; border-radius: 10px; padding: 1rem; box-shadow: 0 2px 6px rgba(0,0,0,0.08);\">"
+                                f"<div style=\"font-size: 0.9rem; color: #6c757d; font-weight: 700; text-transform: uppercase; margin-bottom: 0.6rem;\">{label}</div>"
+                                f"<div style=\"display: flex; justify-content: space-between; font-size: 0.85rem; color: #6c757d; margin-bottom: 0.3rem;\">"
+                                f"<span>Nosso preço</span>"
+                                f"<strong style=\"color: #2c3e50;\">{_formatar_preco_valor(nosso_val)}</strong>"
+                                f"</div>"
+                                f"<div style=\"display: flex; justify-content: space-between; font-size: 0.85rem; color: #6c757d; margin-bottom: 0.3rem;\">"
+                                f"<span>Concorrente</span>"
+                                f"<strong style=\"color: #2c3e50;\">{_formatar_preco_valor(conc_val)}</strong>"
+                                f"</div>"
+                                f"<div style=\"display: flex; justify-content: space-between; font-size: 0.85rem; color: #6c757d;\">"
+                                f"<span>Diferença</span>"
+                                f"<strong style=\"color: {cor_delta};\">{_formatar_delta(delta_val)}</strong>"
+                                f"</div>"
+                                f"</div>"
+                            )
+
+                        if comparacoes_precos:
+                            st.markdown(f"""
+                                <div style="background: #f5f3ff; border-radius: 10px; padding: 1rem 1.5rem; margin-top: 1rem; border-left: 5px solid #9333ea;">
+                                    <div style="font-size: 0.95rem; color: #6b21a8; font-weight: 700; margin-bottom: 0.8rem; text-transform: uppercase;">
+                                        Comparativo de Preços
+                                    </div>
+                                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem;">
+                                        {''.join(comparacoes_precos)}
+                                    </div>
+                                </div>
+                            """, unsafe_allow_html=True)
+
+                    else:
+                        st.info("ℹ️ Este laboratório não está cadastrado na base do Sodre (SodreLab)")
+                else:
+                    st.warning("⚠️ Não foi possível carregar dados do Sodre (SodreLab)")
+            except Exception as e:
+                st.error(f"❌ Erro ao carregar dados do Sodre (SodreLab): {e}")
 
         # Fechar container principal
         st.markdown("</div>", unsafe_allow_html=True)
@@ -9429,33 +9779,63 @@ def main():
     # ANÁLISE DE CONCORRENTE (GRALAB)
     # ========================================
     elif st.session_state.page == "🔍 Análise de Concorrente":
-        st.header("🔍 Análise de Concorrente - Gralab (CunhaLab)")
+        st.header("🔍 Análise de Concorrente")
         
-        st.markdown("""
-        <div style="background: linear-gradient(135deg, #ffd700 0%, #ffed4e 100%);
-                    color: #333; padding: 1.5rem; border-radius: 10px;
+        # Seletor de Concorrente
+        col_sel1, col_sel2 = st.columns([1, 3])
+        with col_sel1:
+            concorrente_selecionado = st.selectbox(
+                "Selecione o Concorrente:",
+                options=["Gralab (CunhaLab)", "Sodre (SodreLab)"],
+                index=0,
+                key="concorrente_analise"
+            )
+        
+        # Configurações baseadas no concorrente selecionado
+        if concorrente_selecionado == "Gralab (CunhaLab)":
+            cor_primaria = "#ffd700"
+            cor_secundaria = "#ffed4e"
+            cor_titulo = "#b8860b"
+            cor_grafico = "#FB923C"
+            icone = "🏆"
+            nome_curto = "Gralab"
+            nome_completo = "Gralab (CunhaLab)"
+            carregar_funcao = DataManager.carregar_dados_gralab
+        else:  # Sodre
+            cor_primaria = "#9333ea"
+            cor_secundaria = "#a855f7"
+            cor_titulo = "white"
+            cor_grafico = "#9333ea"
+            icone = "🏅"
+            nome_curto = "Sodre"
+            nome_completo = "Sodre (SodreLab)"
+            carregar_funcao = DataManager.carregar_dados_sodre
+        
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, {cor_primaria} 0%, {cor_secundaria} 100%);
+                    color: {'#333' if concorrente_selecionado == 'Gralab (CunhaLab)' else 'white'}; padding: 1.5rem; border-radius: 10px;
                     margin-bottom: 2rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-            <h3 style="margin: 0; font-size: 1.4rem; color: #b8860b;">📊 Análise Comparativa de Mercado</h3>
-            <p style="margin: 0.5rem 0 0 0; font-size: 1rem; color: #666;">
-                Compare nossa base de laboratórios com o concorrente Gralab (CunhaLab) para identificar oportunidades e ameaças.
+            <h3 style="margin: 0; font-size: 1.4rem; color: {cor_titulo};">{icone} Análise Comparativa de Mercado</h3>
+            <p style="margin: 0.5rem 0 0 0; font-size: 1rem; color: {'#666' if concorrente_selecionado == 'Gralab (CunhaLab)' else 'rgba(255,255,255,0.9)'};">
+                Compare nossa base de laboratórios com o concorrente {nome_completo} para identificar oportunidades e ameaças.
             </p>
         </div>
         """, unsafe_allow_html=True)
         
         # Carregar dados
         loader = show_overlay_loader(
-            "Carregando dados do Gralab (CunhaLab)...",
+            f"Carregando dados do {nome_completo}...",
             "Sincronizando informações do concorrente. Isso pode levar alguns segundos."
         )
         try:
-            dados_gralab = DataManager.carregar_dados_gralab()
+            dados_concorrente = carregar_funcao()
         finally:
             loader.empty()
         
-        if not dados_gralab or 'Dados Completos' not in dados_gralab:
-            st.error("❌ Não foi possível carregar os dados do Gralab. Verifique a conexão com o SharePoint.")
+        if not dados_concorrente or 'Dados Completos' not in dados_concorrente:
+            st.error(f"❌ Não foi possível carregar os dados do {nome_completo}. Verifique a conexão com o SharePoint.")
         else:
-            df_gralab = dados_gralab['Dados Completos']
+            df_concorrente = dados_concorrente['Dados Completos']
             
             # Normalizar CNPJs da nossa base (usar df completo, não df_filtrado)
             # Isso garante que todos os nossos clientes sejam considerados na comparação
@@ -9464,12 +9844,12 @@ def main():
             
             # Obter conjuntos de CNPJs (usar df completo para ter todos os clientes)
             cnpjs_nossos = set(df['CNPJ_Normalizado'].dropna().unique())
-            cnpjs_gralab = set(df_gralab['CNPJ_Normalizado'].dropna().unique())
+            cnpjs_concorrente = set(df_concorrente['CNPJ_Normalizado'].dropna().unique())
             
             # Calcular intersecções
-            cnpjs_comuns = cnpjs_nossos & cnpjs_gralab
-            cnpjs_so_nossos = cnpjs_nossos - cnpjs_gralab
-            cnpjs_so_gralab = cnpjs_gralab - cnpjs_nossos
+            cnpjs_comuns = cnpjs_nossos & cnpjs_concorrente
+            cnpjs_so_nossos = cnpjs_nossos - cnpjs_concorrente
+            cnpjs_so_concorrente = cnpjs_concorrente - cnpjs_nossos
             
             # ========================================
             # KPIs COMPARATIVOS
@@ -9495,17 +9875,17 @@ def main():
                 )
             
             with col3:
-                pct_exclusivos_gralab = (len(cnpjs_so_gralab) / len(cnpjs_gralab) * 100) if len(cnpjs_gralab) > 0 else 0
+                pct_exclusivos_concorrente = (len(cnpjs_so_concorrente) / len(cnpjs_concorrente) * 100) if len(cnpjs_concorrente) > 0 else 0
                 st.metric(
-                    label="🟠 Exclusivos Gralab",
-                    value=f"{len(cnpjs_so_gralab)}",
-                    delta=f"{pct_exclusivos_gralab:.1f}% do Gralab"
+                    label=f"{'🟠' if concorrente_selecionado == 'Gralab (CunhaLab)' else '🟣'} Exclusivos {nome_curto}",
+                    value=f"{len(cnpjs_so_concorrente)}",
+                    delta=f"{pct_exclusivos_concorrente:.1f}% do {nome_curto}"
                 )
             
             with col4:
                 st.metric(
-                    label="📊 Total Gralab",
-                    value=f"{len(cnpjs_gralab)}",
+                    label=f"📊 Total {nome_curto}",
+                    value=f"{len(cnpjs_concorrente)}",
                     delta=f"vs {len(cnpjs_nossos)} nossos"
                 )
             
@@ -9522,9 +9902,9 @@ def main():
                 import plotly.graph_objects as go
                 
                 fig_pizza = go.Figure(data=[go.Pie(
-                    labels=['Em Comum', 'Só Nossos', 'Só Gralab'],
-                    values=[len(cnpjs_comuns), len(cnpjs_so_nossos), len(cnpjs_so_gralab)],
-                    marker=dict(colors=['#6BBF47', '#3B82F6', '#FB923C']),
+                    labels=['Em Comum', 'Só Nossos', f'Só {nome_curto}'],
+                    values=[len(cnpjs_comuns), len(cnpjs_so_nossos), len(cnpjs_so_concorrente)],
+                    marker=dict(colors=['#6BBF47', '#3B82F6', cor_grafico]),
                     hole=0.4,
                     textinfo='label+percent+value',
                     textposition='outside'
@@ -9551,7 +9931,7 @@ def main():
                         labels={'x': 'UF', 'y': 'Quantidade'},
                         title="Top 10 UFs com Labs em Comum",
                         color=top_ufs.values,
-                        color_continuous_scale='Greens'
+                        color_continuous_scale='Greens' if concorrente_selecionado == 'Gralab (CunhaLab)' else 'Purples'
                     )
                     
                     fig_ufs.update_layout(
@@ -9574,7 +9954,7 @@ def main():
             tab1, tab2, tab3, tab4, tab5 = st.tabs([
                 "🤝 Labs em Comum",
                 "🔵 Exclusivos Nossos",
-                "🟠 Exclusivos Gralab",
+                f"{'🟠' if concorrente_selecionado == 'Gralab (CunhaLab)' else '🟣'} Exclusivos {nome_curto}",
                 "🔄 Movimentações",
                 "💰 Análise de Preços"
             ])
@@ -9588,21 +9968,21 @@ def main():
                         ['CNPJ_PCL', 'CNPJ_Normalizado', 'Nome_Fantasia_PCL', 'Cidade', 'Estado']
                     ].drop_duplicates('CNPJ_Normalizado')
                     
-                    # Selecionar colunas disponíveis do Gralab
-                    colunas_gralab_desejadas = ['CNPJ_Normalizado', 'Nome', 'Cidade', 'UF', 'Preço CNH', 'Preço Concurso', 'Preço CLT']
-                    colunas_gralab_disponiveis = [col for col in colunas_gralab_desejadas if col in df_gralab.columns]
+                    # Selecionar colunas disponíveis do concorrente
+                    colunas_concorrente_desejadas = ['CNPJ_Normalizado', 'Nome', 'Cidade', 'UF', 'Preço CNH', 'Preço Concurso', 'Preço CLT']
+                    colunas_concorrente_disponiveis = [col for col in colunas_concorrente_desejadas if col in df_concorrente.columns]
                     
-                    df_comuns_gralab = df_gralab[df_gralab['CNPJ_Normalizado'].isin(cnpjs_comuns)][
-                        colunas_gralab_disponiveis
+                    df_comuns_concorrente = df_concorrente[df_concorrente['CNPJ_Normalizado'].isin(cnpjs_comuns)][
+                        colunas_concorrente_disponiveis
                     ]
                     
                     # Merge
                     df_comparacao = pd.merge(
                         df_comuns_nossos,
-                        df_comuns_gralab,
+                        df_comuns_concorrente,
                         on='CNPJ_Normalizado',
                         how='inner',
-                        suffixes=('_Nosso', '_Gralab')
+                        suffixes=('_Nosso', f'_{nome_curto}')
                     )
                     
                     # Filtros
@@ -9643,12 +10023,12 @@ def main():
                     rename_map = {
                         'CNPJ_PCL': 'CNPJ',
                         'Nome_Fantasia_PCL': 'Nome (Nossa Base)',
-                        'Nome': 'Nome (Gralab/CunhaLab)',
+                        'Nome': f'Nome ({nome_completo})',
                         'Cidade_Nosso': 'Cidade',
                         'Estado': 'UF',
-                        'Preço CNH': 'Preço CNH (Gralab/CunhaLab)',
-                        'Preço Concurso': 'Preço Concurso (Gralab/CunhaLab)',
-                        'Preço CLT': 'Preço CLT (Gralab/CunhaLab)'
+                        'Preço CNH': f'Preço CNH ({nome_completo})',
+                        'Preço Concurso': f'Preço Concurso ({nome_completo})',
+                        'Preço CLT': f'Preço CLT ({nome_completo})'
                     }
                     
                     df_exibir_final = df_exibir_final.rename(columns={k: v for k, v in rename_map.items() if k in df_exibir_final.columns})
@@ -9663,7 +10043,7 @@ def main():
                         st.download_button(
                             label="📥 Download CSV",
                             data=csv,
-                            file_name=f"labs_em_comum_gralab_{datetime.now().strftime('%Y%m%d')}.csv",
+                            file_name=f"labs_em_comum_{nome_curto.lower()}_{datetime.now().strftime('%Y%m%d')}.csv",
                             mime="text/csv",
                             key="download_comuns_csv"
                         )
@@ -9675,7 +10055,7 @@ def main():
                         st.download_button(
                             label="📊 Download Excel",
                             data=excel_data,
-                            file_name=f"labs_em_comum_gralab_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            file_name=f"labs_em_comum_{nome_curto.lower()}_{datetime.now().strftime('%Y%m%d')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="download_comuns_excel"
                         )
@@ -9684,7 +10064,7 @@ def main():
             
             with tab2:
                 st.markdown("### 🔵 Laboratórios Exclusivos da Nossa Base")
-                st.caption("Laboratórios que temos mas o Gralab (CunhaLab) não tem - potencial para proteção")
+                st.caption(f"Laboratórios que temos mas o {nome_completo} não tem - potencial para proteção")
                 
                 if len(cnpjs_so_nossos) > 0:
                     # Usar df completo para pegar todos os labs exclusivos nossos
@@ -9710,7 +10090,7 @@ def main():
                         st.download_button(
                             label="📥 Download CSV",
                             data=csv,
-                            file_name=f"labs_exclusivos_nossos_{datetime.now().strftime('%Y%m%d')}.csv",
+                            file_name=f"labs_exclusivos_nossos_{nome_curto.lower()}_{datetime.now().strftime('%Y%m%d')}.csv",
                             mime="text/csv",
                             key="download_exclusivos_nossos_csv"
                         )
@@ -9722,7 +10102,7 @@ def main():
                         st.download_button(
                             label="📊 Download Excel",
                             data=excel_data,
-                            file_name=f"labs_exclusivos_nossos_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            file_name=f"labs_exclusivos_nossos_{nome_curto.lower()}_{datetime.now().strftime('%Y%m%d')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="download_exclusivos_nossos_excel"
                         )
@@ -9730,77 +10110,77 @@ def main():
                     st.info("Nenhum laboratório exclusivo encontrado")
             
             with tab3:
-                st.markdown("### 🟠 Laboratórios Exclusivos do Gralab (CunhaLab)")
-                st.caption("Laboratórios que o Gralab (CunhaLab) tem mas não temos - oportunidade de prospecção")
+                st.markdown(f"### {'🟠' if concorrente_selecionado == 'Gralab (CunhaLab)' else '🟣'} Laboratórios Exclusivos do {nome_completo}")
+                st.caption(f"Laboratórios que o {nome_completo} tem mas não temos - oportunidade de prospecção")
                 
-                if len(cnpjs_so_gralab) > 0:
-                    # Filtrar labs exclusivos do Gralab
-                    df_exclusivos_gralab = df_gralab[df_gralab['CNPJ_Normalizado'].isin(cnpjs_so_gralab)].copy()
+                if len(cnpjs_so_concorrente) > 0:
+                    # Filtrar labs exclusivos do concorrente
+                    df_exclusivos_concorrente = df_concorrente[df_concorrente['CNPJ_Normalizado'].isin(cnpjs_so_concorrente)].copy()
                     
                     # Selecionar colunas disponíveis - sempre incluir CNPJ_Normalizado
                     colunas_disponiveis = []
                     
                     # Verificar se tem coluna CNPJ ou usar CNPJ_Normalizado
-                    if 'CNPJ' in df_exclusivos_gralab.columns:
+                    if 'CNPJ' in df_exclusivos_concorrente.columns:
                         colunas_disponiveis.append('CNPJ')
-                    elif 'CNPJ_Normalizado' in df_exclusivos_gralab.columns:
+                    elif 'CNPJ_Normalizado' in df_exclusivos_concorrente.columns:
                         colunas_disponiveis.append('CNPJ_Normalizado')
                     
                     # Adicionar outras colunas desejadas
                     colunas_desejadas = ['Nome', 'Cidade', 'UF', 'Telefone', 'Preço CNH', 'Preço Concurso', 'Preço CLT']
                     
                     for col in colunas_desejadas:
-                        if col in df_exclusivos_gralab.columns:
+                        if col in df_exclusivos_concorrente.columns:
                             colunas_disponiveis.append(col)
                     
                     if colunas_disponiveis:
-                        df_exclusivos_gralab_filtrado = df_exclusivos_gralab[colunas_disponiveis].copy()
+                        df_exclusivos_concorrente_filtrado = df_exclusivos_concorrente[colunas_disponiveis].copy()
                         
                         # Renomear CNPJ_Normalizado para CNPJ se necessário
-                        if 'CNPJ_Normalizado' in df_exclusivos_gralab_filtrado.columns and 'CNPJ' not in df_exclusivos_gralab_filtrado.columns:
-                            df_exclusivos_gralab_filtrado = df_exclusivos_gralab_filtrado.rename(columns={'CNPJ_Normalizado': 'CNPJ'})
+                        if 'CNPJ_Normalizado' in df_exclusivos_concorrente_filtrado.columns and 'CNPJ' not in df_exclusivos_concorrente_filtrado.columns:
+                            df_exclusivos_concorrente_filtrado = df_exclusivos_concorrente_filtrado.rename(columns={'CNPJ_Normalizado': 'CNPJ'})
                         
                         # Usar CNPJ para drop_duplicates
-                        if 'CNPJ' in df_exclusivos_gralab_filtrado.columns:
-                            df_exclusivos_gralab_filtrado = df_exclusivos_gralab_filtrado.drop_duplicates('CNPJ')
+                        if 'CNPJ' in df_exclusivos_concorrente_filtrado.columns:
+                            df_exclusivos_concorrente_filtrado = df_exclusivos_concorrente_filtrado.drop_duplicates('CNPJ')
                         
-                        st.dataframe(df_exclusivos_gralab_filtrado, width='stretch', height=400, hide_index=True)
+                        st.dataframe(df_exclusivos_concorrente_filtrado, width='stretch', height=400, hide_index=True)
                         
                         # Botões de download
                         col_d1, col_d2 = st.columns(2)
                         
                         with col_d1:
-                            csv = df_exclusivos_gralab_filtrado.to_csv(index=False, encoding='utf-8-sig')
+                            csv = df_exclusivos_concorrente_filtrado.to_csv(index=False, encoding='utf-8-sig')
                             st.download_button(
                                 label="📥 Download CSV",
                                 data=csv,
-                                file_name=f"labs_exclusivos_gralab_{datetime.now().strftime('%Y%m%d')}.csv",
+                                file_name=f"labs_exclusivos_{nome_curto.lower()}_{datetime.now().strftime('%Y%m%d')}.csv",
                                 mime="text/csv",
-                                key="download_exclusivos_gralab_csv"
+                                key=f"download_exclusivos_{nome_curto.lower()}_csv"
                             )
                         
                         with col_d2:
                             excel_buffer = BytesIO()
-                            df_exclusivos_gralab_filtrado.to_excel(excel_buffer, index=False, engine='openpyxl')
+                            df_exclusivos_concorrente_filtrado.to_excel(excel_buffer, index=False, engine='openpyxl')
                             excel_data = excel_buffer.getvalue()
                             st.download_button(
                                 label="📊 Download Excel",
                                 data=excel_data,
-                                file_name=f"labs_exclusivos_gralab_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                                file_name=f"labs_exclusivos_{nome_curto.lower()}_{datetime.now().strftime('%Y%m%d')}.xlsx",
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key="download_exclusivos_gralab_excel"
+                                key=f"download_exclusivos_{nome_curto.lower()}_excel"
                             )
                     else:
-                        st.warning("⚠️ Colunas esperadas não encontradas no arquivo do Gralab")
+                        st.warning(f"⚠️ Colunas esperadas não encontradas no arquivo do {nome_completo}")
                 else:
-                    st.info("Nenhum laboratório exclusivo do Gralab (CunhaLab) encontrado")
+                    st.info(f"Nenhum laboratório exclusivo do {nome_completo} encontrado")
             
             with tab4:
-                st.markdown("### 🔄 Movimentações do Gralab (CunhaLab)")
+                st.markdown(f"### 🔄 Movimentações do {nome_completo}")
                 st.caption("Credenciamentos e descredenciamentos registrados")
                 
-                if 'EntradaSaida' in dados_gralab:
-                    df_entrada_saida = dados_gralab['EntradaSaida'].copy()
+                if 'EntradaSaida' in dados_concorrente:
+                    df_entrada_saida = dados_concorrente['EntradaSaida'].copy()
                     
                     if not df_entrada_saida.empty:
                         # Formatar datas para padrão brasileiro
@@ -9817,7 +10197,7 @@ def main():
                                 "Tipo de Movimentação:",
                                 options=['Todos', 'Credenciamento', 'Descredenciamento'],
                                 default=['Todos'],
-                                key="tipo_mov_gralab"
+                                key=f"tipo_mov_{nome_curto.lower()}"
                             )
                         
                         with col_mov2:
@@ -9826,7 +10206,7 @@ def main():
                                     "UF:",
                                     options=['Todos'] + sorted(df_entrada_saida['UF'].dropna().unique().tolist()),
                                     default=['Todos'],
-                                    key="uf_mov_gralab"
+                                    key=f"uf_mov_{nome_curto.lower()}"
                                 )
                         
                         # Aplicar filtros
@@ -9905,9 +10285,9 @@ def main():
                                 st.download_button(
                                     label="📥 Download CSV",
                                     data=csv,
-                                    file_name=f"movimentacoes_gralab_{datetime.now().strftime('%Y%m%d')}.csv",
+                                    file_name=f"movimentacoes_{nome_curto.lower()}_{datetime.now().strftime('%Y%m%d')}.csv",
                                     mime="text/csv",
-                                    key="download_movimentacoes_gralab_csv"
+                                    key=f"download_movimentacoes_{nome_curto.lower()}_csv"
                                 )
                             
                             with col_d2:
@@ -9917,25 +10297,25 @@ def main():
                                 st.download_button(
                                     label="📊 Download Excel",
                                     data=excel_data,
-                                    file_name=f"movimentacoes_gralab_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                                    file_name=f"movimentacoes_{nome_curto.lower()}_{datetime.now().strftime('%Y%m%d')}.xlsx",
                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    key="download_movimentacoes_gralab_excel"
+                                    key=f"download_movimentacoes_{nome_curto.lower()}_excel"
                                 )
                         else:
                             st.warning("⚠️ Nenhuma coluna disponível para exibição")
                     else:
                         st.info("Nenhuma movimentação registrada")
                 else:
-                    st.info("Aba 'EntradaSaida' não encontrada no arquivo do Gralab (CunhaLab)")
+                    st.info(f"Aba 'EntradaSaida' não encontrada no arquivo do {nome_completo}")
             
             with tab5:
                 st.markdown("### 💰 Análise de Preços (Labs em Comum)")
                 
                 if len(cnpjs_comuns) > 0:
-                    df_precos = df_gralab[df_gralab['CNPJ_Normalizado'].isin(cnpjs_comuns)].copy()
+                    df_precos = df_concorrente[df_concorrente['CNPJ_Normalizado'].isin(cnpjs_comuns)].copy()
                     
                     # Converter preços para numérico (limpando strings como 'R$ 120,00')
-                    def _parse_preco_gralab(valor):
+                    def _parse_preco_concorrente(valor):
                         if pd.isna(valor):
                             return np.nan
                         if isinstance(valor, (int, float, np.number)):
@@ -9961,7 +10341,7 @@ def main():
 
                     for col in ['Preço CNH', 'Preço Concurso', 'Preço CLT']:
                         if col in df_precos.columns:
-                            df_precos[col] = df_precos[col].apply(_parse_preco_gralab)
+                            df_precos[col] = df_precos[col].apply(_parse_preco_concorrente)
                     
                     # Estatísticas
                     col_s1, col_s2, col_s3 = st.columns(3)
@@ -10014,13 +10394,20 @@ def main():
                     if dados_boxplot:
                         df_boxplot = pd.DataFrame(dados_boxplot)
                         
+                        # Cores baseadas no concorrente
+                        if concorrente_selecionado == 'Gralab (CunhaLab)':
+                            color_map = {'CNH': '#ffd700', 'Concurso': '#ffed4e', 'CLT': '#b8860b'}
+                        else:
+                            color_map = {'CNH': '#9333ea', 'Concurso': '#a855f7', 'CLT': '#c084fc'}
+                        
                         fig_box = px.box(
                             df_boxplot,
                             x='Tipo',
                             y='Preço',
                             color='Tipo',
                             title="Distribuição de Preços por Tipo de Exame",
-                            labels={'Preço': 'Preço (R$)', 'Tipo': 'Tipo de Exame'}
+                            labels={'Preço': 'Preço (R$)', 'Tipo': 'Tipo de Exame'},
+                            color_discrete_map=color_map
                         )
                         
                         fig_box.update_layout(height=400, showlegend=False)

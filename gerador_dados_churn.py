@@ -1000,6 +1000,133 @@ def integrar_dados_gralab(base_df: pd.DataFrame) -> pd.DataFrame:
     return base_df
 
 
+def integrar_dados_sodre(base_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Integra dados de concorrência do Sodre (últimos 7-14 dias).
+    
+    Args:
+        base_df: DataFrame com dados dos laboratórios
+        
+    Returns:
+        DataFrame com colunas Apareceu_Sodre, Sodre_Data, Sodre_Tipo
+    """
+    logger.debug("Integrando dados de concorrência do Sodre")
+    
+    # Inicializar colunas
+    base_df = base_df.copy()
+    base_df['Apareceu_Sodre'] = False
+    base_df['Sodre_Data'] = pd.NaT
+    base_df['Sodre_Tipo'] = ''
+    
+    # Verificar se arquivo existe
+    sodre_excel = os.path.join(OUTPUT_DIR, "Automations", "sodre", "relatorio_completo_laboratorios_sodre.xlsx")
+    
+    if not os.path.exists(sodre_excel):
+        logger.warning(f"Arquivo Sodre não encontrado: {sodre_excel}")
+        return base_df
+    
+    try:
+        # Ler aba EntradaSaida
+        df_entrada_saida = pd.read_excel(sodre_excel, sheet_name='EntradaSaida', engine='openpyxl')
+        logger.info(f"Dados Sodre carregados: {len(df_entrada_saida)} registros")
+        
+        # Verificar colunas necessárias
+        if 'CNPJ' not in df_entrada_saida.columns or 'Data Entrada' not in df_entrada_saida.columns:
+            logger.error("Colunas esperadas não encontradas no arquivo Sodre")
+            return base_df
+        
+        # Filtrar últimos N dias (usar Data Entrada)
+        df_entrada_saida['Data'] = pd.to_datetime(df_entrada_saida['Data Entrada'], errors='coerce')
+        hoje = datetime.now()
+        janela_dias = GRALAB_JANELA_DIAS if 'GRALAB_JANELA_DIAS' in globals() else 14
+        
+        df_recente = df_entrada_saida[
+            (df_entrada_saida['Data'].notna()) &
+            ((hoje - df_entrada_saida['Data']).dt.days <= janela_dias)
+        ].copy()
+        
+        logger.info(f"Registros Sodre recentes (últimos {janela_dias} dias): {len(df_recente)}")
+        
+        if df_recente.empty:
+            return base_df
+        
+        # Normalizar CNPJ
+        def normalizar_cnpj(cnpj):
+            if pd.isna(cnpj):
+                return ''
+            cnpj_str = str(cnpj).strip()
+            # Remover caracteres não numéricos e garantir 14 dígitos
+            cnpj_limpo = ''.join(filter(str.isdigit, cnpj_str))
+            if len(cnpj_limpo) == 0:
+                return ''
+            # Garantir 14 dígitos (preencher com zeros à esquerda se necessário)
+            return cnpj_limpo.zfill(14)[:14]
+        
+        # Normalizar CNPJs em ambos os DataFrames
+        df_recente['CNPJ_Normalizado'] = df_recente['CNPJ'].apply(normalizar_cnpj)
+        # Verificar se CNPJ_PCL existe, caso contrário tentar outras colunas
+        if 'CNPJ_PCL' in base_df.columns:
+            base_df['CNPJ_Normalizado'] = base_df['CNPJ_PCL'].apply(normalizar_cnpj)
+        elif 'cnpj' in base_df.columns:
+            base_df['CNPJ_Normalizado'] = base_df['cnpj'].apply(normalizar_cnpj)
+        else:
+            logger.warning("Coluna CNPJ não encontrada no base_df. Tentando colunas disponíveis...")
+            logger.warning(f"Colunas disponíveis: {list(base_df.columns)[:10]}")
+            return base_df
+        
+        # Remover CNPJs vazios ou inválidos
+        df_recente = df_recente[df_recente['CNPJ_Normalizado'] != ''].copy()
+        
+        logger.info(f"CNPJs normalizados - Sodre: {len(df_recente)}, Base: {base_df['CNPJ_Normalizado'].notna().sum()}")
+        
+        # Pegar registro mais recente por CNPJ
+        df_recente = df_recente.sort_values('Data', ascending=False)
+        df_recente_unique = df_recente.drop_duplicates(subset=['CNPJ_Normalizado'], keep='first')
+        
+        # Pegar também a coluna 'Tipo Movimentação' se existir
+        if 'Tipo Movimentação' in df_recente_unique.columns:
+            tipo_col = 'Tipo Movimentação'
+        elif 'Tipo' in df_recente_unique.columns:
+            tipo_col = 'Tipo'
+        else:
+            df_recente_unique['Tipo'] = 'Credenciamento'  # Valor padrão
+            tipo_col = 'Tipo'
+        
+        logger.info(f"CNPJs únicos no Sodre (últimos {janela_dias} dias): {len(df_recente_unique)}")
+        
+        # Merge usando merge do pandas para melhor performance
+        base_df_merged = base_df.merge(
+            df_recente_unique[['CNPJ_Normalizado', 'Data', tipo_col]].rename(columns={'Data': 'Sodre_Data', tipo_col: 'Sodre_Tipo'}),
+            on='CNPJ_Normalizado',
+            how='left'
+        )
+        
+        # Atualizar flags
+        base_df_merged['Apareceu_Sodre'] = base_df_merged['Sodre_Data'].notna()
+        
+        # Se Sodre_Tipo não existir na merge, criar coluna vazia
+        if 'Sodre_Tipo' not in base_df_merged.columns:
+            base_df_merged['Sodre_Tipo'] = ''
+        else:
+            base_df_merged['Sodre_Tipo'] = base_df_merged['Sodre_Tipo'].fillna('')
+        
+        qtd_com_sodre = base_df_merged['Apareceu_Sodre'].sum()
+        logger.debug(f"Integração Sodre concluída: {qtd_com_sodre} laboratórios com sinal de concorrência")
+        
+        # Log de exemplo para debug
+        if qtd_com_sodre > 0:
+            exemplo = base_df_merged[base_df_merged['Apareceu_Sodre']].head(1)
+            if not exemplo.empty:
+                logger.debug(f"Exemplo de match Sodre: CNPJ={exemplo.iloc[0].get('CNPJ_PCL', 'N/A')}, Data={exemplo.iloc[0].get('Sodre_Data', 'N/A')}")
+        
+        return base_df_merged
+        
+    except Exception as e:
+        logger.error(f"Erro ao integrar dados Sodre: {e}")
+    
+    return base_df
+
+
 def classificar_risco_v2(row: pd.Series) -> Tuple[str, str]:
     """
     Classifica o status de risco conforme regras atualizadas (queda vs baseline/WoW e perda por dias).
@@ -1758,6 +1885,9 @@ def calcular_metricas_churn():
             # 5. Integrar dados de concorrência (Gralab)
             base = integrar_dados_gralab(base)
             
+            # 5b. Integrar dados de concorrência (Sodre)
+            base = integrar_dados_sodre(base)
+            
             # 6. Aplicar classificação de risco v2 (binária)
             risco_v2_results = base.apply(classificar_risco_v2, axis=1)
             base['Status_Risco_V2'] = risco_v2_results.apply(lambda x: x[0])
@@ -1847,6 +1977,9 @@ def calcular_metricas_churn():
         base['Apareceu_Gralab'] = False
         base['Gralab_Data'] = pd.NaT
         base['Gralab_Tipo'] = ''
+        base['Apareceu_Sodre'] = False
+        base['Sodre_Data'] = pd.NaT
+        base['Sodre_Tipo'] = ''
         base['Status_Risco_V2'] = base['Status_Risco']
         base['Motivo_Risco_V2'] = base['Motivo_Risco']
 
@@ -1931,6 +2064,7 @@ def calcular_metricas_churn():
         'Semanas_Mes_Atual','Semanas_Fechadas_Mes',
         'Media_Semanal_BR_2024','Media_Semanal_BR_2025','Media_Semanal_UF_Atual',
         'Apareceu_Gralab','Gralab_Data','Gralab_Tipo',
+        'Apareceu_Sodre','Sodre_Data','Sodre_Tipo',
         'Status_Risco_V2','Motivo_Risco_V2'
     ]
 

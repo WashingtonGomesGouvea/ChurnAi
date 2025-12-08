@@ -1,0 +1,90 @@
+================================================================================
+                    CHANGELOG - DETECÇÃO AUTOMÁTICA DE MÁQUINA
+================================================================================
+
+Data: 2025-11-13
+Versão: 2.1
+
+ALTERAÇÕES IMPLEMENTADAS
+-------------------------
+
+1. ✅ DETECÇÃO AUTOMÁTICA DE MÁQUINA
+   - Função detectar_maquina() criada
+   - Detecta baseado em username e hostname
+   - Configura diretório e threads automaticamente
+
+2. ✅ CONFIGURAÇÕES POR MÁQUINA
+
+   PC CASA (Ryzen 7 7500X):
+   - Username detectado: washi
+   - Hostname detectado: Washi_Ryzen
+   - Diretório: D:\OneDrive - Synvia Group\Data Analysis\Churn PCLs\Automations\cunha
+   - Threads padrão: 16 (otimizado para I/O bound)
+   - Processador: 6 cores / 12 threads
+
+   NOTEBOOK SYNVIA (Intel i7-1165G7):
+   - Username detectado: washington.gouvea
+   - Diretório: C:\Users\washington.gouvea\OneDrive - Synvia Group\Data Analysis\Churn PCLs\Automations\cunha
+   - Threads padrão: 8 (todos os threads lógicos)
+   - Processador: 4 cores / 8 threads
+
+3. ✅ CRIAÇÃO AUTOMÁTICA DE DIRETÓRIOS
+   - Se diretório não existir, é criado automaticamente
+   - Funciona tanto no PC quanto no notebook
+
+4. ✅ LOGS INFORMATIVOS
+   - Log de inicialização mostra máquina detectada
+   - Mensagem na tela mostra configurações
+   - Threads customizadas mostram comparação com padrão
+
+5. ✅ DOCUMENTAÇÃO ATUALIZADA
+   - README_RAPIDO.txt - Informações sobre detecção
+   - COMO_USAR.txt - Detalhes técnicos de cada máquina
+   - CHANGELOG_DETECCAO.txt - Este arquivo
+
+ARQUIVOS MODIFICADOS
+--------------------
+- dbLabV2.py - Função detectar_maquina() e integração
+- README_RAPIDO.txt - Seção de detecção automática
+- COMO_USAR.txt - Informações detalhadas das máquinas
+
+TESTES REALIZADOS
+-----------------
+✓ Detecção no PC Casa (washi) - OK
+✓ Detecção no Notebook (simulação washington.gouvea) - OK
+✓ Criação automática de diretório - OK
+✓ Logs informativos - OK
+✓ Threads customizadas - OK
+
+COMPATIBILIDADE
+---------------
+- Windows 10/11
+- Python 3.12+
+- Funciona em ambas as máquinas sem modificação manual
+
+COMO USAR
+---------
+Simplesmente execute o script normalmente:
+
+    python Automations/cunha/dbLabV2.py
+
+O script detectará automaticamente a máquina e usará as configurações corretas.
+
+Para personalizar threads:
+
+    python Automations/cunha/dbLabV2.py --threads=24
+
+BENEFÍCIOS
+----------
+✓ Não precisa modificar código ao trocar de máquina
+✓ Configurações otimizadas para cada processador
+✓ Diretórios corretos automaticamente
+✓ Logs mostram qual máquina está rodando
+✓ Facilita manutenção e deploy
+
+SUPORTE
+-------
+Se adicionar nova máquina, edite a função detectar_maquina() em dbLabV2.py
+
+================================================================================
+

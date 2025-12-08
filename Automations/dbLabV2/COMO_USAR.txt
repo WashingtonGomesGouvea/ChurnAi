@@ -1,0 +1,194 @@
+================================================================================
+                    SISTEMA DE COLETA SODRE - GUIA DE USO
+================================================================================
+
+📋 DESCRIÇÃO
+------------
+Script automatizado para coletar dados de laboratórios credenciados do Sodre,
+processar churn (credenciamentos/descredenciamentos) e gerar relatórios em Excel.
+
+🖥️  DETECÇÃO AUTOMÁTICA DE MÁQUINA
+-----------------------------------
+O script detecta automaticamente em qual computador está rodando e ajusta:
+- Diretório de salvamento
+- Número de threads (otimizado para cada processador)
+
+MÁQUINAS SUPORTADAS:
+  
+  ✓ PC CASA (Ryzen 7 7500X - 6 cores / 12 threads)
+    - Username: washi
+    - Diretório: D:\OneDrive - Synvia Group\Data Analysis\Churn PCLs\Automations\cunha
+    - Threads padrão: 16 (otimizado para I/O bound)
+    
+  ✓ NOTEBOOK SYNVIA (Intel i7-1165G7 - 4 cores / 8 threads)
+    - Username: washington.gouvea  
+    - Diretório: C:\Users\washington.gouvea\OneDrive - Synvia Group\Data Analysis\Churn PCLs\Automations\cunha
+    - Threads padrão: 8 (todos os threads lógicos)
+
+A detecção é automática baseada no username/hostname do Windows.
+
+🔧 COMANDOS DISPONÍVEIS
+-----------------------
+
+1. EXECUÇÃO NORMAL (Coleta diária)
+   python Automations/cunha/dbLabV2.py
+   
+   O que faz:
+   - Se arquivo do dia NÃO existe: Faz coleta completa (~27 minutos)
+   - Se arquivo do dia EXISTE e não foi processado: Processa churn e relatórios
+   - Se já foi processado (flag existe): Pula tudo
+
+2. FORÇAR REPROCESSAMENTO
+   python Automations/cunha/dbLabV2.py --force
+   
+   O que faz:
+   - Remove flag de processamento
+   - Reprocessa churn e relatórios do arquivo do dia
+   - Útil se houve erro ou quer atualizar relatórios
+
+3. APENAS GERAR RELATÓRIOS
+   python Automations/cunha/dbLabV2.py --gerar-relatorio
+   
+   O que faz:
+   - Carrega CSV existente
+   - Gera/atualiza relatórios Excel
+   - Não faz coleta nova
+
+4. MODO DAEMON (Automático - RECOMENDADO)
+   python Automations/cunha/dbLabV2.py --daemon
+   
+   O que faz:
+   - Executa automaticamente às 23:00 todos os dias
+   - Coleta todos os credenciamentos do dia completo
+   - Roda em background contínuo
+   
+   IMPORTANTE: Mantenha o terminal/PowerShell aberto ou configure como serviço
+
+5. PERSONALIZAR THREADS
+   python Automations/cunha/dbLabV2.py --threads=24
+   
+   O que faz:
+   - Define número de threads para coleta paralela
+   - Padrão: 16 threads
+   - Mais threads = mais rápido (mas mais carga no sistema)
+
+📊 ARQUIVOS GERADOS
+-------------------
+
+1. dados_YYYY-MM-DD.csv
+   - Dados brutos da coleta diária
+   - Contém todos os laboratórios encontrados
+   - Inclui colunas de preços extraídos
+
+2. churn_YYYY-MM-DD.xlsx
+   - Credenciamentos e descredenciamentos do dia
+   - Comparação com dia anterior
+
+3. relatorio_completo_laboratorios_sodre.xlsx
+   - Aba "Dados Completos": Todos os labs com preços
+   - Aba "EntradaSaida": Histórico de movimentações (apenas credenciamentos/descredenciamentos reais)
+   - Aba "Resumo Geográfico": Distribuição por estado
+   - Aba "Resumo Credenciamentos": Timeline de movimentações
+
+4. .pipeline_completo_YYYY-MM-DD.flag
+   - Arquivo de controle (NÃO deletar manualmente)
+   - Indica que processamento foi concluído
+   - Evita reprocessamento duplicado
+
+📁 LOCALIZAÇÃO DOS ARQUIVOS
+---------------------------
+D:\OneDrive - Synvia Group\Data Analysis\Churn PCLs\Automations\cunha\
+
+🔄 FLUXO DE EXECUÇÃO
+--------------------
+
+CENÁRIO 1: Primeira execução do dia (sem arquivo)
+  1. Faz coleta completa (5.526 municípios)
+  2. Extrai preços de todos os laboratórios
+  3. Salva CSV
+  4. Processa churn (compara com dia anterior)
+  5. Atualiza todas as abas do Excel
+  6. Cria arquivo .flag
+
+CENÁRIO 2: Arquivo do dia existe, mas não foi processado (sem .flag)
+  1. Carrega CSV existente
+  2. Processa churn
+  3. Atualiza todas as abas do Excel
+  4. Cria arquivo .flag
+
+CENÁRIO 3: Já foi processado (arquivo .flag existe)
+  1. Detecta que já foi executado
+  2. Pula tudo
+  3. Mostra mensagem informativa
+
+⚙️ CONFIGURAÇÃO AUTOMÁTICA (RECOMENDADO)
+-----------------------------------------
+
+OPÇÃO 1: Executar manualmente às 23h
+  - Abrir PowerShell às 23:00
+  - Executar: python Automations/cunha/dbLabV2.py --daemon
+
+OPÇÃO 2: Agendador de Tarefas do Windows
+  1. Abrir "Agendador de Tarefas"
+  2. Criar nova tarefa
+  3. Disparador: Diariamente às 23:00
+  4. Ação: Executar programa
+     - Programa: C:\Users\washi\AppData\Local\Programs\Python\Python312\python.exe
+     - Argumentos: F:\Progamação\ChurnAi\Automations\cunha\dbLabV2.py
+     - Iniciar em: F:\Progamação\ChurnAi
+  5. Marcar: "Executar independentemente de usuário estar conectado"
+
+OPÇÃO 3: Usar modo daemon
+  - PowerShell: python Automations/cunha/dbLabV2.py --daemon
+  - Manter terminal aberto
+  - Executará às 23:00 automaticamente
+
+🐛 SOLUÇÃO DE PROBLEMAS
+------------------------
+
+PROBLEMA: "Pipeline já foi executado"
+SOLUÇÃO: Use --force para reprocessar
+  python Automations/cunha/dbLabV2.py --force
+
+PROBLEMA: Preços vazios no Excel
+SOLUÇÃO: 
+  1. Deletar arquivo do dia: del dados_YYYY-MM-DD.csv
+  2. Deletar flag: del .pipeline_completo_YYYY-MM-DD.flag
+  3. Executar novamente
+
+PROBLEMA: Erro de conexão com API
+SOLUÇÃO: 
+  1. Verificar conexão com internet
+  2. Verificar se API do Sodre está acessível: https://li-sodretox-af-cidades.azurewebsites.net/api/BuscarPostos
+  3. Tentar novamente após alguns minutos
+
+PROBLEMA: Coleta muito lenta
+SOLUÇÃO: Aumentar threads
+  python Automations/cunha/dbLabV2.py --threads=24
+
+📝 LOGS
+-------
+Arquivo: D:\OneDrive - Synvia Group\Data Analysis\Churn PCLs\Automations\cunha\logs.txt
+- Contém histórico detalhado de todas as execuções
+- Útil para debugging
+- Cresce automaticamente (monitorar tamanho)
+
+⚠️ IMPORTANTE
+-------------
+1. NUNCA commitar arquivo .env (contém keys secretas)
+2. Executar SOMENTE às 23h para capturar dia completo
+3. NÃO deletar arquivos .flag manualmente (usar --force)
+4. Manter backups dos arquivos Excel gerados
+5. Monitorar espaço em disco (arquivos CSV podem crescer)
+
+📞 SUPORTE
+----------
+- Verificar logs.txt para erros detalhados
+- Usar --force para reprocessamento
+- Em caso de dúvidas, verificar código em dbLabV2.py
+
+================================================================================
+Última atualização: 2025-11-13
+Versão do script: 2.0
+================================================================================
+

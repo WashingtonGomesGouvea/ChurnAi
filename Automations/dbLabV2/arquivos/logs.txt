@@ -1,0 +1,113 @@
+2025-12-04 22:39:57,485 - INFO - ======================================================================
+2025-12-04 22:39:57,485 - INFO - Script iniciado em: Computador não reconhecido (nathan@desktop-ldtsk2p)
+2025-12-04 22:39:57,485 - INFO - Diretório base: c:\Users\Nathan\Downloads\sodreLabV2\arquivos
+2025-12-04 22:39:57,485 - INFO - Threads padrão: 8
+2025-12-04 22:39:57,485 - INFO - ======================================================================
+2025-12-04 22:39:57,500 - INFO - [INFO] Carregados 5526 municípios de 27 estados
+2025-12-04 22:39:57,501 - INFO - Iniciando coleta com 8 threads...
+2025-12-04 22:39:57,501 - INFO - Buscando estados e cidades da API do DB...
+2025-12-04 22:39:57,501 - INFO - Buscando estados do DB...
+2025-12-04 22:39:57,831 - INFO - Encontrados 27 estados no DB
+2025-12-04 22:39:57,876 - INFO - Estado ACRE (AC): 7 cidades
+2025-12-04 22:39:58,032 - INFO - Estado ALAGOAS (AL): 29 cidades
+2025-12-04 22:39:58,185 - INFO - Estado AMAPA (AP): 7 cidades
+2025-12-04 22:39:58,340 - INFO - Estado AMAZONAS (AM): 20 cidades
+2025-12-04 22:39:58,496 - INFO - Estado BAHIA (BA): 99 cidades
+2025-12-04 22:39:58,649 - INFO - Estado CEARA (CE): 63 cidades
+2025-12-04 22:39:58,807 - INFO - Estado DISTRITO FEDERAL (DF): 2 cidades
+2025-12-04 22:39:58,967 - INFO - Estado ESPIRITO SANTO (ES): 40 cidades
+2025-12-04 22:39:59,117 - INFO - Estado GOIAS (GO): 77 cidades
+2025-12-04 22:39:59,272 - INFO - Estado MARANHAO (MA): 42 cidades
+2025-12-04 22:39:59,425 - INFO - Estado MATO GROSSO (MT): 53 cidades
+2025-12-04 22:39:59,587 - INFO - Estado MATO GROSSO DO SUL (MS): 29 cidades
+2025-12-04 22:39:59,744 - INFO - Estado MINAS GERAIS (MG): 214 cidades
+2025-12-04 22:39:59,895 - INFO - Estado PARA (PA): 69 cidades
+2025-12-04 22:40:00,070 - INFO - Estado PARAIBA (PB): 42 cidades
+2025-12-04 22:40:00,229 - INFO - Estado PARANA (PR): 194 cidades
+2025-12-04 22:40:00,378 - INFO - Estado PERNAMBUCO (PE): 75 cidades
+2025-12-04 22:40:00,537 - INFO - Estado PIAUI (PI): 27 cidades
+2025-12-04 22:40:00,693 - INFO - Estado RIO DE JANEIRO (RJ): 71 cidades
+2025-12-04 22:40:00,838 - INFO - Estado RIO GRANDE DO NORTE (RN): 22 cidades
+2025-12-04 22:40:00,999 - INFO - Estado RIO GRANDE DO SUL (RS): 150 cidades
+2025-12-04 22:40:01,361 - INFO - Estado RONDONIA (RO): 38 cidades
+2025-12-04 22:40:01,506 - INFO - Estado RORAIMA (RR): 2 cidades
+2025-12-04 22:40:01,663 - INFO - Estado SANTA CATARINA (SC): 134 cidades
+2025-12-04 22:40:01,820 - INFO - Estado SAO PAULO (SP): 213 cidades
+2025-12-04 22:40:01,971 - INFO - Estado SERGIPE (SE): 19 cidades
+2025-12-04 22:40:02,112 - INFO - Estado TOCANTINS (TO): 19 cidades
+2025-12-04 22:40:02,225 - INFO - Total de 1757 municípios obtidos do DB
+2025-12-04 22:40:02,225 - INFO - 
+Iniciando coleta em 1757 municípios do Brasil usando 8 threads...
+2025-12-04 22:40:02,326 - INFO - DEBUG: Analisando campos retornados pela API do DB...
+2025-12-04 22:40:02,326 - INFO - DEBUG: Total de campos: 39
+2025-12-04 22:40:02,326 - INFO - DEBUG: \u2717 Nenhum campo de coordenadas encontrado na API do DB
+2025-12-04 22:40:02,326 - INFO - DEBUG: Campos disponíveis na API: Bairro, CD_Empresa, CEP, CNPJ, Cidade, ColetorPendente, Complemento, Email, Endereco, EnderecoCompleto, FG_CagedParticular, FG_VendaEcommerce, FgSuperPCLFixo, FgSuperPCLRotativo, Horario, Horarios, IdEntidade, IdEntidadeG5, IdPerfilPrecoCorporativo, IdPerfilPrecoPaciente, IsCorporativo, IsVendaB2B, LiberarBoletoPfColeta, NecessitaAgendamento, NomeFantasia, Numero, PossuiFiliais, PrioridadeSuperPCL, QuantidadeBoletoResponsabilidade, QuantidadeExames, QuantidadeVouchers, RankingExibicao, RazaoSocial, ShowAutoAuditoria, ShowPclComunicado, Telefone, UF, ValorExame, ValorTotalFechamento
+2025-12-04 22:40:03,202 - INFO - Progresso: 50/1757 municípios processados | 100 laboratórios encontrados
+2025-12-04 22:40:03,837 - INFO - Progresso: 100/1757 municípios processados | 187 laboratórios encontrados
+2025-12-04 22:40:03,844 - ERROR - Erro ao buscar postos na cidade 'ILHÉUS' (BA): 500 Server Error: Internal Server Error for url: https://compra.dbtoxicologico.com.br/venda/PostoColeta/ListarPostos
+2025-12-04 22:40:03,845 - ERROR - Erro ao buscar postos na cidade 'ILHEUS' (BA): 500 Server Error: Internal Server Error for url: https://compra.dbtoxicologico.com.br/venda/PostoColeta/ListarPostos
+2025-12-04 22:40:04,379 - INFO - Progresso: 150/1757 municípios processados | 241 laboratórios encontrados
+2025-12-04 22:40:04,973 - INFO - Progresso: 200/1757 municípios processados | 315 laboratórios encontrados
+2025-12-04 22:40:05,624 - INFO - Progresso: 250/1757 municípios processados | 425 laboratórios encontrados
+2025-12-04 22:40:06,383 - INFO - Progresso: 300/1757 municípios processados | 533 laboratórios encontrados
+2025-12-04 22:40:07,023 - INFO - Progresso: 350/1757 municípios processados | 643 laboratórios encontrados
+2025-12-04 22:40:07,617 - INFO - Progresso: 400/1757 municípios processados | 710 laboratórios encontrados
+2025-12-04 22:40:08,317 - INFO - Progresso: 450/1757 municípios processados | 809 laboratórios encontrados
+2025-12-04 22:40:09,077 - INFO - Progresso: 500/1757 municípios processados | 887 laboratórios encontrados
+2025-12-04 22:40:09,696 - INFO - Progresso: 550/1757 municípios processados | 952 laboratórios encontrados
+2025-12-04 22:40:10,378 - INFO - Progresso: 600/1757 municípios processados | 1025 laboratórios encontrados
+2025-12-04 22:40:11,062 - INFO - Progresso: 650/1757 municípios processados | 1100 laboratórios encontrados
+2025-12-04 22:40:11,753 - INFO - Progresso: 700/1757 municípios processados | 1202 laboratórios encontrados
+2025-12-04 22:40:12,448 - INFO - Progresso: 750/1757 municípios processados | 1288 laboratórios encontrados
+2025-12-04 22:40:13,077 - INFO - Progresso: 800/1757 municípios processados | 1357 laboratórios encontrados
+2025-12-04 22:40:13,751 - INFO - Progresso: 850/1757 municípios processados | 1424 laboratórios encontrados
+2025-12-04 22:40:14,406 - INFO - Progresso: 900/1757 municípios processados | 1478 laboratórios encontrados
+2025-12-04 22:40:15,029 - INFO - Progresso: 950/1757 municípios processados | 1518 laboratórios encontrados
+2025-12-04 22:40:15,801 - INFO - Progresso: 1000/1757 municípios processados | 1575 laboratórios encontrados
+2025-12-04 22:40:16,545 - INFO - Progresso: 1050/1757 municípios processados | 1656 laboratórios encontrados
+2025-12-04 22:40:17,235 - INFO - Progresso: 1100/1757 municípios processados | 1751 laboratórios encontrados
+2025-12-04 22:40:17,333 - ERROR - Erro ao buscar postos na cidade 'DUQUE DE CAXIAS' (RJ): 500 Server Error: Internal Server Error for url: https://compra.dbtoxicologico.com.br/venda/PostoColeta/ListarPostos
+2025-12-04 22:40:17,976 - INFO - Progresso: 1150/1757 municípios processados | 1858 laboratórios encontrados
+2025-12-04 22:40:18,649 - INFO - Progresso: 1200/1757 municípios processados | 1994 laboratórios encontrados
+2025-12-04 22:40:19,328 - INFO - Progresso: 1250/1757 municípios processados | 2053 laboratórios encontrados
+2025-12-04 22:40:20,106 - INFO - Progresso: 1300/1757 municípios processados | 2143 laboratórios encontrados
+2025-12-04 22:40:20,890 - INFO - Progresso: 1350/1757 municípios processados | 2236 laboratórios encontrados
+2025-12-04 22:40:21,697 - INFO - Progresso: 1400/1757 municípios processados | 2347 laboratórios encontrados
+2025-12-04 22:40:22,469 - INFO - Progresso: 1450/1757 municípios processados | 2445 laboratórios encontrados
+2025-12-04 22:40:23,234 - INFO - Progresso: 1500/1757 municípios processados | 2505 laboratórios encontrados
+2025-12-04 22:40:23,938 - INFO - Progresso: 1550/1757 municípios processados | 2582 laboratórios encontrados
+2025-12-04 22:40:24,609 - INFO - Progresso: 1600/1757 municípios processados | 2646 laboratórios encontrados
+2025-12-04 22:40:25,255 - INFO - Progresso: 1650/1757 municípios processados | 2712 laboratórios encontrados
+2025-12-04 22:40:25,965 - INFO - Progresso: 1700/1757 municípios processados | 2782 laboratórios encontrados
+2025-12-04 22:40:26,661 - INFO - Progresso: 1750/1757 municípios processados | 2863 laboratórios encontrados
+2025-12-04 22:40:26,793 - INFO - 
+RESUMO DA COLETA:
+2025-12-04 22:40:26,793 - INFO -   - Municípios pesquisados: 1757
+2025-12-04 22:40:26,794 - INFO -   - Municípios com laboratórios: 1444
+2025-12-04 22:40:26,794 - INFO -   - Municípios sem laboratórios: 313
+2025-12-04 22:40:26,794 - INFO -   - Total de laboratórios únicos: 2875
+2025-12-04 22:40:26,794 - INFO -   - Threads utilizadas: 8
+2025-12-04 22:40:26,808 - INFO - Removendo duplicatas por CNPJ...
+2025-12-04 22:40:26,818 - INFO - Extraindo preços dos serviços...
+2025-12-04 22:40:26,819 - INFO - DEBUG: Testando extração com primeiros registros
+2025-12-04 22:40:26,819 - INFO -    Teste 1 - Lab: LABORATORIO POPULAR
+2025-12-04 22:40:26,819 - INFO -    Servicos tipo: <class 'list'>
+2025-12-04 22:40:26,819 - INFO -    Servicos valor: ['Exame Toxicológico - R$ 145.00']
+2025-12-04 22:40:26,819 - INFO -    Preços extraídos: {'preco_cnh': '145.00', 'preco_concurso': '145.00', 'preco_clt': '145.00'}
+2025-12-04 22:40:26,819 - INFO -    Teste 2 - Lab: LABSUL DIAGNOSTICOS CLINICO LABORATORIAIS
+2025-12-04 22:40:26,819 - INFO -    Servicos tipo: <class 'list'>
+2025-12-04 22:40:26,819 - INFO -    Servicos valor: ['Exame Toxicológico - R$ 145.00']
+2025-12-04 22:40:26,819 - INFO -    Preços extraídos: {'preco_cnh': '145.00', 'preco_concurso': '145.00', 'preco_clt': '145.00'}
+2025-12-04 22:40:26,819 - INFO -    Teste 3 - Lab: LABORAT DE ANALISES CLINICAS REMARQUE QUEIROZ(PCL)
+2025-12-04 22:40:26,820 - INFO -    Servicos tipo: <class 'list'>
+2025-12-04 22:40:26,820 - INFO -    Servicos valor: ['Exame Toxicológico - R$ 145.00']
+2025-12-04 22:40:26,820 - INFO -    Preços extraídos: {'preco_cnh': '145.00', 'preco_concurso': '145.00', 'preco_clt': '145.00'}
+2025-12-04 22:40:26,839 - INFO - Preços extraídos: CNH=2875/2875, Concurso=2875/2875, CLT=2875/2875
+2025-12-04 22:40:26,906 - INFO - Dados diários salvos: c:\Users\Nathan\Downloads\sodreLabV2\arquivos\dados_2025-12-04.csv
+2025-12-04 22:40:26,913 - WARNING - Não há dados do dia anterior para comparação de churn.
+2025-12-04 22:40:27,299 - INFO - Aba 'EntradaSaida' criada/atualizada: 0 movimentações (0 credenciamentos, 0 descredenciamentos, 0 recredenciamentos)
+2025-12-04 22:40:27,339 - INFO - Usando preços já extraídos do DataFrame (CNH: 2875, Concurso: 2875, CLT: 2875)
+2025-12-04 22:40:27,352 - INFO - Preços para Excel - CNH: 2875/2875, Concurso: 2875/2875, CLT: 2875/2875
+2025-12-04 22:40:31,654 - INFO - Relatório global atualizado: c:\Users\Nathan\Downloads\sodreLabV2\arquivos\relatorio_completo_laboratorios_db.xlsx
+2025-12-04 22:40:33,681 - INFO - Aba 'Resumo Credenciamentos' criada/atualizada no relatório global.
+2025-12-04 22:40:33,683 - INFO - Pipeline concluído com sucesso para 2025-12-04.

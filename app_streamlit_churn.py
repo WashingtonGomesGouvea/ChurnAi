@@ -433,6 +433,64 @@ def baixar_excel_sodre(force: bool = False) -> Optional[str]:
             return arquivo_local
         return None
 
+def baixar_excel_db(force: bool = False) -> Optional[str]:
+    """
+    Baixa arquivo Excel do DB Toxicológico do SharePoint.
+    
+    Args:
+        force: Força download mesmo se cache válido
+    
+    Returns:
+        Caminho local do arquivo baixado ou None se falhar
+    """
+    arquivo_remoto = "/personal/washington_gouvea_synvia_com_/Documents/Data Analysis/Churn PCLs/Automations/db/relatorio_completo_laboratorios_db.xlsx"
+    base_name = "relatorio_completo_laboratorios_db.xlsx"
+    arquivo_local = os.path.join(OUTPUT_DIR, base_name)
+    
+    # Verificar cache (4 horas = 14400 segundos)
+    if not force and os.path.exists(arquivo_local):
+        import time
+        idade_arquivo = time.time() - os.path.getmtime(arquivo_local)
+        if idade_arquivo < 14400:  # 4 horas
+            return arquivo_local
+    
+    cfg = _get_graph_config()
+    
+    # Sem configuração Graph, retornar arquivo local se existir
+    if not cfg or not (cfg.get("tenant_id") and cfg.get("client_id") and cfg.get("client_secret")):
+        if os.path.exists(arquivo_local):
+            return arquivo_local
+        return None
+    
+    try:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        
+        # Usar ChurnSPConnector
+        from churn_sp_connector import ChurnSPConnector
+        
+        connector = ChurnSPConnector(config=st.secrets)
+        
+        # Baixar arquivo
+        content = connector.download(arquivo_remoto)
+        
+        # Salvar localmente
+        with open(arquivo_local, "wb") as f:
+            f.write(content)
+        
+        # Validar se é Excel válido
+        try:
+            import openpyxl
+            openpyxl.load_workbook(arquivo_local, read_only=True)
+            return arquivo_local
+        except Exception:
+            return None
+        
+    except Exception as e:
+        # Tentar usar arquivo local se existir
+        if os.path.exists(arquivo_local):
+            return arquivo_local
+        return None
+
 def show_overlay_loader(title: str = "Carregando...", subtitle: str = "Por favor, aguarde enquanto processamos os dados."):
     """
     Função helper para criar o overlay loader facilmente.
@@ -1246,6 +1304,44 @@ class DataManager:
         try:
             # Baixar arquivo Excel do SharePoint
             arquivo_excel = baixar_excel_sodre()
+            
+            if not arquivo_excel or not os.path.exists(arquivo_excel):
+                return None
+            
+            # Ler todas as abas do Excel
+            todas_abas = pd.read_excel(arquivo_excel, sheet_name=None, engine='openpyxl')
+            
+            # Normalizar CNPJ em todas as abas que tenham coluna CNPJ ou Cnpj
+            for nome_aba, df in todas_abas.items():
+                # Procurar coluna de CNPJ (case insensitive)
+                coluna_cnpj = None
+                for col in df.columns:
+                    if col.upper() == 'CNPJ':
+                        coluna_cnpj = col
+                        break
+                
+                if coluna_cnpj:
+                    df[coluna_cnpj] = df[coluna_cnpj].astype(str)
+                    df['CNPJ_Normalizado'] = df[coluna_cnpj].apply(DataManager.normalizar_cnpj)
+            
+            return todas_abas
+            
+        except Exception as e:
+            # Erro silencioso - será tratado onde a função é chamada
+            return None
+    
+    @staticmethod
+    @st.cache_data(ttl=14400)  # Cache de 4 horas
+    def carregar_dados_db() -> Optional[Dict[str, pd.DataFrame]]:
+        """
+        Carrega dados do Excel do concorrente DB Toxicológico com todas as abas.
+        
+        Returns:
+            Dicionário com DataFrames das abas ou None se falhar
+        """
+        try:
+            # Baixar arquivo Excel do SharePoint
+            arquivo_excel = baixar_excel_db()
             
             if not arquivo_excel or not os.path.exists(arquivo_excel):
                 return None
@@ -8131,12 +8227,19 @@ def main():
             <div style="background: linear-gradient(135deg, #ffd700 0%, #ffed4e 100%);
                         color: #333; padding: 2rem; border-radius: 12px;
                         margin: 2rem 0; box-shadow: 0 6px 12px rgba(0,0,0,0.15);">
-                <h2 style="margin: 0; font-size: 1.8rem; color: #b8860b; font-weight: 700;">
-                    🏆 Dados no Concorrente Gralab (CunhaLab)
-                </h2>
-                <p style="margin: 0.5rem 0 0 0; font-size: 1.1rem; color: #666;">
-                    Compare os dados deste laboratório com a base do concorrente
-                </p>
+                <div style="display: flex; align-items: center; gap: 1.5rem;">
+                    <img src="https://cdn.awsli.com.br/400x300/2702/2702264/logo/gralab-rbuogsxve7.png" 
+                         alt="Gralab Logo" 
+                         style="width: 80px; height: auto; background: white; border-radius: 8px; padding: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.2);">
+                    <div>
+                        <h2 style="margin: 0; font-size: 1.8rem; color: #b8860b; font-weight: 700;">
+                            🏆 Dados no Concorrente Gralab (CunhaLab)
+                        </h2>
+                        <p style="margin: 0.5rem 0 0 0; font-size: 1.1rem; color: #666;">
+                            Compare os dados deste laboratório com a base do concorrente
+                        </p>
+                    </div>
+                </div>
             </div>
             """, unsafe_allow_html=True)
             
@@ -8323,12 +8426,19 @@ def main():
             <div style="background: linear-gradient(135deg, #9333ea 0%, #a855f7 100%);
                         color: white; padding: 2rem; border-radius: 12px;
                         margin: 2rem 0; box-shadow: 0 6px 12px rgba(147,51,234,0.3);">
-                <h2 style="margin: 0; font-size: 1.8rem; color: white; font-weight: 700;">
-                    🏅 Dados no Concorrente Sodre (SodreLab)
-                </h2>
-                <p style="margin: 0.5rem 0 0 0; font-size: 1.1rem; color: rgba(255,255,255,0.9);">
-                    Compare os dados deste laboratório com a base do concorrente Sodre
-                </p>
+                <div style="display: flex; align-items: center; gap: 1.5rem;">
+                    <img src="https://cdn.awsli.com.br/400x300/2605/2605795/logo/sodre_toxicologico-kmerbo.png" 
+                         alt="Sodre Logo" 
+                         style="width: 80px; height: auto; background: white; border-radius: 8px; padding: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.2);">
+                    <div>
+                        <h2 style="margin: 0; font-size: 1.8rem; color: white; font-weight: 700;">
+                            🥅 Dados no Concorrente Sodre (SodreLab)
+                        </h2>
+                        <p style="margin: 0.5rem 0 0 0; font-size: 1.1rem; color: rgba(255,255,255,0.9);">
+                            Compare os dados deste laboratório com a base do concorrente Sodre
+                        </p>
+                    </div>
+                </div>
             </div>
             """, unsafe_allow_html=True)
             
@@ -8546,6 +8656,210 @@ def main():
                     st.warning("⚠️ Não foi possível carregar dados do Sodre (SodreLab)")
             except Exception as e:
                 st.error(f"❌ Erro ao carregar dados do Sodre (SodreLab): {e}")
+        
+        # ========================================
+        # DADOS DO CONCORRENTE DB TOXICOLÓGICO
+        # ========================================
+        if lab_final_cnpj:  # Só mostrar se houver laboratório selecionado
+            st.markdown("---")
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #0369a1 0%, #0284c7 100%);
+                        color: white; padding: 2rem; border-radius: 12px;
+                        margin: 2rem 0; box-shadow: 0 6px 12px rgba(3,105,161,0.3);">
+                <div style="display: flex; align-items: center; gap: 1.5rem;">
+                    <img src="https://www.dbtoxicologico.com.br/application/modules/comum/assets/img/logo-black.png" 
+                         alt="DB Toxicológico Logo" 
+                         style="width: 80px; height: auto; background: white; border-radius: 8px; padding: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.2);">
+                    <div>
+                        <h2 style="margin: 0; font-size: 1.8rem; color: white; font-weight: 700;">
+                            🔬 Dados no Concorrente DB Toxicológico
+                        </h2>
+                        <p style="margin: 0.5rem 0 0 0; font-size: 1.1rem; color: rgba(255,255,255,0.9);">
+                            Compare os dados deste laboratório com a base do DB Toxicológico
+                        </p>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            try:
+                loader = show_overlay_loader(
+                    "Carregando dados do DB Toxicológico...",
+                    "Buscando informações do concorrente. Isso pode levar alguns segundos."
+                )
+                try:
+                    dados_db = DataManager.carregar_dados_db()
+                finally:
+                    loader.empty()
+                
+                if dados_db and 'Dados Completos' in dados_db:
+                    df_db = dados_db['Dados Completos']
+                    
+                    # Buscar laboratório pelo CNPJ normalizado
+                    lab_db_match = df_db[df_db['CNPJ_Normalizado'] == lab_final_cnpj]
+                    
+                    if not lab_db_match.empty:
+                        lab_d = lab_db_match.iloc[0]
+                        
+                        # Verificar se está na aba EntradaSaida
+                        status_movimentacao = ""
+                        if 'EntradaSaida' in dados_db:
+                            df_entrada_saida = dados_db['EntradaSaida']
+                            lab_entrada = df_entrada_saida[df_entrada_saida['CNPJ_Normalizado'] == lab_final_cnpj]
+                            if not lab_entrada.empty:
+                                tipo_mov = lab_entrada.iloc[0].get('Tipo Movimentação', '')
+                                status_lab = lab_entrada.iloc[0].get('Status', '')
+                                if tipo_mov or status_lab:
+                                    status_movimentacao = f"<div style='margin-top: 1rem; padding: 1rem; background: #e0f2fe; border-radius: 8px; border-left: 4px solid #0369a1;'>"
+                                    status_movimentacao += f"<strong style='font-size: 1.1rem;'>Movimentação:</strong> {tipo_mov} | <strong>Status:</strong> {status_lab}</div>"
+                        
+                        # Extrair preços (mesmas colunas que Gralab/Sodre)
+                        def extrair_preco_db(row, possiveis_nomes):
+                            """Tenta extrair preço de múltiplas variações de nome de coluna"""
+                            for nome in possiveis_nomes:
+                                if nome in row.index:
+                                    valor = row.get(nome, 'N/A')
+                                    if pd.notna(valor) and valor != '' and valor != 'N/A':
+                                        return valor
+                            return 'N/A'
+                        
+                        preco_cnh = extrair_preco_db(lab_d, ['Preço CNH', 'Preco_CNH', 'preco_cnh', 'CNH'])
+                        preco_concurso = extrair_preco_db(lab_d, ['Preço Concurso', 'Preco_Concurso', 'preco_concurso', 'Concurso'])
+                        preco_clt = extrair_preco_db(lab_d, ['Preço CLT', 'Preco_CLT', 'preco_clt', 'CLT'])
+                        
+                        # Formatar preços
+                        def formatar_preco_db(preco):
+                            try:
+                                if pd.notna(preco) and preco != '' and preco != 'N/A':
+                                    if isinstance(preco, (int, float)):
+                                        return f"R$ {float(preco):.2f}"
+                                    preco_str = str(preco).strip()
+                                    preco_str = preco_str.replace('R$', '').replace('r$', '').strip()
+                                    preco_str = preco_str.replace(',', '.')
+                                    partes = preco_str.split('.')
+                                    if len(partes) > 1:
+                                        preco_str = ''.join(partes[:-1]) + '.' + partes[-1]
+                                    return f"R$ {float(preco_str):.2f}"
+                                return "N/A"
+                            except Exception:
+                                return "N/A"
+                        
+                        preco_cnh_fmt = formatar_preco_db(preco_cnh)
+                        preco_concurso_fmt = formatar_preco_db(preco_concurso)
+                        preco_clt_fmt = formatar_preco_db(preco_clt)
+                        
+                        st.markdown(f"""
+                        <div style="background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); 
+                                    border-radius: 12px; padding: 2rem; margin: 1rem 0 2rem 0;
+                                    border: 3px solid #0369a1; box-shadow: 0 4px 12px rgba(3,105,161,0.4);">
+                            <h3 style="margin: 0 0 1.5rem 0; color: #0c4a6e; font-weight: 700; font-size: 1.5rem;">
+                                ✅ Laboratório Encontrado na Base do DB Toxicológico
+                            </h3>
+                            <div style="background: white; border-radius: 10px; padding: 1.5rem; margin-bottom: 1rem; box-shadow: 0 2px 6px rgba(0,0,0,0.1);">
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+                                    <div>
+                                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">NOME</div>
+                                        <div style="font-size: 1.2rem; font-weight: 700; color: #2c3e50;">{lab_d.get('Nome', lab_d.get('NomeFantasia', 'N/A'))}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">CIDADE / UF</div>
+                                        <div style="font-size: 1.2rem; font-weight: 700; color: #2c3e50;">{lab_d.get('Cidade', 'N/A')} / {lab_d.get('UF', 'N/A')}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">TELEFONE</div>
+                                        <div style="font-size: 1.1rem; font-weight: 600; color: #2c3e50;">{lab_d.get('Telefone', 'N/A')}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">ENDEREÇO</div>
+                                        <div style="font-size: 1rem; color: #2c3e50;">{str(lab_d.get('Endereco', 'N/A'))[:60]}...</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="background: linear-gradient(135deg, #7dd3fc 0%, #38bdf8 100%); 
+                                        border-radius: 10px; padding: 1.5rem; margin-top: 1rem; 
+                                        border-left: 5px solid #0369a1; box-shadow: 0 2px 6px rgba(3,105,161,0.3);">
+                                <div style="font-size: 1.1rem; color: #0c4a6e; margin-bottom: 1rem; font-weight: 700;">💰 PREÇOS PRATICADOS PELO CONCORRENTE</div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem; text-align: center;">
+                                    <div style="background: white; border-radius: 8px; padding: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">🎫 CNH</div>
+                                        <div style="font-size: 1.5rem; font-weight: bold; color: #0369a1;">{preco_cnh_fmt}</div>
+                                    </div>
+                                    <div style="background: white; border-radius: 8px; padding: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">📝 Concurso</div>
+                                        <div style="font-size: 1.5rem; font-weight: bold; color: #0369a1;">{preco_concurso_fmt}</div>
+                                    </div>
+                                    <div style="background: white; border-radius: 8px; padding: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; font-weight: 600;">👔 CLT</div>
+                                        <div style="font-size: 1.5rem; font-weight: bold; color: #0369a1;">{preco_clt_fmt}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            {status_movimentacao}
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        # Comparativo com nossos preços (CLT)
+                        def _to_float_preco_db(valor):
+                            """Converte preço do DB para float"""
+                            if pd.isna(valor) or valor == '' or valor == 'N/A':
+                                return np.nan
+                            if isinstance(valor, (int, float)):
+                                return float(valor)
+                            if isinstance(valor, str):
+                                valor = valor.replace('R$', '').replace('r$', '').strip()
+                                valor = valor.replace(',', '.')
+                                partes = valor.split('.')
+                                if len(partes) > 2:
+                                    valor = ''.join(partes[:-1]) + '.' + partes[-1]
+                            return pd.to_numeric(valor, errors='coerce')
+
+                        nosso_preco_clt = pd.to_numeric(lab_info.get('Preco_CLT_Total'), errors='coerce')
+                        preco_db_val = _to_float_preco_db(preco_clt)
+                        
+                        if pd.notna(nosso_preco_clt) and pd.notna(preco_db_val):
+                            delta_val = nosso_preco_clt - preco_db_val
+                            cor_delta = '#6c757d'
+                            if delta_val > 0:
+                                cor_delta = '#dc3545'
+                            elif delta_val < 0:
+                                cor_delta = '#198754'
+                            
+                            def _formatar_delta_db(valor):
+                                if pd.isna(valor):
+                                    return "—"
+                                sinal = "+" if valor > 0 else ""
+                                return f"{sinal}R$ {abs(valor):.2f}"
+                            
+                            st.markdown(f"""
+                                <div style="background: #e0f2fe; border-radius: 10px; padding: 1rem 1.5rem; margin-top: 1rem; border-left: 5px solid #0369a1;">
+                                    <div style="font-size: 0.95rem; color: #0c4a6e; font-weight: 700; margin-bottom: 0.8rem; text-transform: uppercase;">
+                                        Comparativo de Preços (CLT)
+                                    </div>
+                                    <div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
+                                        <div style="background: white; border-radius: 10px; padding: 1rem; box-shadow: 0 2px 6px rgba(0,0,0,0.08);">
+                                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: #6c757d; margin-bottom: 0.3rem;">
+                                                <span>Nosso preço CLT</span>
+                                                <strong style="color: #2c3e50;">R$ {nosso_preco_clt:.2f}</strong>
+                                            </div>
+                                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: #6c757d; margin-bottom: 0.3rem;">
+                                                <span>DB Toxicológico</span>
+                                                <strong style="color: #2c3e50;">{preco_clt_fmt}</strong>
+                                            </div>
+                                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: #6c757d;">
+                                                <span>Diferença</span>
+                                                <strong style="color: {cor_delta};">{_formatar_delta_db(delta_val)}</strong>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            """, unsafe_allow_html=True)
+
+                    else:
+                        st.info("ℹ️ Este laboratório não está cadastrado na base do DB Toxicológico")
+                else:
+                    st.warning("⚠️ Não foi possível carregar dados do DB Toxicológico")
+            except Exception as e:
+                st.error(f"❌ Erro ao carregar dados do DB Toxicológico: {e}")
 
         # Fechar container principal
         st.markdown("</div>", unsafe_allow_html=True)
@@ -9786,7 +10100,7 @@ def main():
         with col_sel1:
             concorrente_selecionado = st.selectbox(
                 "Selecione o Concorrente:",
-                options=["Gralab (CunhaLab)", "Sodre (SodreLab)"],
+                options=["Gralab (CunhaLab)", "Sodre (SodreLab)", "DB Toxicológico"],
                 index=0,
                 key="concorrente_analise"
             )
@@ -9801,7 +10115,7 @@ def main():
             nome_curto = "Gralab"
             nome_completo = "Gralab (CunhaLab)"
             carregar_funcao = DataManager.carregar_dados_gralab
-        else:  # Sodre
+        elif concorrente_selecionado == "Sodre (SodreLab)":
             cor_primaria = "#9333ea"
             cor_secundaria = "#a855f7"
             cor_titulo = "white"
@@ -9810,6 +10124,15 @@ def main():
             nome_curto = "Sodre"
             nome_completo = "Sodre (SodreLab)"
             carregar_funcao = DataManager.carregar_dados_sodre
+        else:  # DB Toxicológico
+            cor_primaria = "#0369a1"
+            cor_secundaria = "#0284c7"
+            cor_titulo = "white"
+            cor_grafico = "#0284c7"
+            icone = "🔬"
+            nome_curto = "DB"
+            nome_completo = "DB Toxicológico"
+            carregar_funcao = DataManager.carregar_dados_db
         
         st.markdown(f"""
         <div style="background: linear-gradient(135deg, {cor_primaria} 0%, {cor_secundaria} 100%);

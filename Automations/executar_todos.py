@@ -4,7 +4,7 @@ Run all lab pipelines sequentially at 17:00 every day.
 If the script starts after 17:00, it checks whether today's run is already
 finished (via the pipeline flag files). If anything is pending, it runs the
 missing pipelines immediately; otherwise, it waits until 17:00 on the next day.
-The window stays open and keeps scheduling future runs.
+The window stays open and keeps scheduling future runs and shows the next run.
 """
 
 from __future__ import annotations
@@ -63,6 +63,10 @@ def _next_run_time(reference: datetime) -> datetime:
     if reference < target:
         return target
     return target + timedelta(days=1)
+
+
+def _fmt(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%d %H:%M")
 
 
 @dataclass
@@ -138,6 +142,15 @@ def _build_jobs() -> list[ScriptJob]:
     ]
 
 
+def _print_status(jobs: Iterable[ScriptJob], date_str: str) -> None:
+    parts = []
+    for job in jobs:
+        state = "OK" if job.has_run_for(date_str) else "PENDING"
+        parts.append(f"{job.name}: {state}")
+    joined = " | ".join(parts)
+    print(f"[Status {date_str}] {joined}")
+
+
 def _run_pending(jobs: Iterable[ScriptJob], date_str: str) -> bool:
     for job in jobs:
         if job.has_run_for(date_str):
@@ -163,16 +176,23 @@ def main() -> None:
     for job in jobs:
         print(f"- {job.name} flags in: {job.base_dir}")
 
+    _print_status(jobs, today_str)
+
     if now >= current_target:
         if any(not job.has_run_for(today_str) for job in jobs):
             print("After scheduled time and there are pending runs -> executing now.")
-            _run_pending(jobs, today_str)
+            if not _run_pending(jobs, today_str):
+                print("Chain stopped due to failure; fix and restart to reschedule.")
+            else:
+                _print_status(jobs, today_str)
         else:
             print("After scheduled time but all jobs already done for today.")
         next_run = _next_run_time(now)
     else:
         print(f"Waiting until {RUN_HOUR:02d}:{RUN_MINUTE:02d} today.")
         next_run = current_target
+
+    print(f"Next run scheduled for {_fmt(next_run)} (keep this window open).")
 
     try:
         while True:
@@ -183,7 +203,9 @@ def main() -> None:
 
             run_date = datetime.now().date().isoformat()
             _run_pending(jobs, run_date)
+            _print_status(jobs, run_date)
             next_run = _next_run_time(datetime.now())
+            print(f"Next run scheduled for {_fmt(next_run)} (keep this window open).")
     except KeyboardInterrupt:
         print("\nScheduler stopped by user.")
 

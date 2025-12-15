@@ -6455,24 +6455,6 @@ def main():
             st.rerun()
         finally:
             loader.empty()
-    # Seção de relatórios na sidebar
-    st.sidebar.markdown("---")
-    st.sidebar.markdown('<div class="sidebar-header" style="font-size: 1rem; font-weight: 600; color: var(--primary-color);">📅 Relatórios</div>', unsafe_allow_html=True)
-    tipo_relatorio = st.sidebar.selectbox(
-        "Tipo de Relatório",
-        ["Semanal", "Mensal"],
-        help="Selecione o tipo de relatório a gerar"
-    )
-    if st.sidebar.button("📊 Gerar Relatório", help="Gerar relatório automático"):
-        loader = show_overlay_loader(
-            "Gerando relatório...",
-            f"Preparando seu relatório {tipo_relatorio.lower()}. Aguarde alguns instantes."
-        )
-        try:
-            ReportManager.gerar_relatorio_automatico(df_filtrado, metrics, tipo_relatorio.lower())
-        finally:
-            loader.empty()
-   
     # ========================================
     # RENDERIZAÇÃO DA PÁGINA SELECIONADA - Atualizado com tabs
     # ========================================

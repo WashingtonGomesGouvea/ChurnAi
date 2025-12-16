@@ -4522,9 +4522,6 @@ class FilterManager:
         )
 
         st.sidebar.markdown("---")
-        
-
-        st.sidebar.markdown("---")
         # Filtro por período - Anos e Meses (dados mensais)
         st.sidebar.markdown("**📅 Período de Análise (Mensal)**")
         # Verificar anos disponíveis nos dados

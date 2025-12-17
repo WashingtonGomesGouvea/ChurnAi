@@ -2143,6 +2143,12 @@ def calcular_metricas_churn():
             enviar_alerta_email(df_churn)
     except Exception:
         pass
+    
+    # Verificar e enviar relatórios por email (semanal/mensal)
+    try:
+        EmailReportManager.verificar_e_enviar(df_churn)
+    except Exception as e:
+        logger.warning(f"Falha ao verificar/enviar relatórios por email: {e}")
 
 def executar_extracoes():
     """Executa todas as extrações de dados."""
@@ -2239,6 +2245,929 @@ def enviar_alerta_email(df_churn: pd.DataFrame) -> None:
         logger.info("Alerta por e-mail enviado com sucesso.")
     except Exception as e:
         logger.warning(f"Falha ao enviar alerta por e-mail (ignorando): {e}")
+
+# ============================================
+# SISTEMA DE RELATÓRIOS POR EMAIL
+# ============================================
+
+class EmailReportManager:
+    """
+    Gerenciador de envio de relatórios por email.
+    
+    - Relatório Semanal: Enviado toda sexta-feira após 17h
+    - Relatório Mensal: Enviado no último dia do mês
+    - MODO_TESTE: Quando True, força o envio imediato para teste
+    """
+    
+    # Configurações de Email (Office 365)
+    SMTP_SERVER = "smtp.office365.com"
+    SMTP_PORT = 587
+    EMAIL_REMETENTE = "washington.gouvea@synvia.com"
+    SENHA_EMAIL = "vwthcktbjrwrqpqy"
+    EMAIL_DESTINATARIOS = ["washington.gouvea@synvia.com"]
+    
+    # Flag para modo de teste
+    MODO_TESTE = True
+    
+    # Controle de envio (para evitar duplicatas)
+    _ultimo_envio_semanal = None
+    _ultimo_envio_mensal = None
+    
+    @classmethod
+    def _criar_estilo_html(cls) -> str:
+        """Retorna estilos CSS para as tabelas HTML."""
+        return """
+        <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f5f5; margin: 0; padding: 20px; }
+            .container { max-width: 1200px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 30px; }
+            h1 { color: #1a1a2e; border-bottom: 3px solid #16213e; padding-bottom: 10px; }
+            h2 { color: #16213e; margin-top: 30px; border-left: 4px solid #e94560; padding-left: 10px; }
+            .kpi-container { display: flex; flex-wrap: wrap; gap: 15px; margin: 20px 0; }
+            .kpi-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; min-width: 180px; text-align: center; }
+            .kpi-value { font-size: 28px; font-weight: bold; margin-bottom: 5px; }
+            .kpi-label { font-size: 12px; opacity: 0.9; }
+            table { border-collapse: collapse; width: 100%; margin: 15px 0; font-size: 12px; }
+            th { background-color: #16213e; color: white; padding: 12px 8px; text-align: left; font-weight: 600; }
+            td { padding: 10px 8px; border-bottom: 1px solid #e0e0e0; }
+            tr:nth-child(even) { background-color: #f8f9fa; }
+            tr:hover { background-color: #e3f2fd; }
+            .risco-sim { color: #d32f2f; font-weight: bold; }
+            .variacao-negativa { color: #d32f2f; }
+            .variacao-positiva { color: #388e3c; }
+            .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; color: #666; font-size: 11px; text-align: center; }
+            .alert-box { background-color: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 15px; margin: 15px 0; }
+        </style>
+        """
+    
+    @classmethod
+    def _obter_semana_fechamento(cls) -> dict:
+        """
+        Obtém a última semana ISO fechada (corte às 18h de sexta-feira).
+        
+        Replica a lógica do app Streamlit:
+        - Semana é fechada quando: hoje >= sexta 18h dessa semana
+        - Retorna a semana anterior se a atual ainda não fechou
+        
+        Returns:
+            dict: {iso_year, iso_week, inicio, fim, label_semana}
+        """
+        # Mapeamento de meses em português
+        MESES_PT = {
+            1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun',
+            7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'
+        }
+        
+        agora = datetime.now(timezone_br)
+        hoje = agora.date()
+        
+        # Calcular semana ISO atual
+        iso_info = hoje.isocalendar()
+        iso_year_atual = iso_info.year
+        iso_week_atual = iso_info.week
+        
+        # Verificar se a semana atual já fechou (sexta 18h)
+        try:
+            sexta_atual = datetime.fromisocalendar(iso_year_atual, iso_week_atual, 5)
+            fechamento_atual = timezone_br.localize(
+                datetime.combine(sexta_atual, datetime.min.time()) + timedelta(hours=18)
+            )
+            semana_atual_fechada = agora >= fechamento_atual
+        except ValueError:
+            semana_atual_fechada = False
+        
+        # Determinar qual semana usar
+        if semana_atual_fechada:
+            iso_year = iso_year_atual
+            iso_week = iso_week_atual
+        else:
+            # Usar semana anterior
+            segunda_atual = datetime.fromisocalendar(iso_year_atual, iso_week_atual, 1)
+            segunda_anterior = segunda_atual - timedelta(days=7)
+            iso_anterior = segunda_anterior.isocalendar()
+            iso_year = iso_anterior.year
+            iso_week = iso_anterior.week
+        
+        # Calcular intervalo da semana (segunda a sexta)
+        try:
+            inicio = datetime.fromisocalendar(iso_year, iso_week, 1).date()
+            fim = datetime.fromisocalendar(iso_year, iso_week, 5).date()
+            intervalo = f"{inicio:%d/%m}–{fim:%d/%m}"
+            # Usar mês em português
+            mes_nome = f"{MESES_PT[inicio.month]}/{str(inicio.year)[2:]}"
+        except ValueError:
+            inicio = hoje
+            fim = hoje
+            intervalo = "—"
+            mes_nome = ""
+        
+        # Gerar label no formato do Streamlit
+        label = f"Semana {iso_week} ({intervalo}) · {mes_nome} · ISO {iso_week}/{iso_year} ✅"
+        
+        logger.info(f"[EmailReport] Semana de fechamento: ISO {iso_week}/{iso_year} ({intervalo})")
+        
+        return {
+            'iso_year': iso_year,
+            'iso_week': iso_week,
+            'inicio': inicio,
+            'fim': fim,
+            'intervalo': intervalo,
+            'mes_nome': mes_nome,
+            'label': label
+        }
+    
+    @classmethod
+    def _aplicar_semana_email(cls, df: pd.DataFrame, semana_meta: dict) -> pd.DataFrame:
+        """
+        Aplica dados da semana específica ao DataFrame.
+        
+        Replica a lógica de _aplicar_semana do Streamlit:
+        - Extrai volumes do JSON Semanas_Mes_Atual
+        - Recalcula WoW_Semana_Atual e WoW_Semana_Anterior
+        - Calcula Variacao_Semanal_Pct
+        
+        Args:
+            df: DataFrame original
+            semana_meta: Metadados da semana (de _obter_semana_fechamento)
+            
+        Returns:
+            DataFrame com volumes recalculados
+        """
+        if df.empty or not semana_meta:
+            return df.copy()
+        
+        iso_y_sel = semana_meta.get('iso_year', 0)
+        iso_w_sel = semana_meta.get('iso_week', 0)
+        
+        # Calcular semana anterior
+        try:
+            segunda_sel = datetime.fromisocalendar(iso_y_sel, iso_w_sel, 1)
+            segunda_prev = segunda_sel - timedelta(days=7)
+            iso_prev = segunda_prev.isocalendar()
+            iso_y_prev = iso_prev.year
+            iso_w_prev = iso_prev.week
+        except ValueError:
+            iso_y_prev = iso_y_sel
+            iso_w_prev = max(1, iso_w_sel - 1)
+        
+        logger.info(f"[EmailReport] Aplicando semana: {iso_w_sel}/{iso_y_sel} vs anterior {iso_w_prev}/{iso_y_prev}")
+        
+        df_out = df.copy()
+        vols_atual = []
+        vols_ant = []
+        
+        for _, row in df_out.iterrows():
+            # Parsear JSON de semanas
+            semanas_json_str = row.get('Semanas_Mes_Atual', '[]')
+            try:
+                semanas_json = json.loads(semanas_json_str) if isinstance(semanas_json_str, str) else (semanas_json_str if isinstance(semanas_json_str, list) else [])
+            except (json.JSONDecodeError, TypeError):
+                semanas_json = []
+            
+            # Criar mapa de semanas
+            semanas_map = {}
+            for s in semanas_json:
+                ky = (s.get('iso_year'), s.get('iso_week'))
+                if ky[0] and ky[1]:
+                    semanas_map[ky] = s
+            
+            # Obter volume da semana selecionada
+            atual_info = semanas_map.get((iso_y_sel, iso_w_sel), {})
+            vol_atual = atual_info.get('volume_util', 0) or 0
+            
+            # Obter volume da semana anterior
+            vol_ant = atual_info.get('volume_semana_anterior')
+            
+            # Fallback: buscar na semana anterior diretamente
+            if vol_ant is None or vol_ant == 0:
+                prev_info = semanas_map.get((iso_y_prev, iso_w_prev), {})
+                vol_ant = prev_info.get('volume_util', 0) or 0
+            
+            vols_atual.append(float(vol_atual))
+            vols_ant.append(float(vol_ant) if vol_ant is not None else 0.0)
+        
+        df_out['WoW_Semana_Atual'] = vols_atual
+        df_out['WoW_Semana_Anterior'] = vols_ant
+        
+        # Calcular variação percentual
+        df_out['Variacao_Semanal_Pct'] = np.where(
+            df_out['WoW_Semana_Anterior'] > 0,
+            ((df_out['WoW_Semana_Atual'] - df_out['WoW_Semana_Anterior']) / df_out['WoW_Semana_Anterior']) * 100,
+            np.where(
+                (df_out['WoW_Semana_Anterior'] == 0) & (df_out['WoW_Semana_Atual'] == 0),
+                -100.0,  # Ambos 0 = queda total
+                0.0      # Anterior 0, atual > 0 = crescimento indefinido
+            )
+        )
+        
+        total_atual = sum(vols_atual)
+        total_ant = sum(vols_ant)
+        logger.info(f"[EmailReport] Volumes recalculados: Atual={total_atual:,.0f}, Anterior={total_ant:,.0f}")
+        
+        return df_out
+    
+    @classmethod
+    def _df_para_html(cls, df: pd.DataFrame, max_rows: int = None) -> str:
+        """Converte DataFrame para tabela HTML estilizada."""
+        if df.empty:
+            return "<p><em>Nenhum dado disponível.</em></p>"
+        
+        df_display = df.head(max_rows) if max_rows else df
+        
+        # Mapeamento de nomes de colunas para exibição
+        NOMES_COLUNAS = {
+            'Nome_Fantasia_PCL': 'Laboratório',
+            'Estado': 'UF',
+            'Data_Ultima_Coleta': 'Última Coleta',
+            'Dias_Sem_Coleta': 'Dias Off',
+            'WoW_Semana_Anterior': 'Vol. Ant.',
+            'WoW_Semana_Atual': 'Vol. Atual',
+            'WoW_Percentual': 'WoW %',
+            'Variacao_Semanal_Pct': 'Var. WoW %',
+            'Media_Semanal_2025': 'Média 25',
+            'Baseline_Mensal': 'Baseline',
+            'Total_Coletas_2025': 'Total 2025',
+            'Total_Coletas_2024': 'Total 2024',
+            'Variacao_Percentual': 'Var. %',
+            'Coletas_Mes_Atual': 'Coletas Mês',
+            'Gap_Baseline': 'Gap',
+        }
+        
+        # Colunas de porcentagem que precisam do símbolo %
+        COLUNAS_PERCENTUAL = ['Variacao', 'Pct', 'WoW_Percentual', 'Variacao_Semanal_Pct', 'Variacao_Percentual']
+        
+        # Colunas de data
+        COLUNAS_DATA = ['Data_Ultima_Coleta', 'Data_Primeira_Coleta']
+        
+        # Formatar valores numéricos
+        html = "<table><thead><tr>"
+        for col in df_display.columns:
+            nome_display = NOMES_COLUNAS.get(col, col)
+            html += f"<th>{nome_display}</th>"
+        html += "</tr></thead><tbody>"
+        
+        for _, row in df_display.iterrows():
+            html += "<tr>"
+            for col in df_display.columns:
+                val = row[col]
+                cell_class = ""
+                
+                # Aplicar classes de estilo
+                if col == 'Em_Risco' and val == 'Sim':
+                    cell_class = ' class="risco-sim"'
+                elif any(p in col for p in ['Variacao', 'Pct', 'WoW']):
+                    try:
+                        num_val = float(str(val).replace('%', '').replace(',', '.'))
+                        if num_val < 0:
+                            cell_class = ' class="variacao-negativa"'
+                        elif num_val > 0:
+                            cell_class = ' class="variacao-positiva"'
+                    except:
+                        pass
+                
+                # Formatar valor
+                if pd.isna(val):
+                    val_str = "—"
+                elif col in COLUNAS_DATA:
+                    # Formatar datas como DD/MM/YYYY
+                    try:
+                        if hasattr(val, 'strftime'):
+                            val_str = val.strftime('%d/%m/%Y')
+                        else:
+                            dt = pd.to_datetime(val)
+                            val_str = dt.strftime('%d/%m/%Y')
+                    except:
+                        val_str = str(val)[:10]  # Fallback: primeiros 10 caracteres
+                elif any(p in col for p in COLUNAS_PERCENTUAL):
+                    # Formatar percentuais com símbolo %
+                    try:
+                        num_val = float(val)
+                        val_str = f"{num_val:+.1f}%" if num_val != 0 else "0.0%"
+                    except:
+                        val_str = str(val)
+                elif isinstance(val, float):
+                    # Números decimais (volumes, médias) - inteiros com separador de milhar
+                    if val == int(val):
+                        val_str = f"{int(val):,}"
+                    else:
+                        val_str = f"{val:,.1f}"
+                elif isinstance(val, (int, np.integer)):
+                    val_str = f"{val:,}"
+                else:
+                    val_str = str(val)
+                
+                html += f"<td{cell_class}>{val_str}</td>"
+            html += "</tr>"
+        
+        html += "</tbody></table>"
+        
+        if max_rows and len(df) > max_rows:
+            html += f"<p><em>Mostrando {max_rows} de {len(df)} registros. Veja o anexo Excel para dados completos.</em></p>"
+        
+        return html
+    
+    @classmethod
+    def _gerar_excel_anexo(cls, sheets_data: dict) -> bytes:
+        """Gera arquivo Excel com múltiplas abas."""
+        from io import BytesIO
+        
+        buffer = BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            for sheet_name, df in sheets_data.items():
+                if not df.empty:
+                    # Truncar nome da aba para 31 caracteres (limite do Excel)
+                    safe_name = sheet_name[:31]
+                    
+                    # Remover timezone de colunas datetime (Excel não suporta)
+                    df_excel = df.copy()
+                    for col in df_excel.columns:
+                        if pd.api.types.is_datetime64_any_dtype(df_excel[col]):
+                            try:
+                                # Converter para timezone-naive
+                                df_excel[col] = pd.to_datetime(df_excel[col]).dt.tz_localize(None)
+                            except Exception:
+                                # Se falhar, converter para string
+                                df_excel[col] = df_excel[col].astype(str)
+                    
+                    df_excel.to_excel(writer, sheet_name=safe_name, index=False)
+        
+        return buffer.getvalue()
+    
+    @classmethod
+    def _preparar_dados_risco(cls, df: pd.DataFrame, semana_meta: dict = None) -> pd.DataFrame:
+        """Prepara DataFrame com lista de risco.
+        
+        Aplica os filtros padrão do app Streamlit:
+        - Porte: Grande, Médio/Grande
+        - Queda WoW: Acima de 50%
+        - Exclui: Perdas Recentes e Antigas
+        - Usa dados da semana fechada (não dados crus)
+        
+        Args:
+            df: DataFrame original
+            semana_meta: Metadados da semana (opcional, se None calcula automaticamente)
+        """
+        cols_risco = [
+            "Nome_Fantasia_PCL", "Rede", "Estado", "Porte", "VIP",
+            "Data_Ultima_Coleta", "Dias_Sem_Coleta",
+            "WoW_Semana_Anterior", "WoW_Semana_Atual", "WoW_Percentual",
+            "Variacao_Semanal_Pct",  # Coluna de variação WoW
+            "Media_Semanal_2025", "Baseline_Mensal",
+            "Em_Risco", "CNPJ_PCL"
+        ]
+        
+        df_risco = df.copy()
+        
+        # Debug: log original data info
+        logger.info(f"[EmailReport] DataFrame original: {len(df_risco)} labs")
+        if 'Porte' in df_risco.columns:
+            porte_counts = df_risco['Porte'].value_counts().to_dict()
+            logger.info(f"[EmailReport] Portes no DataFrame: {porte_counts}")
+        else:
+            logger.warning("[EmailReport] ATENÇÃO: Coluna 'Porte' não encontrada no DataFrame!")
+        
+        # ============================================
+        # PASSO 0: Obter semana de fechamento e aplicar
+        # ============================================
+        if semana_meta is None:
+            semana_meta = cls._obter_semana_fechamento()
+        
+        # Aplicar dados da semana específica (recalcula WoW)
+        df_risco = cls._aplicar_semana_email(df_risco, semana_meta)
+        
+        # ============================================
+        # PASSO 1: Excluir Perdas (Recente e Antiga)
+        # ============================================
+        if 'Classificacao_Perda_V2' in df_risco.columns:
+            antes_filtro = len(df_risco)
+            df_risco = df_risco[~df_risco['Classificacao_Perda_V2'].isin(['Perda Recente', 'Perda Antiga', 'Perda Consolidada'])]
+            logger.info(f"[EmailReport] Exclusão de Perdas: {antes_filtro} -> {len(df_risco)} labs")
+        
+        # ============================================
+        # FILTRO 1: Porte (Grande e Médio/Grande)
+        # ============================================
+        portes_alvo = ['Grande', 'Médio/Grande']
+        if 'Porte' in df_risco.columns:
+            antes_filtro = len(df_risco)
+            df_risco = df_risco[df_risco['Porte'].isin(portes_alvo)]
+            logger.info(f"[EmailReport] Filtro Porte: {antes_filtro} -> {len(df_risco)} labs (Grande + Médio/Grande)")
+        
+        # Se ficou vazio após filtro de porte, retornar vazio
+        if df_risco.empty:
+            logger.warning("[EmailReport] DataFrame vazio após filtro de Porte!")
+            return pd.DataFrame()
+        
+        # ============================================
+        # FILTRO 2: Queda WoW > 50% (variação negativa)
+        # ============================================
+        # A Variacao_Semanal_Pct já foi calculada em _aplicar_semana_email
+        if 'Variacao_Semanal_Pct' in df_risco.columns:
+            antes_filtro = len(df_risco)
+            df_risco = df_risco[df_risco['Variacao_Semanal_Pct'] <= -50]
+            logger.info(f"[EmailReport] Filtro WoW >50%: {antes_filtro} -> {len(df_risco)} labs com queda significativa")
+        
+        # ============================================
+        # Definir Em_Risco baseado em status
+        # ============================================
+        if 'Status_Risco_V2' in df_risco.columns:
+            df_risco['Em_Risco'] = df_risco['Status_Risco_V2'].apply(
+                lambda x: 'Sim' if 'Risco' in str(x) or 'Perda' in str(x) else 'Não'
+            )
+        elif 'Gatilho_Dias_Sem_Coleta' in df_risco.columns:
+            df_risco['Em_Risco'] = df_risco['Gatilho_Dias_Sem_Coleta'].apply(
+                lambda x: 'Sim' if x else 'Não'
+            )
+        else:
+            df_risco['Em_Risco'] = 'Sim'  # Se passou nos filtros, está em risco
+        
+        # Filtrar apenas colunas existentes
+        cols_existentes = [c for c in cols_risco if c in df_risco.columns]
+        df_risco = df_risco[cols_existentes].copy()
+        
+        # Ordenar por dias sem coleta (mais críticos primeiro)
+        if 'Dias_Sem_Coleta' in df_risco.columns:
+            df_risco = df_risco.sort_values('Dias_Sem_Coleta', ascending=False)
+        
+        return df_risco
+    
+    @classmethod
+    def _preparar_dados_perdas(cls, df: pd.DataFrame, tipo: str = 'recente') -> pd.DataFrame:
+        """Prepara DataFrame com perdas recentes ou antigas.
+        
+        Aplica filtro padrão: Porte Grande e Médio/Grande
+        """
+        cols_perda = [
+            "Nome_Fantasia_PCL", "Rede", "Estado", "Porte", "VIP",
+            "Data_Ultima_Coleta", "Dias_Sem_Coleta",
+            "Total_Coletas_2025", "Baseline_Mensal", "CNPJ_PCL"
+        ]
+        
+        df_perda = df.copy()
+        
+        # ============================================
+        # FILTRO 1: Porte (Grande e Médio/Grande)
+        # ============================================
+        portes_alvo = ['Grande', 'Médio/Grande']
+        if 'Porte' in df_perda.columns:
+            antes_filtro = len(df_perda)
+            df_perda = df_perda[df_perda['Porte'].isin(portes_alvo)]
+            logger.info(f"[EmailReport Perdas {tipo}] Filtro Porte: {antes_filtro} -> {len(df_perda)} labs")
+        
+        # Filtrar por tipo de perda
+        if 'Classificacao_Perda_V2' in df_perda.columns:
+            antes_filtro = len(df_perda)
+            if tipo == 'recente':
+                df_perda = df_perda[df_perda['Classificacao_Perda_V2'] == 'Perda Recente']
+            elif tipo == 'antiga':
+                df_perda = df_perda[df_perda['Classificacao_Perda_V2'].isin(['Perda Antiga', 'Perda Consolidada'])]
+            logger.info(f"[EmailReport Perdas {tipo}] Filtro tipo: {antes_filtro} -> {len(df_perda)} labs")
+        else:
+            # Fallback: usar dias sem coleta
+            if tipo == 'recente':
+                df_perda = df_perda[(df_perda['Dias_Sem_Coleta'] >= 30) & (df_perda['Dias_Sem_Coleta'] < 180)]
+            elif tipo == 'antiga':
+                df_perda = df_perda[df_perda['Dias_Sem_Coleta'] >= 180]
+        
+        cols_existentes = [c for c in cols_perda if c in df_perda.columns]
+        df_perda = df_perda[cols_existentes].copy()
+        
+        if 'Dias_Sem_Coleta' in df_perda.columns:
+            df_perda = df_perda.sort_values('Dias_Sem_Coleta', ascending=False)
+        
+        return df_perda
+    
+    @classmethod
+    def _preparar_evolucao_mes(cls, df: pd.DataFrame) -> pd.DataFrame:
+        """Prepara DataFrame com evolução semanal do mês."""
+        # Tentar extrair dados semanais do JSON
+        dados_semanas = []
+        
+        if 'Semanas_Mes_Atual' in df.columns:
+            hoje = datetime.now()
+            mes_atual = hoje.month
+            ano_atual = hoje.year
+            
+            semanas_agregadas = {}
+            
+            for val in df['Semanas_Mes_Atual'].dropna():
+                try:
+                    semanas_json = json.loads(val) if isinstance(val, str) else val
+                    if not isinstance(semanas_json, list):
+                        continue
+                    
+                    for semana in semanas_json:
+                        iso_week = semana.get('iso_week')
+                        iso_year = semana.get('iso_year')
+                        if not iso_week or not iso_year:
+                            continue
+                        
+                        key = (iso_year, iso_week)
+                        if key not in semanas_agregadas:
+                            semanas_agregadas[key] = {
+                                'volume': 0,
+                                'volume_anterior': 0,
+                                'fechada': semana.get('fechada', False)
+                            }
+                        
+                        semanas_agregadas[key]['volume'] += semana.get('volume_util', 0) or 0
+                        semanas_agregadas[key]['volume_anterior'] += semana.get('volume_semana_anterior', 0) or 0
+                        semanas_agregadas[key]['fechada'] = semanas_agregadas[key]['fechada'] or semana.get('fechada', False)
+                except:
+                    continue
+            
+            for (iso_year, iso_week), info in sorted(semanas_agregadas.items()):
+                vol_atual = info['volume']
+                vol_ant = info['volume_anterior']
+                
+                if vol_ant > 0:
+                    variacao = ((vol_atual - vol_ant) / vol_ant) * 100
+                else:
+                    variacao = 0.0 if vol_atual == 0 else 100.0
+                
+                try:
+                    semana_inicio = datetime.fromisocalendar(iso_year, iso_week, 1)
+                    semana_fim = semana_inicio + timedelta(days=6)
+                    intervalo = f"{semana_inicio:%d/%m} - {semana_fim:%d/%m}"
+                except:
+                    intervalo = "-"
+                
+                dados_semanas.append({
+                    "Semana ISO": f"{iso_week}/{iso_year}",
+                    "Intervalo": intervalo,
+                    "Volume Atual": vol_atual,
+                    "Volume Anterior": vol_ant,
+                    "WoW %": f"{variacao:.1f}%",
+                    "Status": "Fechada" if info['fechada'] else "Em Andamento"
+                })
+        
+        return pd.DataFrame(dados_semanas) if dados_semanas else pd.DataFrame()
+    
+    @classmethod
+    def _preparar_dados_mensal(cls, df: pd.DataFrame) -> pd.DataFrame:
+        """Prepara DataFrame para fechamento mensal.
+        
+        Aplica filtro padrão: Porte Grande e Médio/Grande
+        """
+        cols_mensal = [
+            "Nome_Fantasia_PCL", "CNPJ_PCL", "VIP", "Rede", "Estado", "Porte",
+            "Baseline_Mensal", "Coletas_Mes_Atual",
+            "Total_Coletas_2025", "Total_Coletas_2024",
+            "Variacao_Percentual", "Status_Risco_V2"
+        ]
+        
+        df_mensal = df.copy()
+        
+        # ============================================
+        # FILTRO: Porte (Grande e Médio/Grande)
+        # ============================================
+        portes_alvo = ['Grande', 'Médio/Grande']
+        if 'Porte' in df_mensal.columns:
+            df_mensal = df_mensal[df_mensal['Porte'].isin(portes_alvo)]
+            logger.info(f"[EmailReport Mensal] Filtro Porte aplicado: {len(df_mensal)} labs (Grande + Médio/Grande)")
+        
+        cols_existentes = [c for c in cols_mensal if c in df_mensal.columns]
+        df_mensal = df_mensal[cols_existentes].copy()
+        
+        # Calcular gap vs baseline
+        if 'Baseline_Mensal' in df_mensal.columns and 'Coletas_Mes_Atual' in df_mensal.columns:
+            df_mensal['Gap_Baseline'] = df_mensal['Coletas_Mes_Atual'] - df_mensal['Baseline_Mensal']
+            df_mensal = df_mensal.sort_values('Gap_Baseline', ascending=True)
+        
+        return df_mensal
+    
+    @classmethod
+    def gerar_relatorio_semanal_html(cls, df: pd.DataFrame) -> tuple:
+        """
+        Gera relatório semanal em HTML.
+        
+        Returns:
+            tuple: (html_content, excel_bytes, semana_meta)
+        """
+        hoje = datetime.now()
+        
+        # Obter semana de fechamento (replica lógica do Streamlit)
+        semana_meta = cls._obter_semana_fechamento()
+        
+        # Aplicar semana aos dados antes de processar
+        df_com_semana = cls._aplicar_semana_email(df.copy(), semana_meta)
+        
+        # Preparar dados (passa semana_meta para consistência)
+        df_risco = cls._preparar_dados_risco(df, semana_meta)
+        df_perda_recente = cls._preparar_dados_perdas(df, 'recente')
+        df_perda_antiga = cls._preparar_dados_perdas(df, 'antiga')
+        df_evolucao = cls._preparar_evolucao_mes(df)
+        
+        # Calcular KPIs (usar dados da semana específica)
+        total_labs = len(df)
+        labs_em_risco = len(df_risco[df_risco.get('Em_Risco', pd.Series()) == 'Sim']) if 'Em_Risco' in df_risco.columns else 0
+        perdas_recentes = len(df_perda_recente)
+        perdas_antigas = len(df_perda_antiga)
+        
+        # Volumes da semana específica (após filtros de porte)
+        portes_alvo = ['Grande', 'Médio/Grande']
+        df_filtrado = df_com_semana[df_com_semana['Porte'].isin(portes_alvo)] if 'Porte' in df_com_semana.columns else df_com_semana
+        vol_semana = df_filtrado['WoW_Semana_Atual'].sum() if 'WoW_Semana_Atual' in df_filtrado.columns else 0
+        vol_anterior = df_filtrado['WoW_Semana_Anterior'].sum() if 'WoW_Semana_Anterior' in df_filtrado.columns else 0
+        
+        # Label da semana
+        semana_label = semana_meta.get('label', '')
+        
+        # Gerar HTML
+        html = f"""
+        <!DOCTYPE html>
+        <html lang="pt-BR">
+        <head>
+            <meta charset="UTF-8">
+            <title>Fechamento Semanal de Churn - {semana_meta.get('intervalo', hoje.strftime('%d/%m/%Y'))}</title>
+            {cls._criar_estilo_html()}
+        </head>
+        <body>
+            <div class="container">
+                <h1>📊 Fechamento Semanal de Churn</h1>
+                <p style="font-size: 1.2em; background: #e8f5e9; padding: 10px; border-radius: 8px; margin-bottom: 20px;">
+                    <strong>📅 {semana_label}</strong>
+                </p>
+                <p><strong>Gerado em:</strong> {hoje.strftime('%d/%m/%Y %H:%M')}</p>
+                
+                <h2>📈 Resumo da Semana (Porte Grande + Médio/Grande)</h2>
+                <div class="kpi-container">
+                    <div class="kpi-card">
+                        <div class="kpi-value">{total_labs:,}</div>
+                        <div class="kpi-label">Labs Monitorados</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-value">{labs_em_risco:,}</div>
+                        <div class="kpi-label">Labs em Risco (queda &gt;50%)</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-value">{vol_semana:,.0f}</div>
+                        <div class="kpi-label">Volume Semana Selecionada</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-value">{vol_anterior:,.0f}</div>
+                        <div class="kpi-label">Volume Semana Anterior</div>
+                    </div>
+                </div>
+                
+                <h2>🚨 Lista de Risco (Top 30)</h2>
+                {cls._df_para_html(df_risco[df_risco.get('Em_Risco', pd.Series()) == 'Sim'] if 'Em_Risco' in df_risco.columns else df_risco.head(30), max_rows=30)}
+                
+                <h2>📉 Perdas Recentes - &lt;6 meses (Top 20)</h2>
+                {cls._df_para_html(df_perda_recente, max_rows=20)}
+                
+                <h2>🗄️ Perdas Antigas - &gt;6 meses (Top 15)</h2>
+                {cls._df_para_html(df_perda_antiga, max_rows=15)}
+                
+                <h2>📆 Evolução do Mês (Semana a Semana)</h2>
+                {cls._df_para_html(df_evolucao)}
+                
+                <div class="footer">
+                    <p>📎 Em anexo: Relatório completo em Excel com todos os dados.</p>
+                    <p>Este relatório foi gerado automaticamente pelo Sistema de Churn PCLs.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Gerar Excel
+        excel_data = cls._gerar_excel_anexo({
+            'Lista de Risco': df_risco,
+            'Perdas Recentes': df_perda_recente,
+            'Perdas Antigas': df_perda_antiga,
+            'Evolução Mês': df_evolucao
+        })
+        
+        return html, excel_data, semana_meta
+    
+    @classmethod
+    def gerar_relatorio_mensal_html(cls, df: pd.DataFrame) -> tuple:
+        """
+        Gera relatório mensal em HTML.
+        
+        Returns:
+            tuple: (html_content, excel_bytes)
+        """
+        # Mapeamento de meses em português
+        MESES_PT_COMPLETO = {
+            1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho',
+            7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'
+        }
+        
+        hoje = datetime.now()
+        mes_nome = f"{MESES_PT_COMPLETO[hoje.month]}/{hoje.year}"
+        
+        # Preparar dados
+        df_mensal = cls._preparar_dados_mensal(df)
+        df_risco = cls._preparar_dados_risco(df)
+        
+        # Calcular KPIs
+        total_labs = len(df)
+        total_coletas_2025 = df['Total_Coletas_2025'].sum() if 'Total_Coletas_2025' in df.columns else 0
+        total_coletas_2024 = df['Total_Coletas_2024'].sum() if 'Total_Coletas_2024' in df.columns else 0
+        labs_em_risco = len(df_risco[df_risco.get('Em_Risco', pd.Series()) == 'Sim']) if 'Em_Risco' in df_risco.columns else 0
+        
+        media_baseline = df['Baseline_Mensal'].mean() if 'Baseline_Mensal' in df.columns else 0
+        
+        # Gerar HTML
+        html = f"""
+        <!DOCTYPE html>
+        <html lang="pt-BR">
+        <head>
+            <meta charset="UTF-8">
+            <title>Relatório Mensal de Churn - {mes_nome}</title>
+            {cls._criar_estilo_html()}
+        </head>
+        <body>
+            <div class="container">
+                <h1>📊 Relatório Mensal de Churn</h1>
+                <p><strong>Período:</strong> {mes_nome}</p>
+                <p><strong>Gerado em:</strong> {hoje.strftime('%d/%m/%Y %H:%M')}</p>
+                
+                <h2>📈 KPIs Executivos</h2>
+                <div class="kpi-container">
+                    <div class="kpi-card">
+                        <div class="kpi-value">{total_labs:,}</div>
+                        <div class="kpi-label">Labs Monitorados</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-value">{total_coletas_2025:,}</div>
+                        <div class="kpi-label">Total Coletas 2025</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-value">{labs_em_risco:,}</div>
+                        <div class="kpi-label">Labs em Risco</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-value">{media_baseline:,.0f}</div>
+                        <div class="kpi-label">Baseline Médio</div>
+                    </div>
+                </div>
+                
+                <h2>📋 Listagem Geral - Fechamento Mensal (Top 50)</h2>
+                {cls._df_para_html(df_mensal, max_rows=50)}
+                
+                <h2>🚨 Labs em Risco (Top 30)</h2>
+                {cls._df_para_html(df_risco[df_risco.get('Em_Risco', pd.Series()) == 'Sim'] if 'Em_Risco' in df_risco.columns else df_risco.head(30), max_rows=30)}
+                
+                <div class="footer">
+                    <p>📎 Em anexo: Relatório completo em Excel com todos os dados.</p>
+                    <p>Este relatório foi gerado automaticamente pelo Sistema de Churn PCLs.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Gerar Excel
+        excel_data = cls._gerar_excel_anexo({
+            'Fechamento Mensal': df_mensal,
+            'Lista de Risco': df_risco
+        })
+        
+        return html, excel_data
+    
+    @classmethod
+    def enviar_email(cls, assunto: str, html_content: str, excel_attachment: bytes, nome_anexo: str) -> bool:
+        """
+        Envia email com conteúdo HTML e anexo Excel.
+        
+        Returns:
+            bool: True se enviado com sucesso
+        """
+        import smtplib
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.base import MIMEBase
+        from email import encoders
+        
+        try:
+            msg = MIMEMultipart('mixed')
+            msg['Subject'] = assunto
+            msg['From'] = cls.EMAIL_REMETENTE
+            msg['To'] = ', '.join(cls.EMAIL_DESTINATARIOS)
+            
+            # Corpo HTML
+            html_part = MIMEText(html_content, 'html', 'utf-8')
+            msg.attach(html_part)
+            
+            # Anexo Excel
+            excel_part = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            excel_part.set_payload(excel_attachment)
+            encoders.encode_base64(excel_part)
+            excel_part.add_header('Content-Disposition', f'attachment; filename="{nome_anexo}"')
+            msg.attach(excel_part)
+            
+            # Enviar
+            with smtplib.SMTP(cls.SMTP_SERVER, cls.SMTP_PORT) as server:
+                server.starttls()
+                server.login(cls.EMAIL_REMETENTE, cls.SENHA_EMAIL)
+                server.sendmail(cls.EMAIL_REMETENTE, cls.EMAIL_DESTINATARIOS, msg.as_string())
+            
+            logger.info(f"Email enviado com sucesso: {assunto}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Erro ao enviar email: {e}")
+            return False
+    
+    @classmethod
+    def enviar_relatorio_semanal(cls, df: pd.DataFrame) -> bool:
+        """Gera e envia relatório semanal."""
+        hoje = datetime.now()
+        
+        logger.info("Gerando relatório semanal...")
+        html, excel, semana_meta = cls.gerar_relatorio_semanal_html(df)
+        
+        # Usar informações da semana no assunto
+        iso_week = semana_meta.get('iso_week', '')
+        iso_year = semana_meta.get('iso_year', '')
+        intervalo = semana_meta.get('intervalo', hoje.strftime('%d/%m/%Y'))
+        
+        assunto = f"📊 Fechamento Semanal ISO {iso_week}/{iso_year} ({intervalo})"
+        nome_anexo = f"fechamento_semanal_iso{iso_week}_{iso_year}.xlsx"
+        
+        return cls.enviar_email(assunto, html, excel, nome_anexo)
+    
+    @classmethod
+    def enviar_relatorio_mensal(cls, df: pd.DataFrame) -> bool:
+        """Gera e envia relatório mensal."""
+        hoje = datetime.now()
+        
+        logger.info("Gerando relatório mensal...")
+        html, excel = cls.gerar_relatorio_mensal_html(df)
+        
+        assunto = f"📊 Relatório Mensal de Churn - {hoje.strftime('%B/%Y').title()}"
+        nome_anexo = f"relatorio_mensal_{hoje.strftime('%Y%m')}.xlsx"
+        
+        return cls.enviar_email(assunto, html, excel, nome_anexo)
+    
+    @classmethod
+    def verificar_e_enviar(cls, df: pd.DataFrame) -> None:
+        """
+        Verifica se é hora de enviar relatórios e dispara se necessário.
+        
+        - Semanal: Sexta-feira após 17h
+        - Mensal: Último dia do mês
+        - MODO_TESTE: Força envio imediato
+        """
+        hoje = datetime.now()
+        
+        # Modo teste: força envio imediato
+        if cls.MODO_TESTE:
+            logger.info("[MODO_TESTE] Forçando envio de relatórios para teste...")
+            cls.enviar_relatorio_semanal(df)
+            cls.enviar_relatorio_mensal(df)
+            logger.info("[MODO_TESTE] Relatórios de teste enviados.")
+            return
+        
+        # Verificar relatório semanal (sexta-feira após 17h)
+        if hoje.weekday() == 4 and hoje.hour >= 17:  # 4 = sexta-feira
+            data_hoje = hoje.date()
+            if cls._ultimo_envio_semanal != data_hoje:
+                logger.info("Sexta-feira após 17h detectada. Enviando relatório semanal...")
+                if cls.enviar_relatorio_semanal(df):
+                    cls._ultimo_envio_semanal = data_hoje
+        
+        # Verificar relatório mensal (último dia do mês)
+        ultimo_dia_mes = calendar.monthrange(hoje.year, hoje.month)[1]
+        if hoje.day == ultimo_dia_mes:
+            mes_atual = (hoje.year, hoje.month)
+            if cls._ultimo_envio_mensal != mes_atual:
+                logger.info("Último dia do mês detectado. Enviando relatório mensal...")
+                if cls.enviar_relatorio_mensal(df):
+                    cls._ultimo_envio_mensal = mes_atual
+
+
+def testar_envio_email():
+    """
+    Função auxiliar para testar o envio de email manualmente.
+    Execute: python -c "from gerador_dados_churn import testar_envio_email; testar_envio_email()"
+    """
+    logger.info("Iniciando teste de envio de email...")
+    
+    # Carregar dados
+    dados = carregar_dados_csv()
+    if dados is None:
+        logger.error("Não foi possível carregar dados para teste.")
+        return
+    
+    df = dados.get('laboratories')
+    if df is None or df.empty:
+        logger.error("DataFrame vazio. Execute primeiro o gerador de dados.")
+        return
+    
+    # Carregar arquivo de análise se existir
+    arquivo_churn = os.path.join(OUTPUT_DIR, CHURN_ANALYSIS_FILE)
+    if os.path.exists(arquivo_churn):
+        df = pd.read_parquet(arquivo_churn)
+        logger.info(f"Carregado arquivo de análise com {len(df)} registros.")
+    
+    # Forçar modo teste
+    EmailReportManager.MODO_TESTE = False
+    EmailReportManager.verificar_e_enviar(df)
+    
+    logger.info("Teste de envio concluído. Verifique sua caixa de entrada.")
+
 
 if __name__ == "__main__":
     executar_gerador()

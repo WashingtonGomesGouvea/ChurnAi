@@ -72,7 +72,7 @@ REDUCAO_ALTO_RISCO = float(os.getenv('REDUCAO_ALTO_RISCO', 0.50))  # 50%
 REDUCAO_MEDIO_RISCO = float(os.getenv('REDUCAO_MEDIO_RISCO', 0.30))  # 30%
 
 # Configurações de tempo
-INTERVALO_EXECUCAO = int(os.getenv('INTERVALO_EXECUCAO', 6))  # Horas entre execuções do gerador
+INTERVALO_EXECUCAO = int(os.getenv('INTERVALO_EXECUCAO', 2))  # Horas entre execuções do gerador
 
 # Configurações de log
 LOG_FILE = os.getenv('LOG_FILE', "gerador_dados_churn.log")

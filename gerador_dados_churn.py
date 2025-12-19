@@ -2139,8 +2139,9 @@ def calcular_metricas_churn():
     try:
         status_counts = df_churn['Status_Risco'].value_counts()
         logger.info(f"Distribuição de risco: {dict(status_counts)}")
-        if 'Alto' in status_counts and status_counts['Alto'] >= ALERTA_THRESHOLD_ALTO:
-            enviar_alerta_email(df_churn)
+        # DESABILITADO: Alerta diário por email não utilizado
+        # if 'Alto' in status_counts and status_counts['Alto'] >= ALERTA_THRESHOLD_ALTO:
+        #     enviar_alerta_email(df_churn)
     except Exception:
         pass
     
@@ -2179,13 +2180,14 @@ def executar_extracoes():
 
 def executar_gerador():
     """Executa o gerador em loop com agendamento."""
-    logger.info(f"Iniciando gerador Churn - execução a cada 15 minutos.")
+    from config_churn import INTERVALO_EXECUCAO
+    logger.info(f"Iniciando gerador Churn - execução a cada {INTERVALO_EXECUCAO} hora(s).")
     
     # Executar primeira vez
     executar_extracoes()
     
     # Agendar execuções futuras
-    schedule.every(15).minutes.do(executar_extracoes)
+    schedule.every(INTERVALO_EXECUCAO).hours.do(executar_extracoes)
     
     while True:
         try:
@@ -2257,6 +2259,7 @@ class EmailReportManager:
     - Relatório Semanal: Enviado toda sexta-feira após 17h
     - Relatório Mensal: Enviado no último dia do mês
     - MODO_TESTE: Quando True, força o envio imediato para teste
+    - Persistência: Status de envio salvo em arquivo JSON
     """
     
     # Configurações de Email (Office 365)
@@ -2267,11 +2270,70 @@ class EmailReportManager:
     EMAIL_DESTINATARIOS = ["washington.gouvea@synvia.com"]
     
     # Flag para modo de teste
-    MODO_TESTE = True
+    MODO_TESTE = False
     
-    # Controle de envio (para evitar duplicatas)
+    # Arquivo de controle de envio (para persistir entre reinícios)
+    ARQUIVO_CONTROLE = os.path.join(OUTPUT_DIR, "controle_envio_relatorios.json")
+    
+    # Controle de envio (em memória, carregado do arquivo)
     _ultimo_envio_semanal = None
     _ultimo_envio_mensal = None
+    _controle_carregado = False
+    
+    @classmethod
+    def _carregar_controle_envio(cls):
+        """Carrega status de último envio do arquivo JSON."""
+        if cls._controle_carregado:
+            return
+        
+        try:
+            if os.path.exists(cls.ARQUIVO_CONTROLE):
+                with open(cls.ARQUIVO_CONTROLE, 'r', encoding='utf-8') as f:
+                    dados = json.load(f)
+                
+                # Carregar último envio semanal
+                if dados.get('ultimo_envio_semanal'):
+                    try:
+                        cls._ultimo_envio_semanal = datetime.strptime(
+                            dados['ultimo_envio_semanal'], '%Y-%m-%d'
+                        ).date()
+                    except ValueError:
+                        cls._ultimo_envio_semanal = None
+                
+                # Carregar último envio mensal (tuple ano, mes)
+                if dados.get('ultimo_envio_mensal'):
+                    try:
+                        parts = dados['ultimo_envio_mensal'].split('-')
+                        cls._ultimo_envio_mensal = (int(parts[0]), int(parts[1]))
+                    except (ValueError, IndexError):
+                        cls._ultimo_envio_mensal = None
+                
+                logger.info(f"[EmailReport] Controle de envio carregado: "
+                           f"Semanal={cls._ultimo_envio_semanal}, "
+                           f"Mensal={cls._ultimo_envio_mensal}")
+            else:
+                logger.info("[EmailReport] Arquivo de controle não existe, iniciando limpo.")
+        except Exception as e:
+            logger.warning(f"[EmailReport] Erro ao carregar controle de envio: {e}")
+        
+        cls._controle_carregado = True
+    
+    @classmethod
+    def _salvar_controle_envio(cls):
+        """Salva status de último envio no arquivo JSON."""
+        try:
+            dados = {
+                'ultimo_envio_semanal': cls._ultimo_envio_semanal.isoformat() if cls._ultimo_envio_semanal else None,
+                'ultimo_envio_mensal': f"{cls._ultimo_envio_mensal[0]}-{cls._ultimo_envio_mensal[1]:02d}" if cls._ultimo_envio_mensal else None,
+                'atualizado_em': datetime.now().isoformat()
+            }
+            
+            with open(cls.ARQUIVO_CONTROLE, 'w', encoding='utf-8') as f:
+                json.dump(dados, f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"[EmailReport] Controle de envio salvo: {dados}")
+        except Exception as e:
+            logger.error(f"[EmailReport] Erro ao salvar controle de envio: {e}")
     
     @classmethod
     def _criar_estilo_html(cls) -> str:
@@ -3106,11 +3168,22 @@ class EmailReportManager:
         """
         Verifica se é hora de enviar relatórios e dispara se necessário.
         
+        Regras de envio:
         - Semanal: Sexta-feira após 17h
         - Mensal: Último dia do mês
         - MODO_TESTE: Força envio imediato
+        
+        Fallback para recuperação:
+        - Se o relatório semanal não foi enviado esta semana, envia imediatamente
+        - Se o relatório mensal do mês anterior não foi enviado, envia imediatamente
+        
+        O status de envio é persistido em arquivo JSON para sobreviver reinícios.
         """
+        # Carregar status de envio do arquivo (apenas uma vez)
+        cls._carregar_controle_envio()
+        
         hoje = datetime.now()
+        data_hoje = hoje.date()
         
         # Modo teste: força envio imediato
         if cls.MODO_TESTE:
@@ -3120,22 +3193,85 @@ class EmailReportManager:
             logger.info("[MODO_TESTE] Relatórios de teste enviados.")
             return
         
-        # Verificar relatório semanal (sexta-feira após 17h)
-        if hoje.weekday() == 4 and hoje.hour >= 17:  # 4 = sexta-feira
-            data_hoje = hoje.date()
-            if cls._ultimo_envio_semanal != data_hoje:
-                logger.info("Sexta-feira após 17h detectada. Enviando relatório semanal...")
-                if cls.enviar_relatorio_semanal(df):
-                    cls._ultimo_envio_semanal = data_hoje
+        # ============================================
+        # RELATÓRIO SEMANAL
+        # ============================================
+        # Calcular qual sexta-feira é a referência para esta semana
+        dias_desde_sexta = (hoje.weekday() - 4) % 7  # 0 se hoje é sexta, 1 se sábado, etc.
+        sexta_desta_semana = data_hoje - timedelta(days=dias_desde_sexta)
         
-        # Verificar relatório mensal (último dia do mês)
+        # Verificar se já passou da hora de envio (sexta 17h ou depois)
+        ja_passou_horario_envio = (
+            data_hoje >= sexta_desta_semana and 
+            (hoje.weekday() != 4 or hoje.hour >= 17)  # Não é sexta, ou é sexta após 17h
+        )
+        
+        # Verificar se já foi enviado para esta semana
+        ja_enviou_esta_semana = (
+            cls._ultimo_envio_semanal is not None and 
+            cls._ultimo_envio_semanal >= sexta_desta_semana
+        )
+        
+        if ja_passou_horario_envio and not ja_enviou_esta_semana:
+            if hoje.weekday() == 4:  # Sexta-feira
+                logger.info("Sexta-feira após 17h detectada. Enviando relatório semanal...")
+            else:
+                logger.info(f"[FALLBACK] Relatório semanal desta semana não foi enviado. "
+                           f"Última sexta: {sexta_desta_semana}, último envio: {cls._ultimo_envio_semanal}. "
+                           f"Enviando agora...")
+            if cls.enviar_relatorio_semanal(df):
+                cls._ultimo_envio_semanal = data_hoje
+                cls._salvar_controle_envio()
+        elif ja_enviou_esta_semana:
+            logger.info(f"[EmailReport] Relatório semanal já enviado esta semana ({cls._ultimo_envio_semanal}). Ignorando.")
+        else:
+            # Ainda não é hora de enviar
+            dias_semana = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
+            dia_atual = dias_semana[hoje.weekday()]
+            proxima_sexta = sexta_desta_semana + timedelta(days=7) if hoje.weekday() > 4 else sexta_desta_semana
+            logger.info(f"[EmailReport] Semanal: Ainda não é hora de enviar. "
+                       f"Hoje: {dia_atual} {hoje.strftime('%H:%M')}. "
+                       f"Próximo envio: Sexta {proxima_sexta.strftime('%d/%m')} às 17h.")
+        
+        # ============================================
+        # RELATÓRIO MENSAL
+        # ============================================
+        mes_atual = (hoje.year, hoje.month)
+        
+        # Calcular mês anterior
+        if hoje.month == 1:
+            mes_anterior = (hoje.year - 1, 12)
+        else:
+            mes_anterior = (hoje.year, hoje.month - 1)
+        
         ultimo_dia_mes = calendar.monthrange(hoje.year, hoje.month)[1]
+        
+        # Caso 1: É o último dia do mês - envio normal
         if hoje.day == ultimo_dia_mes:
-            mes_atual = (hoje.year, hoje.month)
             if cls._ultimo_envio_mensal != mes_atual:
                 logger.info("Último dia do mês detectado. Enviando relatório mensal...")
                 if cls.enviar_relatorio_mensal(df):
                     cls._ultimo_envio_mensal = mes_atual
+                    cls._salvar_controle_envio()
+            else:
+                logger.debug(f"[EmailReport] Relatório mensal já enviado ({mes_atual}). Ignorando.")
+        
+        # Caso 2: FALLBACK - Estamos no início de um novo mês e o mês anterior não foi enviado
+        elif hoje.day <= 3:  # Primeiros 3 dias do mês = janela de recuperação
+            if cls._ultimo_envio_mensal is None or cls._ultimo_envio_mensal < mes_anterior:
+                logger.info(f"[FALLBACK] Relatório mensal de {mes_anterior} não foi enviado. "
+                           f"Último envio: {cls._ultimo_envio_mensal}. Enviando agora...")
+                if cls.enviar_relatorio_mensal(df):
+                    # Marca como mês anterior para permitir envio normal do mês atual depois
+                    cls._ultimo_envio_mensal = mes_anterior
+                    cls._salvar_controle_envio()
+            else:
+                logger.info(f"[EmailReport] Mensal: Relatório do mês anterior já enviado.")
+        else:
+            # Não é último dia do mês nem janela de fallback
+            logger.info(f"[EmailReport] Mensal: Ainda não é hora de enviar. "
+                       f"Hoje: dia {hoje.day}/{hoje.month}. "
+                       f"Próximo envio: dia {ultimo_dia_mes}/{hoje.month} (último dia do mês).")
 
 
 def testar_envio_email():
@@ -3162,9 +3298,15 @@ def testar_envio_email():
         df = pd.read_parquet(arquivo_churn)
         logger.info(f"Carregado arquivo de análise com {len(df)} registros.")
     
-    # Forçar modo teste
+    # Forçar modo teste (ativa temporariamente para forçar envio imediato)
+    modo_original = EmailReportManager.MODO_TESTE
     EmailReportManager.MODO_TESTE = False
-    EmailReportManager.verificar_e_enviar(df)
+    
+    try:
+        EmailReportManager.verificar_e_enviar(df)
+    finally:
+        # Restaurar valor original
+        EmailReportManager.MODO_TESTE = modo_original
     
     logger.info("Teste de envio concluído. Verifique sua caixa de entrada.")
 

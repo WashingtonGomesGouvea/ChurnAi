@@ -2277,6 +2277,7 @@ class EmailReportManager:
     
     # Controle de envio (em memória, carregado do arquivo)
     _ultimo_envio_semanal = None
+    _ultima_semana_iso_enviada = None  # Novo: guarda (ano_iso, semana_iso) da última semana enviada
     _ultimo_envio_mensal = None
     _controle_carregado = False
     
@@ -2300,6 +2301,14 @@ class EmailReportManager:
                     except ValueError:
                         cls._ultimo_envio_semanal = None
                 
+                # Carregar última semana ISO enviada (novo campo)
+                if dados.get('ultima_semana_iso_enviada'):
+                    try:
+                        parts = dados['ultima_semana_iso_enviada'].split('-W')
+                        cls._ultima_semana_iso_enviada = (int(parts[0]), int(parts[1]))
+                    except (ValueError, IndexError):
+                        cls._ultima_semana_iso_enviada = None
+                
                 # Carregar último envio mensal (tuple ano, mes)
                 if dados.get('ultimo_envio_mensal'):
                     try:
@@ -2310,6 +2319,7 @@ class EmailReportManager:
                 
                 logger.info(f"[EmailReport] Controle de envio carregado: "
                            f"Semanal={cls._ultimo_envio_semanal}, "
+                           f"Semana_ISO={cls._ultima_semana_iso_enviada}, "
                            f"Mensal={cls._ultimo_envio_mensal}")
             else:
                 logger.info("[EmailReport] Arquivo de controle não existe, iniciando limpo.")
@@ -2324,6 +2334,7 @@ class EmailReportManager:
         try:
             dados = {
                 'ultimo_envio_semanal': cls._ultimo_envio_semanal.isoformat() if cls._ultimo_envio_semanal else None,
+                'ultima_semana_iso_enviada': f"{cls._ultima_semana_iso_enviada[0]}-W{cls._ultima_semana_iso_enviada[1]:02d}" if cls._ultima_semana_iso_enviada else None,
                 'ultimo_envio_mensal': f"{cls._ultimo_envio_mensal[0]}-{cls._ultimo_envio_mensal[1]:02d}" if cls._ultimo_envio_mensal else None,
                 'atualizado_em': datetime.now().isoformat()
             }
@@ -3196,6 +3207,10 @@ class EmailReportManager:
         # ============================================
         # RELATÓRIO SEMANAL
         # ============================================
+        # Obter semana ISO de fechamento (a semana do relatório)
+        semana_meta = cls._obter_semana_fechamento()
+        semana_iso_atual = (semana_meta.get('iso_year'), semana_meta.get('iso_week'))
+        
         # Calcular qual sexta-feira é a referência para esta semana
         dias_desde_sexta = (hoje.weekday() - 4) % 7  # 0 se hoje é sexta, 1 se sábado, etc.
         sexta_desta_semana = data_hoje - timedelta(days=dias_desde_sexta)
@@ -3206,24 +3221,36 @@ class EmailReportManager:
             (hoje.weekday() != 4 or hoje.hour >= 17)  # Não é sexta, ou é sexta após 17h
         )
         
-        # Verificar se já foi enviado para esta semana
-        ja_enviou_esta_semana = (
+        # VALIDAÇÃO PRINCIPAL: Verificar pela semana ISO (mais robusto que data)
+        # Isso evita duplicatas mesmo se o arquivo de controle for perdido
+        ja_enviou_esta_semana_iso = (
+            cls._ultima_semana_iso_enviada is not None and
+            cls._ultima_semana_iso_enviada == semana_iso_atual
+        )
+        
+        # Fallback: também verificar pela data (para compatibilidade)
+        ja_enviou_esta_semana_data = (
             cls._ultimo_envio_semanal is not None and 
             cls._ultimo_envio_semanal >= sexta_desta_semana
         )
+        
+        # Combinar ambas as verificações - se qualquer uma indicar que já foi enviado, não envia novamente
+        ja_enviou_esta_semana = ja_enviou_esta_semana_iso or ja_enviou_esta_semana_data
         
         if ja_passou_horario_envio and not ja_enviou_esta_semana:
             if hoje.weekday() == 4:  # Sexta-feira
                 logger.info("Sexta-feira após 17h detectada. Enviando relatório semanal...")
             else:
                 logger.info(f"[FALLBACK] Relatório semanal desta semana não foi enviado. "
-                           f"Última sexta: {sexta_desta_semana}, último envio: {cls._ultimo_envio_semanal}. "
+                           f"Semana ISO: {semana_iso_atual}, última enviada: {cls._ultima_semana_iso_enviada}. "
                            f"Enviando agora...")
             if cls.enviar_relatorio_semanal(df):
                 cls._ultimo_envio_semanal = data_hoje
+                cls._ultima_semana_iso_enviada = semana_iso_atual  # Salvar a semana ISO enviada
                 cls._salvar_controle_envio()
         elif ja_enviou_esta_semana:
-            logger.info(f"[EmailReport] Relatório semanal já enviado esta semana ({cls._ultimo_envio_semanal}). Ignorando.")
+            logger.info(f"[EmailReport] Relatório semanal já enviado para semana ISO {semana_iso_atual}. "
+                       f"Última semana enviada: {cls._ultima_semana_iso_enviada}. Ignorando.")
         else:
             # Ainda não é hora de enviar
             dias_semana = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
